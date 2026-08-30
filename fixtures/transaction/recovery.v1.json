@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "commit_point": "COMMITTING",
+  "pre_commit_result": "old",
+  "post_commit_result": "new",
+  "fault_points": ["journal-write", "journal-fsync", "commit-marker", "target-write", "target-fsync", "target-rename", "directory-fsync", "post-check", "cleanup"]
+}

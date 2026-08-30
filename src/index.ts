@@ -1,0 +1,16 @@
+export { CoreService, type CoreServiceOptions } from "./core/service/core-service.js";
+export type { CoreResponse, RevisionEnvelope } from "./core/service/responses.js";
+export { CoreError, ERROR_CODES, type ErrorCode } from "./core/contracts/errors.js";
+export type { Clock, IdGenerator, TrustedContributor, GovernanceAuthority, FaultInjector, FaultPoint } from "./core/contracts/ports.js";
+export type { ProposeInput, GovernanceInput, EditApproveInput, GetInput, SummaryInput, SearchInput, ContextPackInput, SearchResult, AutoGovernBatchInput, GovernanceBatchDto, GovernanceLogInput, GovernanceLogPage, UndoPreviewInput, UndoPreviewDto, ApplyUndoInput } from "./core/contracts/dto.js";
+export type { Fact, Proposal, Review, RepositoryMetadata, Scope, SuggestedFact, Evidence, FactKind, FactStatus, Priority, Revision, ReviewExecution, GovernanceIntent, GovernanceMode } from "./core/contracts/types.js";
+export { MemoryManager, type MemoryManagerOptions, type MemoryRunInput } from "./memory-manager/memory-manager.js";
+export { LocalUserMemoryControl, createLocalUserMemoryControl, type LocalUserMemoryControlOptions } from "./local-user-control.js";
+export { OpenAIResponsesMemoryModel, createOpenAIResponsesMemoryModel, type OpenAIResponsesMemoryModelOptions } from "./memory-manager/openai/openai-responses-adapter.js";
+export type { MemoryModelPort, ApprovedModelRequest, MemoryModelResult, ModelUsage } from "./memory-manager/contracts/model-port.js";
+export type { ObservationSourcePort, ObservationReference, ResolvedObservation } from "./memory-manager/contracts/observation.js";
+export type { RemoteDisclosurePolicy } from "./memory-manager/contracts/disclosure.js";
+export type { MemoryRunResult, MemoryRunOutcome } from "./memory-manager/contracts/run.js";
+export { MemoryManagerJobStore, type SchedulerJob, type SchedulerEnqueueInput } from "./memory-manager/scheduler/job-store.js";
+export { MemoryManagerScheduler, type MemoryManagerSchedulerOptions } from "./memory-manager/scheduler/scheduler.js";
+export type { SchedulerTrigger, SchedulerOrigin } from "./memory-manager/scheduler/triggers.js";

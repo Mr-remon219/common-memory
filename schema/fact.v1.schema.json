@@ -1,0 +1,231 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://common-memory.local/schema/fact.v1",
+  "title": "Common Memory Fact v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "statement",
+    "kind",
+    "scope",
+    "status",
+    "priority",
+    "provenance",
+    "governance",
+    "validity",
+    "tags"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^fact\\.[A-Za-z0-9_-]{8,128}$"
+    },
+    "statement": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 10000
+    },
+    "kind": {
+      "enum": [
+        "identity",
+        "goal",
+        "preference",
+        "constraint",
+        "environment",
+        "relationship",
+        "decision",
+        "event"
+      ]
+    },
+    "scope": {
+      "$ref": "#/$defs/scope"
+    },
+    "status": {
+      "enum": [
+        "confirmed",
+        "superseded",
+        "expired",
+        "deleted"
+      ]
+    },
+    "priority": {
+      "enum": [
+        "core",
+        "normal",
+        "archive"
+      ]
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "source_client",
+        "session_id",
+        "reference",
+        "observed_at",
+        "received_at"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "user_statement",
+            "user_correction",
+            "agent_observation",
+            "imported_event",
+            "project_evidence"
+          ]
+        },
+        "source_client": {
+          "enum": [
+            "local_user",
+            "memory_manager"
+          ]
+        },
+        "session_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 512
+        },
+        "reference": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 2000
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 4000
+        },
+        "observed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "received_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "governance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "proposal_id",
+        "review_id",
+        "confirmed_at"
+      ],
+      "properties": {
+        "proposal_id": {
+          "type": "string",
+          "pattern": "^proposal\\.[A-Za-z0-9_-]{8,128}$"
+        },
+        "review_id": {
+          "type": "string",
+          "pattern": "^review\\.[A-Za-z0-9_-]{8,128}$"
+        },
+        "confirmed_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "validity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "valid_from",
+        "expires_at",
+        "supersedes"
+      ],
+      "properties": {
+        "valid_from": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "expires_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "supersedes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^fact\\.[A-Za-z0-9_-]{8,128}$"
+          },
+          "maxItems": 100
+        }
+      }
+    },
+    "tags": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 100,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      }
+    }
+  },
+  "$defs": {
+    "scope": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "id"
+          ],
+          "properties": {
+            "type": {
+              "const": "global"
+            },
+            "id": {
+              "type": "null"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "id"
+          ],
+          "properties": {
+            "type": {
+              "enum": [
+                "project",
+                "agent",
+                "device"
+              ]
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[^:\\s]+$"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

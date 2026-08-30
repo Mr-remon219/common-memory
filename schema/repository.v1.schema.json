@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://common-memory.local/schema/repository.v1",
+  "title": "Common Memory Repository v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "repository_id", "initialized_at", "schema_bundle_digest"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "repository_id": { "type": "string", "pattern": "^repository\\.[A-Za-z0-9_-]{8,128}$" },
+    "initialized_at": { "type": "string", "format": "date-time" },
+    "schema_bundle_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  }
+}

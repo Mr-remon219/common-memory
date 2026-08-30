@@ -1,0 +1,8 @@
+{
+  "domain": "knowledge",
+  "files": [
+    { "path": "memory/facts/a.yaml", "utf8": "a\n" },
+    { "path": "memory/facts/b.yaml", "utf8": "b\n" }
+  ],
+  "expected": "sha256:85785e434439ac2c9e1a124905d33380e8bb36302a06040b894f44f4a34b4d13"
+}

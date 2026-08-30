@@ -1,0 +1,27 @@
+confidence: high
+created_at: 2026-01-01T00:00:00.000Z
+evidence:
+  observed_at: 2026-01-01T00:00:00.000Z
+  provenance_type: user_statement
+  reference: message-1
+  session_id: session-1
+id: proposal.00000001
+operation: add_fact
+reasoning: 用户明确陈述
+schema_version: 1
+source:
+  client: local_user
+  received_at: 2026-01-01T00:00:00.000Z
+suggested_fact:
+  expires_at: null
+  kind: preference
+  priority: core
+  scope:
+    id: null
+    type: global
+  statement: 用户默认使用中文交流
+  tags:
+    - communication
+    - 中文
+  valid_from: null
+target_fact_ids: []

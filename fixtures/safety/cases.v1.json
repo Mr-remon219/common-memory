@@ -1,0 +1,10 @@
+{
+  "reject": [
+    { "rule_id": "secret.credential", "field": "statement", "value": "password: do-not-store" },
+    { "rule_id": "identity.government_id", "field": "statement", "value": "身份证号: 110101199001011234" },
+    { "rule_id": "inference.health", "field": "statement", "value": "Agent 推断用户有健康诊断", "provenance_type": "agent_observation" }
+  ],
+  "allow": [
+    { "field": "statement", "value": "用户偏好在修改前查看计划", "provenance_type": "user_statement" }
+  ]
+}

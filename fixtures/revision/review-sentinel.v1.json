@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "field": "resulting_store_revision",
+  "normalization": "replace approved Review field before canonical YAML hashing",
+  "sentinel": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "rejected_review_has_field": false
+}

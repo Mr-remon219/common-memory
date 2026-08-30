@@ -1,0 +1,41 @@
+{
+  "name": "common-memory-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "24.x"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "schema",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "npm run typecheck && node scripts/check-boundaries.mjs",
+    "test": "vitest run",
+    "test:fixtures": "vitest run tests/contracts tests/serialization tests/revision tests/search",
+    "test:recovery": "vitest run tests/transaction tests/repository",
+    "test:consumer": "node scripts/consumer-smoke.mjs",
+    "test:remote-contract": "vitest run tests/contracts/memory-analysis.test.ts tests/contracts/openai-schema-subset.test.ts tests/memory-manager/openai-responses-adapter.test.ts tests/memory-manager/bounded-body.test.ts tests/memory-manager/retry-cancel.test.ts tests/memory-manager/outbound-safety.test.ts tests/memory-manager/memory-manager-failure.test.ts",
+    "prepublishOnly": "npm run lint && npm test && npm run build"
+  },
+  "dependencies": {
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "yaml": "^2.8.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}
