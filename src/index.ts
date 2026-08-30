@@ -2,8 +2,11 @@ export { CoreService, type CoreServiceOptions } from "./core/service/core-servic
 export type { CoreResponse, RevisionEnvelope } from "./core/service/responses.js";
 export { CoreError, ERROR_CODES, type ErrorCode } from "./core/contracts/errors.js";
 export type { Clock, IdGenerator, TrustedContributor, GovernanceAuthority, FaultInjector, FaultPoint } from "./core/contracts/ports.js";
-export type { ProposeInput, GovernanceInput, EditApproveInput, GetInput, SummaryInput, SearchInput, ContextPackInput, SearchResult, AutoGovernBatchInput, GovernanceBatchDto, GovernanceLogInput, GovernanceLogPage, UndoPreviewInput, UndoPreviewDto, ApplyUndoInput } from "./core/contracts/dto.js";
+export type { ProposeInput, GovernanceInput, EditApproveInput, GetInput, SummaryInput, SearchInput, ContextPackInput, ContextPackDto, SearchResult, RecallMode, RecallRequest, RecallPlan, RecallCoreResult, AutoGovernBatchInput, GovernanceBatchDto, GovernanceLogInput, GovernanceLogPage, UndoPreviewInput, UndoPreviewDto, ApplyUndoInput } from "./core/contracts/dto.js";
 export type { Fact, Proposal, Review, RepositoryMetadata, Scope, SuggestedFact, Evidence, FactKind, FactStatus, Priority, Revision, ReviewExecution, GovernanceIntent, GovernanceMode } from "./core/contracts/types.js";
+export { RecallOrchestrator, type RecallCorePort, type RecallOrchestratorOptions, type RecallExecutionOptions } from "./recall/recall-orchestrator.js";
+export { RemoteRecallPlanner } from "./recall/remote-recall-planner.js";
+export type { RecallPlannerPort, RecallPlannerInput, RecallPlannerOptions, RecallPlannerOutcome, RecallRouteDecision, RecallRouteWarning, RecallResult } from "./recall/contracts.js";
 export { MemoryManager, type MemoryManagerOptions, type MemoryRunInput } from "./memory-manager/memory-manager.js";
 export { LocalUserMemoryControl, createLocalUserMemoryControl, type LocalUserMemoryControlOptions } from "./local-user-control.js";
 export { OpenAIResponsesMemoryModel, createOpenAIResponsesMemoryModel, normalizeOpenAICompatibleBaseUrl, type OpenAIResponsesMemoryModelOptions } from "./memory-manager/openai/openai-responses-adapter.js";

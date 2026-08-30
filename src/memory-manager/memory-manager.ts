@@ -38,6 +38,8 @@ export class MemoryManager {
       try {
         if (input.signal?.aborted) return { outcome: "cancelled", reason_code: "CANCELLED" };
         const resolved = await resolveObservations(this.#observations, input.observations, this.#policy, input.signal);
+        const source = sourceDigest(resolved.map((item) => ({ observation_id: item.observationId, observation_digest: item.digest, scope: item.scope, provenance: item.provenance })));
+        const processed = this.#core.automaticSourceProcessed(source, mode); if (!processed.ok) throw new CoreError(processed.error.code as never, processed.error.message, processed.error.details); if (processed.data) return { outcome: "idempotent" };
         const snapshot = this.#consistentSnapshot(this.#policy.allowedScopes); const requestId = this.#requestId();
         const evidence = new Map(resolved.map((item, index) => [`ev_${index + 1}`, item])); const candidates = new Map(snapshot.facts.map((fact) => [fact.id, fact]));
         const projection = freeze({ contract_version: "memory_analysis_v1", request_id: requestId, mode, based_on_knowledge_revision: snapshot.knowledgeRevision, based_on_store_revision: snapshot.storeRevision, excerpts: [...evidence].map(([id, item]) => ({ id, text: item.text, scope: item.scope, provenance: item.provenance, observed_at: item.observedAt })), candidates: snapshot.facts.map(candidateProjection) });
@@ -48,7 +50,6 @@ export class MemoryManager {
         enforceLocalMemoryPolicy(analysis, mode, candidates, new Map([...evidence].map(([id, item]) => [id, item.provenance])));
         const actionable = analysis.actions.filter((action): action is typeof action & { action: Exclude<typeof action.action, "no_op"> } => action.action !== "no_op"); if (actionable.length === 0) return { outcome: "no_op", usage: result.usage };
         const operations = actionable.map((action) => ({ action, proposal: compileAction(action, evidence, candidates)! }));
-        const source = sourceDigest(resolved.map((item) => ({ observation_id: item.observationId, observation_digest: item.digest, scope: item.scope, provenance: item.provenance })));
         const operationInputs = operations.map(({ action, proposal }) => { const payload = payloadDigest(proposal); return { operation_id: operationId("memory_analysis_v1", mode, this.#policyVersion, action.action, payload, snapshot.knowledgeRevision, snapshot.storeRevision), intent: action.action, proposal_input: proposal }; });
         const autoInput: AutoGovernBatchInput = { batch_id: batchId(snapshot.repositoryId, mode, this.#policyVersion, source, snapshot.knowledgeRevision, snapshot.storeRevision), mode, policy_version: this.#policyVersion, source_digest: source, expected_knowledge_revision: snapshot.knowledgeRevision, expected_store_revision: snapshot.storeRevision, operations: operationInputs };
         if (input.signal?.aborted) return { outcome: "cancelled", reason_code: "CANCELLED" };

@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "keywords": [
+    "pi-package",
+    "memory",
+    "agent-memory"
+  ],
   "bin": {
     "common-memory": "./dist/cli/main.js"
   },
@@ -21,6 +26,11 @@
     ".env.sample",
     "README.md"
   ],
+  "pi": {
+    "extensions": [
+      "./dist/pi-extension/index.js"
+    ]
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -37,6 +47,10 @@
     "ajv": "^8.17.1",
     "ajv-formats": "^3.0.1",
     "yaml": "^2.8.2"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",

@@ -25,7 +25,8 @@ export class OpenAIResponsesMemoryModel implements MemoryModelPort {
   }
   async analyze(request: ApprovedModelRequest, options: AnalyzeOptions): Promise<MemoryModelResult> {
     externalPreflight(request.projection, this.#policy);
-    const wireBody = { model: this.#model, store: false, max_output_tokens: this.#maxOutputTokens, input: [{ role: "developer", content: [{ type: "input_text", text: request.prompt }] }, { role: "user", content: [{ type: "input_text", text: JSON.stringify(request.projection) }] }], text: { format: { type: "json_schema", name: "memory_analysis_v1", strict: true, schema: request.schema } } }; const bodyText = JSON.stringify(wireBody); const exactBody = JSON.parse(bodyText) as Record<string, unknown>; externalPreflight(exactBody, this.#policy, Buffer.byteLength(bodyText, "utf8"));
+    const schemaName = request.schemaName ?? "memory_analysis_v1"; if (!/^[A-Za-z0-9_-]{1,64}$/u.test(schemaName)) throw new TypeError("schemaName must be a safe JSON Schema name");
+    const wireBody = { model: this.#model, store: false, max_output_tokens: this.#maxOutputTokens, input: [{ role: "developer", content: [{ type: "input_text", text: request.prompt }] }, { role: "user", content: [{ type: "input_text", text: JSON.stringify(request.projection) }] }], text: { format: { type: "json_schema", name: schemaName, strict: true, schema: request.schema } } }; const bodyText = JSON.stringify(wireBody); const exactBody = JSON.parse(bodyText) as Record<string, unknown>; externalPreflight(exactBody, this.#policy, Buffer.byteLength(bodyText, "utf8"));
     if (!Number.isFinite(options.deadlineMs) || options.deadlineMs <= 0) throw new MemoryModelError("TIMEOUT", "Model deadline elapsed", true);
     if (options.signal?.aborted) throw new MemoryModelError("CANCELLED", "Model request was cancelled");
     const deadline = Date.now() + options.deadlineMs;

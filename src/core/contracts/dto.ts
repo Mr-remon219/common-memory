@@ -27,12 +27,57 @@ export interface SearchInput {
   limit?: number; include_history?: boolean; valid_at?: string;
 }
 export interface ContextPackInput extends Omit<SearchInput, "query"> { task: string; max_tokens: number }
+export type RecallMode = "algorithm" | "hybrid" | "model_led";
+export interface RecallRequest extends Omit<SearchInput, "query" | "limit"> {
+  query: string;
+  max_context_bytes: number;
+  limit?: number;
+  exclude_fact_ids?: string[];
+}
+export interface RecallPlan {
+  contract_version: "recall_plan_v1";
+  request_id: string;
+  expected_knowledge_revision: Revision;
+  mode: RecallMode;
+  queries: string[];
+  reason: string;
+  request: RecallRequest;
+}
 export interface FactSelection { fact: Fact; reason: string }
 export interface SearchResult {
   fact: Fact; raw_bm25: number | null; lexical_rank: number;
   boosts: { exact_tag: number; exact_scope: number; priority: number; temporal: number; provenance: number };
   final_score: number; matched_fields: string[]; fallback: "fts5" | "short-query";
   match_reasons: string[];
+}
+export interface ContextPackItem {
+  id: string;
+  statement: string;
+  kind: FactKind;
+  scope: Fact["scope"];
+  validity: Fact["validity"];
+  source: { type: Fact["provenance"]["type"]; source_client: Fact["provenance"]["source_client"]; reference: string | null };
+  provenance_details?: { session_id: string | null; note: string | null; observed_at: string; received_at: string };
+  reason: string;
+}
+export interface ContextPackDto {
+  knowledge_revision: Revision;
+  evaluated_at: string;
+  valid_until: string | null;
+  core: ContextPackItem[];
+  boundaries: ContextPackItem[];
+  relevant: ContextPackItem[];
+  historical: ContextPackItem[];
+  warnings: string[];
+  degraded: boolean;
+}
+export interface RecallCoreResult {
+  contract_version: "recall_result_v1";
+  request_id: string;
+  mode: RecallMode;
+  queries: string[];
+  rrf_k: number;
+  pack: ContextPackDto;
 }
 export interface RevisionsDto { knowledge_revision: Revision; store_revision: Revision; index_revision: Revision | null }
 export type WarningCode = "INDEX_OUTDATED";

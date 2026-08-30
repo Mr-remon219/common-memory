@@ -1,4 +1,4 @@
-import type { ContextPackInput, SearchResult } from "../contracts/dto.js";
+import type { ContextPackDto, ContextPackInput, ContextPackItem, SearchResult } from "../contracts/dto.js";
 import type { Fact, RepositorySnapshot } from "../contracts/types.js";
 import { calculateValidUntil } from "../revision/valid-until.js";
 import { parseScopes } from "../query/scope.js";
@@ -6,8 +6,8 @@ import { eligibleFacts } from "../query/read.js";
 import { requireCoreBudget, conservativeTokenUpperBound } from "./budget.js";
 import { parseQueryTime } from "../query/time.js";
 
-function item(fact: Fact, reason: string, provenanceDetails = true) { const source = { type: fact.provenance.type, source_client: fact.provenance.source_client, reference: fact.provenance.reference }; return { id: fact.id, statement: fact.statement, kind: fact.kind, scope: fact.scope, validity: fact.validity, source, ...(provenanceDetails ? { provenance_details: { session_id: fact.provenance.session_id, note: fact.provenance.note ?? null, observed_at: fact.provenance.observed_at, received_at: fact.provenance.received_at } } : {}), reason }; }
-export function buildContextPack(snapshot: RepositorySnapshot, input: ContextPackInput, capturedNow: string, searchResults: SearchResult[], historicalResults: SearchResult[] = [], degraded = false) {
+function item(fact: Fact, reason: string, provenanceDetails = true): ContextPackItem { const source = { type: fact.provenance.type, source_client: fact.provenance.source_client, reference: fact.provenance.reference }; return { id: fact.id, statement: fact.statement, kind: fact.kind, scope: fact.scope, validity: fact.validity, source, ...(provenanceDetails ? { provenance_details: { session_id: fact.provenance.session_id, note: fact.provenance.note ?? null, observed_at: fact.provenance.observed_at, received_at: fact.provenance.received_at } } : {}), reason }; }
+export function buildContextPack(snapshot: RepositorySnapshot, input: ContextPackInput, capturedNow: string, searchResults: SearchResult[], historicalResults: SearchResult[] = [], degraded = false): ContextPackDto {
   const evaluatedAt = input.valid_at === undefined ? capturedNow : parseQueryTime(input.valid_at, "/valid_at"); const scopes = parseScopes(input.scopes);
   const current = eligibleFacts(snapshot, { scopes: input.scopes, valid_at: evaluatedAt }, capturedNow);
   const coreFacts = current.filter((fact) => fact.priority === "core");

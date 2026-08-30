@@ -1,5 +1,5 @@
 import { CoreError, toCoreError } from "../contracts/errors.js";
-import type { ApplyUndoInput, AutoGovernBatchInput, ContextPackInput, EditApproveInput, GetInput, GovernanceInput, GovernanceLogInput, ProposeInput, SearchInput, SummaryInput, UndoPreviewInput } from "../contracts/dto.js";
+import type { ApplyUndoInput, AutoGovernBatchInput, ContextPackInput, EditApproveInput, GetInput, GovernanceInput, GovernanceLogInput, ProposeInput, RecallPlan, SearchInput, SummaryInput, UndoPreviewInput } from "../contracts/dto.js";
 import type { AutomatedGovernanceAuthority, Clock, FaultInjector, GovernanceAuthority, IdGenerator, TrustedContributor } from "../contracts/ports.js";
 import { noFaults, randomIdGenerator, systemClock } from "../contracts/ports.js";
 import { buildContextPack } from "../context/context-pack.js";
@@ -14,6 +14,7 @@ import { probeIndexCapability } from "../index/capability.js";
 import { rebuildIndex as rebuildDerivedIndex } from "../index/rebuild.js";
 import { eligibleFacts } from "../query/read.js";
 import { governanceLog } from "../query/governance-log.js";
+import { executeRecall } from "../query/recall.js";
 import { RepositoryLayout } from "../repository/layout.js";
 import { diagnostics } from "../repository/diagnostics.js";
 import { bootstrapRepository } from "../repository/initializer.js";
@@ -43,6 +44,7 @@ export class CoreService {
       catch (error) { if (error instanceof CoreError && error.code === "INDEX_OUTDATED") return buildContextPack(session.snapshot, input, now, [], [], true); throw error; }
     });
   }
+  recall(plan: RecallPlan) { const now = this.#clock.now().toISOString(); return this.#withSession((session) => executeRecall(session, plan, now)); }
   propose(input: ProposeInput, contributor: TrustedContributor) {
     return this.#withSession((session) => { const proposal = createProposal(input, contributor, this.#clock, this.#ids); if (session.snapshot.proposals.has(proposal.id)) throw new CoreError("CONFLICT_DETECTED", "Generated proposal ID already exists"); const hints = proposalHints(session.snapshot, proposal); const proposals = new Map(session.snapshot.proposals).set(proposal.id, proposal); const nextStore = storeRevision({ repository: session.snapshot.repository, facts: session.snapshot.facts.values(), proposals: proposals.values(), reviews: session.snapshot.reviews.values() }); session.apply([proposalMutation(session.layout, proposal)], { knowledge: session.snapshot.knowledge_revision, store: nextStore }); return { proposal_id: proposal.id, status: "pending" as const, hints, store_revision: nextStore }; });
   }
@@ -52,6 +54,7 @@ export class CoreService {
   autoGovernBatch(input: AutoGovernBatchInput, authority: AutomatedGovernanceAuthority) { return this.#withSession((session) => executeAutoGovernBatch(session, input, authority, this.#clock, this.#ids)); }
   listGovernance(input: GovernanceLogInput = {}) { return this.#withSession((session) => governanceLog(session.snapshot, input)); }
   getGovernanceBatch(batchId: string) { return this.listGovernance({ batch_id: batchId, limit: 100 }); }
+  automaticSourceProcessed(sourceDigest: string, mode: "extract" | "consolidate") { return this.#withSession((session) => [...session.snapshot.reviews.values()].some((review) => review.execution?.source_digest === sourceDigest && review.execution.mode === mode)); }
   previewUndo(input: UndoPreviewInput) { return this.#withSession((session) => buildUndoPreview(session.snapshot, input, this.#clock)); }
   applyUndo(input: ApplyUndoInput, authority: GovernanceAuthority) { return this.#withSession((session) => executeUndo(session, input, authority, this.#clock, this.#ids)); }
   repositoryInfo() { return this.#withSession((session) => ({ repository_id: session.snapshot.repository.repository_id, knowledge_revision: session.snapshot.knowledge_revision, store_revision: session.snapshot.store_revision })); }
