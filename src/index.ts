@@ -6,7 +6,7 @@ export type { ProposeInput, GovernanceInput, EditApproveInput, GetInput, Summary
 export type { Fact, Proposal, Review, RepositoryMetadata, Scope, SuggestedFact, Evidence, FactKind, FactStatus, Priority, Revision, ReviewExecution, GovernanceIntent, GovernanceMode } from "./core/contracts/types.js";
 export { MemoryManager, type MemoryManagerOptions, type MemoryRunInput } from "./memory-manager/memory-manager.js";
 export { LocalUserMemoryControl, createLocalUserMemoryControl, type LocalUserMemoryControlOptions } from "./local-user-control.js";
-export { OpenAIResponsesMemoryModel, createOpenAIResponsesMemoryModel, type OpenAIResponsesMemoryModelOptions } from "./memory-manager/openai/openai-responses-adapter.js";
+export { OpenAIResponsesMemoryModel, createOpenAIResponsesMemoryModel, normalizeOpenAICompatibleBaseUrl, type OpenAIResponsesMemoryModelOptions } from "./memory-manager/openai/openai-responses-adapter.js";
 export type { MemoryModelPort, ApprovedModelRequest, MemoryModelResult, ModelUsage } from "./memory-manager/contracts/model-port.js";
 export type { ObservationSourcePort, ObservationReference, ResolvedObservation } from "./memory-manager/contracts/observation.js";
 export type { RemoteDisclosurePolicy } from "./memory-manager/contracts/disclosure.js";
@@ -14,3 +14,5 @@ export type { MemoryRunResult, MemoryRunOutcome } from "./memory-manager/contrac
 export { MemoryManagerJobStore, type SchedulerJob, type SchedulerEnqueueInput } from "./memory-manager/scheduler/job-store.js";
 export { MemoryManagerScheduler, type MemoryManagerSchedulerOptions } from "./memory-manager/scheduler/scheduler.js";
 export type { SchedulerTrigger, SchedulerOrigin } from "./memory-manager/scheduler/triggers.js";
+export { configDirectory, configFilePath, envFilePath, defaultConfig, loadConfig, saveConfig, saveApiKeyToEnvFile, loadLocalEnv, resolveApiKey, validateConfig, type CommonMemoryConfig } from "./config/config.js";
+export { createConfiguredMemoryModel, type ConfiguredModelOverrides } from "./config/runtime.js";

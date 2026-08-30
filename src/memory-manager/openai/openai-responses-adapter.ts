@@ -7,20 +7,20 @@ import { defaultRetryPolicy, retryDelay, type RetryPolicy } from "./retry.js";
 import { externalPreflight } from "../../core/safety/external-preflight.js";
 import { validateDisclosurePolicy, type RemoteDisclosurePolicy } from "../contracts/disclosure.js";
 
-const ENDPOINT = "https://api.openai.com/v1/responses";
+const DEFAULT_BASE_URL = "https://api.openai.com/v1";
 const MAX_OUTPUT_TOKENS = 16_384; const MAX_RESPONSE_BYTES = 4 * 1_024 * 1_024; const MAX_RETRY_DELAY_MS = 30_000;
 export interface OpenAIResponsesMemoryModelOptions {
-  apiKey: string; model: string; disclosurePolicy: RemoteDisclosurePolicy; fetch?: typeof fetch; maxOutputTokens?: number; maxResponseBytes?: number;
+  apiKey: string; model: string; disclosurePolicy: RemoteDisclosurePolicy; baseUrl?: string; fetch?: typeof fetch; maxOutputTokens?: number; maxResponseBytes?: number;
   fingerprintKey?: string; sleeper?: (ms: number, signal?: AbortSignal) => Promise<void>; jitter?: () => number; retry?: Partial<RetryPolicy>;
 }
 export class OpenAIResponsesMemoryModel implements MemoryModelPort {
-  readonly #apiKey: string; readonly #model: string; readonly #policy: RemoteDisclosurePolicy; readonly #fetch: typeof fetch; readonly #maxOutputTokens: number; readonly #maxResponseBytes: number; readonly #fingerprintKey: string;
+  readonly #apiKey: string; readonly #model: string; readonly #endpoint: string; readonly #policy: RemoteDisclosurePolicy; readonly #fetch: typeof fetch; readonly #maxOutputTokens: number; readonly #maxResponseBytes: number; readonly #fingerprintKey: string;
   readonly #sleeper: (ms: number, signal?: AbortSignal) => Promise<void>; readonly #jitter: () => number; readonly #retry: RetryPolicy;
   constructor(options: OpenAIResponsesMemoryModelOptions) {
     if (!options.apiKey || !options.model) throw new TypeError("apiKey and model are required"); validateDisclosurePolicy(options.disclosurePolicy);
     const maxOutputTokens = options.maxOutputTokens ?? 4_096; const maxResponseBytes = options.maxResponseBytes ?? 1_048_576; const retry = { ...defaultRetryPolicy, ...options.retry };
     requireInteger("maxOutputTokens", maxOutputTokens, 1, MAX_OUTPUT_TOKENS); requireInteger("maxResponseBytes", maxResponseBytes, 1, MAX_RESPONSE_BYTES); requireInteger("retry.maxRetries", retry.maxRetries, 0, 2); requireInteger("retry.baseDelayMs", retry.baseDelayMs, 0, MAX_RETRY_DELAY_MS); requireInteger("retry.maxDelayMs", retry.maxDelayMs, 1, MAX_RETRY_DELAY_MS); if (retry.baseDelayMs > retry.maxDelayMs) throw new TypeError("retry.baseDelayMs cannot exceed retry.maxDelayMs");
-    this.#apiKey = options.apiKey; this.#model = options.model; this.#policy = Object.freeze({ ...options.disclosurePolicy, allowedScopes: Object.freeze([...options.disclosurePolicy.allowedScopes]), allowedProvenance: Object.freeze([...options.disclosurePolicy.allowedProvenance]) }); this.#fetch = options.fetch ?? fetch; this.#maxOutputTokens = maxOutputTokens; this.#maxResponseBytes = maxResponseBytes;
+    this.#apiKey = options.apiKey; this.#model = options.model; this.#endpoint = `${normalizeOpenAICompatibleBaseUrl(options.baseUrl ?? DEFAULT_BASE_URL)}/responses`; this.#policy = Object.freeze({ ...options.disclosurePolicy, allowedScopes: Object.freeze([...options.disclosurePolicy.allowedScopes]), allowedProvenance: Object.freeze([...options.disclosurePolicy.allowedProvenance]) }); this.#fetch = options.fetch ?? fetch; this.#maxOutputTokens = maxOutputTokens; this.#maxResponseBytes = maxResponseBytes;
     this.#fingerprintKey = options.fingerprintKey ?? randomBytes(32).toString("hex"); this.#sleeper = options.sleeper ?? sleep; this.#jitter = options.jitter ?? Math.random; this.#retry = retry;
   }
   async analyze(request: ApprovedModelRequest, options: AnalyzeOptions): Promise<MemoryModelResult> {
@@ -34,7 +34,7 @@ export class OpenAIResponsesMemoryModel implements MemoryModelPort {
       const timeout = AbortSignal.timeout(Math.max(1, Math.min(2_147_483_647, Math.ceil(remaining)))); const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
       let response: Response;
       try {
-        response = await this.#fetch(ENDPOINT, { method: "POST", signal, headers: { authorization: `Bearer ${this.#apiKey}`, "content-type": "application/json" }, body: bodyText });
+        response = await this.#fetch(this.#endpoint, { method: "POST", signal, headers: { authorization: `Bearer ${this.#apiKey}`, "content-type": "application/json" }, body: bodyText });
       } catch (error) {
         if (options.signal?.aborted) throw new MemoryModelError("CANCELLED", "Model request was cancelled");
         if (timeout.aborted || Date.now() >= deadline) throw new MemoryModelError("TIMEOUT", "Model deadline elapsed", true);
@@ -60,4 +60,12 @@ export class OpenAIResponsesMemoryModel implements MemoryModelPort {
 }
 function sleep(ms: number, signal?: AbortSignal): Promise<void> { return new Promise((resolve, reject) => { const timer = setTimeout(resolve, ms); signal?.addEventListener("abort", () => { clearTimeout(timer); reject(new Error("aborted")); }, { once: true }); }); }
 function requireInteger(name: string, value: number, min: number, max: number): void { if (!Number.isSafeInteger(value) || value < min || value > max) throw new TypeError(`${name} must be an integer between ${min} and ${max}`); }
+export function normalizeOpenAICompatibleBaseUrl(value: string): string {
+  let url: URL; try { url = new URL(value); } catch { throw new TypeError("baseUrl must be an absolute HTTP(S) URL"); }
+  if (url.protocol !== "https:" && url.protocol !== "http:") throw new TypeError("baseUrl must use HTTP or HTTPS");
+  if (url.username || url.password || url.search || url.hash) throw new TypeError("baseUrl must not contain credentials, query, or fragment");
+  url.pathname = url.pathname.replace(/\/+$/u, "");
+  if (url.pathname.endsWith("/responses")) throw new TypeError("baseUrl must be the API root, not the /responses endpoint");
+  return url.toString().replace(/\/$/u, "");
+}
 export function createOpenAIResponsesMemoryModel(options: OpenAIResponsesMemoryModelOptions): OpenAIResponsesMemoryModel { return new OpenAIResponsesMemoryModel(options); }

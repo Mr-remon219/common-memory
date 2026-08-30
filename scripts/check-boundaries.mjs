@@ -3,7 +3,7 @@ import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const forbidden = ["@modelcontextprotocol", "@clack", "embedding", "pgvector", "better-sqlite3"];
+const forbidden = ["@modelcontextprotocol", "embedding", "pgvector", "better-sqlite3"];
 const sourceRoot = join(root, "src");
 const files = [];
 async function walk(dir) {
@@ -21,8 +21,8 @@ for (const file of files) {
   if (file.includes("/service/") && /from ["']\.\.\/repository\/loader/.test(text)) violations.push(`${relative(root, file)} bypasses LockedRepositorySession`);
   if (file.includes("/src/core/") && text.includes("memory-manager/")) violations.push(`${relative(root, file)} makes Core depend on the remote manager`);
   if (file.includes("/memory-manager/openai/") && /core\/(?:repository|transaction|governance)/.test(text)) violations.push(`${relative(root, file)} makes provider code depend on Core internals`);
+  if (!file.includes("/src/cli/") && text.includes("@clack/prompts")) violations.push(`${relative(root, file)} imports TUI dependencies outside the CLI`);
   if (!file.endsWith("src/memory-manager/openai/openai-responses-adapter.ts") && text.includes("https://api.openai.com/v1/responses")) violations.push(`${relative(root, file)} constructs the provider endpoint outside the adapter`);
-  if (/\bbaseURL\b|\bbaseUrl\b/.test(text)) violations.push(`${relative(root, file)} enables a custom provider endpoint`);
 }
 const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
 if (Object.keys(pkg.exports ?? {}).some((key) => key !== ".")) violations.push("package exports a deep path");

@@ -20,6 +20,12 @@ describe("OpenAI Responses native fetch adapter", () => {
     expect(JSON.stringify(body)).not.toContain("sk-test-secret-value");
     expect(new Headers(init?.headers).get("authorization")).toBe("Bearer sk-test-secret-value");
   });
+  it("uses a normalized OpenAI-compatible Base URL without losing path prefixes", async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request) => new Response(JSON.stringify(envelope([{ type: "output_text", text: "{\"ok\":true}", annotations: [] }])), { status: 200 }));
+    const adapter = new OpenAIResponsesMemoryModel({ disclosurePolicy, apiKey: "key", model: "compatible-model", baseUrl: "https://llm.example.test/gateway/openai/v1/", fetch: fetchImpl });
+    await adapter.analyze(request, { requestId: "req_12345678", deadlineMs: 1000 });
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe("https://llm.example.test/gateway/openai/v1/responses");
+  });
   it("returns a fingerprinted refusal without retaining refusal text", async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify(envelope([{ type: "refusal", refusal: "private refusal detail" }])), { status: 200 }));
     const adapter = new OpenAIResponsesMemoryModel({ disclosurePolicy, apiKey: "key", model: "gpt-test", fetch: fetchImpl, fingerprintKey: "test-process-key" });
@@ -36,7 +42,7 @@ describe("OpenAI Responses native fetch adapter", () => {
     await expect(adapter.analyze({ ...request, ...(override.schema ? { schema: override.schema } : {}), ...(override.projection ? { projection: override.projection } : {}) }, { requestId: "req_12345678", deadlineMs: 1000 })).rejects.toMatchObject({ code: "SENSITIVE_CONTENT_REJECTED" }); expect(fetchImpl).not.toHaveBeenCalled();
   });
   it("rejects configuration that disables hard output, body, or retry limits", () => {
-    for (const override of [{ maxResponseBytes: Infinity }, { maxResponseBytes: -1 }, { maxOutputTokens: 16_385 }, { retry: { maxRetries: 3 } }]) expect(() => new OpenAIResponsesMemoryModel({ disclosurePolicy, apiKey: "key", model: "gpt-test", ...override })).toThrow();
+    for (const override of [{ maxResponseBytes: Infinity }, { maxResponseBytes: -1 }, { maxOutputTokens: 16_385 }, { retry: { maxRetries: 3 } }, { baseUrl: "file:///tmp/provider" }, { baseUrl: "https://user:secret@example.test/v1" }, { baseUrl: "https://example.test/v1/responses" }]) expect(() => new OpenAIResponsesMemoryModel({ disclosurePolicy, apiKey: "key", model: "gpt-test", ...override })).toThrow();
   });
   it("blocks direct sensitive adapter input before fetch", async () => {
     const fetchImpl = vi.fn(); const adapter = new OpenAIResponsesMemoryModel({ disclosurePolicy, apiKey: "key", model: "gpt-test", fetch: fetchImpl });
