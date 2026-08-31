@@ -17,15 +17,17 @@ await walk(sourceRoot);
 const violations = [];
 for (const file of files) {
   const text = await readFile(file, "utf8");
-  for (const term of forbidden) if (text.toLowerCase().includes(term.toLowerCase())) violations.push(`${relative(root, file)} contains forbidden term ${term}`);
-  if (file.includes("/service/") && /from ["']\.\.\/repository\/loader/.test(text)) violations.push(`${relative(root, file)} bypasses LockedRepositorySession`);
-  if (file.includes("/src/core/") && text.includes("memory-manager/")) violations.push(`${relative(root, file)} makes Core depend on the remote manager`);
-  if (file.includes("/src/core/") && (text.includes("pi-extension/") || text.includes("@earendil-works/pi-"))) violations.push(`${relative(root, file)} makes Core depend on Pi`);
-  if (file.includes("/memory-manager/openai/") && /core\/(?:repository|transaction|governance)/.test(text)) violations.push(`${relative(root, file)} makes provider code depend on Core internals`);
-  if (file.includes("/src/pi-extension/") && /core\/(?:repository|transaction|governance)/.test(text)) violations.push(`${relative(root, file)} makes the Pi adapter depend on Core internals`);
-  if (file.includes("/src/recall/") && /(?:governanceAuthority|automatedGovernanceAuthority|trustedContributor)/.test(text)) violations.push(`${relative(root, file)} grants recall write authority`);
-  if (!file.includes("/src/cli/") && text.includes("@clack/prompts")) violations.push(`${relative(root, file)} imports TUI dependencies outside the CLI`);
-  if (!file.endsWith("src/memory-manager/openai/openai-responses-adapter.ts") && text.includes("https://api.openai.com/v1/responses")) violations.push(`${relative(root, file)} constructs the provider endpoint outside the adapter`);
+  const displayPath = relative(root, file).replaceAll("\\", "/");
+  const projectPath = `/${displayPath}`;
+  for (const term of forbidden) if (text.toLowerCase().includes(term.toLowerCase())) violations.push(`${displayPath} contains forbidden term ${term}`);
+  if (projectPath.includes("/service/") && /from ["']\.\.\/repository\/loader/.test(text)) violations.push(`${displayPath} bypasses LockedRepositorySession`);
+  if (projectPath.includes("/src/core/") && text.includes("memory-manager/")) violations.push(`${displayPath} makes Core depend on the remote manager`);
+  if (projectPath.includes("/src/core/") && (text.includes("pi-extension/") || text.includes("@earendil-works/pi-"))) violations.push(`${displayPath} makes Core depend on Pi`);
+  if (projectPath.includes("/memory-manager/openai/") && /core\/(?:repository|transaction|governance)/.test(text)) violations.push(`${displayPath} makes provider code depend on Core internals`);
+  if (projectPath.includes("/src/pi-extension/") && /core\/(?:repository|transaction|governance)/.test(text)) violations.push(`${displayPath} makes the Pi adapter depend on Core internals`);
+  if (projectPath.includes("/src/recall/") && /(?:governanceAuthority|automatedGovernanceAuthority|trustedContributor)/.test(text)) violations.push(`${displayPath} grants recall write authority`);
+  if (!projectPath.includes("/src/cli/") && text.includes("@clack/prompts")) violations.push(`${displayPath} imports TUI dependencies outside the CLI`);
+  if (!projectPath.endsWith("/src/memory-manager/openai/openai-responses-adapter.ts") && text.includes("https://api.openai.com/v1/responses")) violations.push(`${displayPath} constructs the provider endpoint outside the adapter`);
 }
 const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
 if (Object.keys(pkg.exports ?? {}).some((key) => key !== ".")) violations.push("package exports a deep path");
