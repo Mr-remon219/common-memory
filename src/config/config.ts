@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { ProvenanceType } from "../core/contracts/types.js";
+import { fsyncFile, persistDirectory } from "../core/transaction/fsync.js";
 import type { RemoteDisclosurePolicy } from "../memory-manager/contracts/disclosure.js";
 import { validateDisclosurePolicy } from "../memory-manager/contracts/disclosure.js";
 import { normalizeOpenAICompatibleBaseUrl } from "../memory-manager/openai/openai-responses-adapter.js";
@@ -125,8 +126,8 @@ function writePrivateFile(path: string, content: string): void {
   const temporary = join(directory, `.private.${process.pid}.${randomUUID()}.tmp`);
   try {
     writeFileSync(temporary, content, { encoding: "utf8", flag: "wx", mode: 0o600 });
-    const fd = openSync(temporary, "r"); try { fsyncSync(fd); } finally { closeSync(fd); }
-    renameSync(temporary, path);
+    fsyncFile(temporary);
+    renameSync(temporary, path); persistDirectory(directory);
     try { chmodSync(path, 0o600); } catch { /* Windows ACLs are managed by the OS. */ }
   } finally { try { rmSync(temporary, { force: true }); } catch { /* best effort */ } }
 }
