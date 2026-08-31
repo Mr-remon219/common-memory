@@ -37,7 +37,7 @@ it("prevalidates the candidate image before creating a transaction", () => { con
 
 it("recovers after an actual child process exits at the commit marker", () => {
   const root = tempRoot(); cleanups.push(root.cleanup); const parent = new CoreService({ dataRoot: root.path, clock: new TestClock(), ids: new TestIds() }); expect(parent.initialize().ok).toBe(true);
-  execFileSync(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "build"], { cwd: process.cwd(), stdio: "ignore" });
+  execFileSync(process.execPath, [join(process.cwd(), "node_modules", "typescript", "bin", "tsc"), "-p", "tsconfig.build.json"], { cwd: process.cwd(), stdio: "ignore" });
   const serviceUrl = pathToFileURL(join(process.cwd(), "dist", "core", "service", "core-service.js")).href;
   const portsUrl = pathToFileURL(join(process.cwd(), "dist", "core", "contracts", "ports.js")).href;
   const script = `import { CoreService } from ${JSON.stringify(serviceUrl)}; import { trustedContributor } from ${JSON.stringify(portsUrl)}; const service = new CoreService({ dataRoot: process.env.ROOT, faults: { checkpoint(point) { if (point === 'commit-marker') process.exit(77); } } }); service.propose({ operation: 'add_fact', target_fact_ids: [], suggested_fact: ${JSON.stringify(suggested)}, evidence: ${JSON.stringify(evidence)}, reasoning: '长期偏好', confidence: 'high' }, trustedContributor('local_user', 'session-1')); process.exit(1);`;
