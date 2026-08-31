@@ -3,8 +3,11 @@ import { dirname } from "node:path";
 import { CoreError } from "../contracts/errors.js";
 
 export function fsyncFile(path: string): void {
-  const fd = openSync(path, "r"); try { fsyncSync(fd); } finally { closeSync(fd); }
+  const fd = openSync(path, fileFsyncOpenMode()); try { fsyncSync(fd); } finally { closeSync(fd); }
 }
+
+// FlushFileBuffers on Windows requires a handle opened with write access.
+export function fileFsyncOpenMode(platform: NodeJS.Platform = process.platform): "r" | "r+" { return platform === "win32" ? "r+" : "r"; }
 
 // Node cannot fsync directory handles on Windows (fsyncSync returns EPERM).
 // File fsync, atomic rename, and journal recovery still protect transaction integrity.
