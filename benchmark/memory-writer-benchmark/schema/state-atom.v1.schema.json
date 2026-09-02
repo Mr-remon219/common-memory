@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://memory-writer-benchmark.dev/schema/state-atom.v1.schema.json",
+  "title": "MWB StateAtom v1",
+  "description": "One hidden world-state atom. Writers never see these; they only see the rendered history.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "class",
+    "content",
+    "scope",
+    "valid_from",
+    "valid_to",
+    "status",
+    "epistemic_status",
+    "attribution",
+    "transferability"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^state\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$"
+    },
+    "class": {
+      "type": "string",
+      "enum": [
+        "global_transferable",
+        "domain_local",
+        "ephemeral",
+        "obsolete",
+        "uncertain",
+        "noise_or_untrusted"
+      ]
+    },
+    "content": {
+      "type": "string",
+      "minLength": 8,
+      "description": "Ground-truth statement of the state as it is true in the hidden world at its validity window."
+    },
+    "scope": {
+      "type": "string",
+      "pattern": "^(global|project:[a-z0-9_-]+|domain:(coding|project_building|learning|conversation)|session:[a-z0-9_-]+|third_party:[a-z0-9_-]+)$"
+    },
+    "valid_from": {
+      "type": "string",
+      "pattern": "^day-[0-9]{1,4}$"
+    },
+    "valid_to": {
+      "type": ["string", "null"],
+      "pattern": "^day-[0-9]{1,4}$"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["current", "superseded", "expired", "hypothesis", "never_valid"]
+    },
+    "epistemic_status": {
+      "type": "string",
+      "enum": [
+        "verified",
+        "stated_preference",
+        "stated_fact",
+        "hypothesis",
+        "third_party_claim",
+        "assistant_inference",
+        "false",
+        "untrusted_injection",
+        "noise"
+      ]
+    },
+    "attribution": {
+      "type": "string",
+      "enum": ["user", "assistant", "tool", "third_party", "environment"]
+    },
+    "supersedes": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^state\\." },
+      "uniqueItems": true
+    },
+    "superseded_by": {
+      "type": ["string", "null"],
+      "pattern": "^state\\."
+    },
+    "transferability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["coding", "project_building", "learning", "conversation"],
+      "properties": {
+        "coding": { "type": "boolean" },
+        "project_building": { "type": "boolean" },
+        "learning": { "type": "boolean" },
+        "conversation": { "type": "boolean" }
+      }
+    },
+    "decision_field": {
+      "type": "string",
+      "description": "Name of the downstream decision field this state controls; required when the state is a counterfactual pivot."
+    },
+    "notes": { "type": "string" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "class": { "const": "obsolete" } } },
+      "then": { "properties": { "status": { "enum": ["superseded", "expired"] } } }
+    },
+    {
+      "if": { "properties": { "class": { "const": "uncertain" } } },
+      "then": { "properties": { "status": { "const": "hypothesis" }, "epistemic_status": { "const": "hypothesis" } } }
+    },
+    {
+      "if": { "properties": { "status": { "const": "superseded" } } },
+      "then": { "required": ["superseded_by"], "properties": { "superseded_by": { "type": "string" } } }
+    }
+  ]
+}

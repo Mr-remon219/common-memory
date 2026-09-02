@@ -1,0 +1,51 @@
+# WriterCard example (validates against schema/writer-card.v1.schema.json).
+# This describes a BASELINE so that no claim is made about any external system.
+spec_version: "0.1"
+writer_id: writer.baseline_rolling_summary
+display_name: Rolling Summary baseline (matched model)
+kind: baseline
+component_surface: Single markdown summary regenerated after every session with the frozen prompt in templates/baseline-prompts.md §A.
+source:
+  repository: https://example.invalid/mwb-harness
+  commit: 0123456abcdef
+  version: 0.1.0
+  openness: open_source
+admission:
+  class: replay_native
+  status: admitted
+  evidence:
+    native_write_path_preserved: true
+    no_external_summarization_prompt: true   # the summarization prompt IS the writer, not an external add-on
+    ingestion_coverage_auditable: true
+    native_lifecycle_preserved: true
+    artifact_exportable: true
+    repeat_run_coverage_consistent: true
+    notes: Baseline; all six items hold by construction.
+backend:
+  condition: matched_model
+  model_snapshot: PIN_BEFORE_RUN            # e.g. vendor/model-YYYY-MM-DD
+  reasoning_effort: low
+  temperature: 0
+  max_output_tokens: 4096
+  retry_policy: "3 attempts, exponential backoff, fail closed"
+  model_replaceable: true
+capacity_control:
+  supports_budget: true
+  mechanism: Summary prompt receives the budget B and the harness rejects (and re-prompts once) any summary exceeding B tokens under o200k_base.
+  budgets_declared: [4096, 16384]
+export_adapter:
+  name: mwb-baseline-exporter
+  version: 0.1.0
+  lossless: true
+  acknowledged_by_upstream: true
+quiescence:
+  method: Synchronous; the summary is final when the last session's update returns.
+  max_wait_seconds: 0
+memory_surface:
+  included: ["summary.md"]
+  excluded: ["per-session prompts", "model responses other than the final summary"]
+  raw_transcript_is_memory: false
+config:
+  prompt_file: templates/baseline-prompts.md#A
+config_hash: PIN_BEFORE_RUN
+notes: Replace every PIN_BEFORE_RUN before producing RunRecords.

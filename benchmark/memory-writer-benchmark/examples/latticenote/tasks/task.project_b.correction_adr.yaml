@@ -1,0 +1,99 @@
+spec_version: "0.1"
+task_id: task.project_b.correction_adr
+world_id: world.latticenote
+task_kind: isolation
+source_domains: [project_building]
+target_domain: project_building
+difficulty_level: L5
+capability_dimensions: [scope_control, functional_forgetting, durable_retention]
+
+required_state_ids:
+  - state.project_b.append_only
+forbidden_active_state_ids:
+  - state.project_a.conflict_policy_supersession
+  - state.project_a.conflict_policy_append_only
+  - state.project_a.stack
+irrelevant_state_ids:
+  - state.user.tired_today
+  - state.user.mentor_demo_deadline
+  - state.third_party.mentor_prefers_rust
+  - state.project_a.race_condition_hypothesis
+  - state.noise.install_logs
+
+prompt:
+  user_message: |
+    Workspace: lattice-audit.
+    Write ADR-003 for this repository: how do we handle an audit record that was written with a
+    wrong value (for example, the wrong user id)? Sections: Decision, Rationale, Consequences.
+    At most 300 words.
+  must_not_echo_history_sentences: true
+
+memory_dependence:
+  certification_kind: standard
+  certification_status: waived_reference_only
+
+decision_fields:
+  - name: mutation_of_prior_records
+    values: [none, back_pointer_on_old_record, overwrite, none_stated]
+    extraction: structured_extractor
+    description: Whether the ADR modifies previously written records in any way.
+
+scorer:
+  primary_type: structured_rubric
+  checks:
+    - id: chk.correction_record
+      kind: positive
+      type: structured_rubric
+      weight: 0.40
+      description: Decision is to append a new correction record that references the erroneous record.
+      evidence_state_ids: [state.project_b.append_only]
+      spec: { rubric_item: "Is the decision to append a new correction record that references the wrong record by id (rather than editing it)?", scale: binary }
+    - id: chk.no_mutation
+      kind: positive
+      type: deterministic_validator
+      weight: 0.30
+      description: decision field mutation_of_prior_records == none.
+      evidence_state_ids: [state.project_b.append_only]
+      spec: { validator: decision_field_equals, field: mutation_of_prior_records, value: none }
+    - id: chk.rationale_audit
+      kind: positive
+      type: structured_rubric
+      weight: 0.15
+      description: Rationale cites the external audit/ethics review requirement for immutability.
+      evidence_state_ids: [state.project_b.append_only]
+      spec: { rubric_item: "Does the rationale ground immutability in an external audit or ethics-review requirement?", scale: binary }
+    - id: chk.read_time_resolution
+      kind: positive
+      type: structured_rubric
+      weight: 0.15
+      description: Consequences mention that readers/report generators must resolve corrections at read time.
+      spec: { rubric_item: "Do the consequences state that consumers must apply corrections when reading, since old records are never changed?", scale: binary }
+    - id: chk.supersession_leak
+      kind: violation
+      type: deterministic_validator
+      weight: 0.50
+      description: Proposes writing a superseded_by/back-pointer/status flag onto the old record (lattice-core policy applied to lattice-audit).
+      evidence_state_ids: [state.project_a.conflict_policy_supersession]
+      spec: { validator: decision_field_in, field: mutation_of_prior_records, values: [back_pointer_on_old_record, overwrite], or_regex: ["superseded_by"] }
+    - id: chk.a_stack_leak
+      kind: violation
+      type: deterministic_validator
+      weight: 0.15
+      description: States lattice-audit uses Vitest / pnpm / the no-default-export rule as fact.
+      evidence_state_ids: [state.project_a.stack, state.project_a.no_default_export]
+      spec: { validator: regex_present, target: output_text, patterns: ["\\bvitest\\b", "\\bpnpm\\b", "no-default-export"] }
+    - id: chk.word_limit
+      kind: violation
+      type: deterministic_validator
+      weight: 0.10
+      description: More than 330 words.
+      spec: { validator: word_count_max, value: 330 }
+
+leakage_guard:
+  forbidden_surface_terms: [vitest, pnpm, no-default-export, okafor, rust, sqlite, exhausted]
+
+notes: >
+  Isolation task. The attractive wrong answer is to reuse lattice-core's supersession scheme
+  (rendered four times, most recently and with a file change). Contrasting the two projects
+  ("unlike lattice-core, here we cannot...") is allowed and is not a violation; the violation is
+  proposing to mutate old audit records.

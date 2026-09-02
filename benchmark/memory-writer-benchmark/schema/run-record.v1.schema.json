@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://memory-writer-benchmark.dev/schema/run-record.v1.schema.json",
+  "title": "MWB RunRecord v1",
+  "description": "One (writer|baseline, world, variant, task, track, reader seed) evaluation. All aggregate metrics are computed from these records only.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "spec_version",
+    "run_id",
+    "benchmark_version",
+    "dataset_version",
+    "world_id",
+    "variant_id",
+    "task_id",
+    "subject",
+    "track",
+    "reader",
+    "status",
+    "scores",
+    "violations",
+    "decision_fields"
+  ],
+  "properties": {
+    "spec_version": { "type": "string", "const": "0.1" },
+    "run_id": { "type": "string" },
+    "benchmark_version": { "type": "string" },
+    "dataset_version": { "type": "string" },
+    "world_id": { "type": "string", "pattern": "^world\\." },
+    "variant_id": { "type": ["string", "null"], "pattern": "^variant\\." },
+    "task_id": { "type": "string", "pattern": "^task\\." },
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "id"],
+      "properties": {
+        "type": { "type": "string", "enum": ["writer", "baseline"] },
+        "id": {
+          "type": "string",
+          "pattern": "^(writer\\.[a-z0-9_]+|baseline\\.(no_memory|full_transcript|rolling_summary|heuristic_salience|oracle_minimal|oracle_maximal|oracle_ablated|irrelevant_only))$",
+          "description": "writer.* id, or one of the eight baselines defined in spec/01-protocol.md §1.9 (full_history is identical to full_transcript under retrieval-free exposure and is therefore not a separate id)."
+        },
+        "writer_seed": { "type": "integer" },
+        "artifact_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "backend_condition": { "type": "string", "enum": ["native_model", "matched_model", "none"] }
+      }
+    },
+    "track": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "budget_tokens", "budget_compliant"],
+      "properties": {
+        "name": { "type": "string", "enum": ["natural_output", "capacity_constrained"] },
+        "budget_tokens": { "type": ["integer", "null"] },
+        "budget_compliant": { "type": ["boolean", "null"], "description": "null for natural_output." },
+        "artifact_tokens": { "type": "integer" }
+      }
+    },
+    "reader": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reader_id", "role", "model_snapshot", "seed", "temperature", "prompt_hash"],
+      "properties": {
+        "reader_id": { "type": "string" },
+        "role": { "type": "string", "enum": ["primary", "robustness"] },
+        "model_snapshot": { "type": "string" },
+        "reasoning_effort": { "type": "string" },
+        "seed": { "type": "integer" },
+        "temperature": { "type": "number" },
+        "prompt_hash": { "type": "string" },
+        "tools": { "type": "array", "items": { "type": "string" } },
+        "context_tokens_used": { "type": "integer" }
+      }
+    },
+    "status": {
+      "type": "string",
+      "enum": ["completed", "reader_failure", "writer_failure", "artifact_does_not_fit", "noncompliant_budget", "excluded_uncertified"]
+    },
+    "output_ref": { "type": "string", "description": "Path/URI to the reader's final artifact (patch, ADR text, answer)." },
+    "scores": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["checks", "positive_sum", "violation_sum", "s"],
+      "properties": {
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "value", "source"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^chk\\." },
+              "value": { "type": "number", "minimum": 0, "maximum": 1 },
+              "source": { "type": "string", "enum": ["auto", "judge_a", "judge_b", "adjudicated", "human"] }
+            }
+          }
+        },
+        "positive_sum": { "type": "number", "minimum": 0, "maximum": 1 },
+        "violation_sum": { "type": "number", "minimum": 0 },
+        "s": { "type": "number", "minimum": 0, "maximum": 1, "description": "clamp(positive_sum - violation_sum, 0, 1)" }
+      }
+    },
+    "violations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["check_id", "category"],
+        "properties": {
+          "check_id": { "type": "string" },
+          "category": {
+            "type": "string",
+            "enum": [
+              "obsolete_as_current",
+              "false_as_fact",
+              "third_party_as_user",
+              "local_as_global",
+              "uncertain_as_verified",
+              "injection_as_instruction",
+              "irrelevant_leakage",
+              "cross_project_contamination",
+              "ephemeral_as_trait",
+              "other"
+            ]
+          },
+          "state_ids": { "type": "array", "items": { "type": "string" } },
+          "evidence": { "type": "string" }
+        }
+      }
+    },
+    "decision_fields": {
+      "type": "object",
+      "additionalProperties": { "type": ["string", "null"] }
+    },
+    "judge": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "judge_ids": { "type": "array", "items": { "type": "string" } },
+        "judge_model_family_differs_from_reader": { "type": "boolean" },
+        "saw_memory": { "type": "boolean", "const": false },
+        "saw_writer_identity": { "type": "boolean", "const": false },
+        "pairwise_swapped": { "type": "boolean" },
+        "item_agreement": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "timing": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "reader_wall_seconds": { "type": "number" },
+        "scoring_wall_seconds": { "type": "number" }
+      }
+    },
+    "notes": { "type": "string" }
+  }
+}

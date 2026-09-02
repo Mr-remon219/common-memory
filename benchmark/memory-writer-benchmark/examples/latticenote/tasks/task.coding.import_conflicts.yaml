@@ -1,0 +1,134 @@
+spec_version: "0.1"
+task_id: task.coding.import_conflicts
+world_id: world.latticenote
+task_kind: same_domain
+source_domains: [coding, project_building]
+target_domain: coding
+difficulty_level: L3
+capability_dimensions: [durable_retention, temporal_update, scope_control, functional_forgetting]
+
+# The task is a NEIGHBOUR of the history (backup import), never the announced work item itself.
+# Nothing in the prompt says "supersession"; the reader must know the CURRENT policy from memory.
+required_state_ids:
+  - state.project_a.conflict_policy_supersession
+  - state.project_a.no_default_export
+  - state.project_a.stack
+forbidden_active_state_ids:
+  - state.project_a.conflict_policy_append_only
+  - state.project_b.append_only
+  - state.project_a.old_test_runner_jest
+  - state.user.mentor_demo_deadline
+irrelevant_state_ids:
+  - state.user.tired_today
+  - state.third_party.mentor_prefers_rust
+  - state.project_a.race_condition_hypothesis
+  - state.noise.install_logs
+
+prompt:
+  user_message: |
+    Workspace: lattice-core.
+    Implement the merge step of the backup import feature.
+
+    Add `src/backup/import-preferences.ts` exporting a function
+    `importPreferenceRecords(existing: PreferenceRecord[], incoming: PreferenceRecord[]): PreferenceRecord[]`
+    where `PreferenceRecord = { id: string; key: string; value: string; recordedAt: number; superseded_by?: string }`.
+
+    When an incoming record has the same `key` as an existing one, handle the conflict the way this
+    project currently handles conflicting preference records. Add a test file next to it. Follow the
+    project's conventions for exports and test tooling. Return the full contents of both files.
+  workspace_snapshot: null
+  tools: [read_file, write_file, run_shell]
+  must_not_echo_history_sentences: true
+
+memory_dependence:
+  certification_kind: standard
+  certification_status: waived_reference_only
+
+decision_fields:
+  - name: policy_applied
+    values: [supersession, append_only, overwrite, other]
+    extraction: structured_extractor
+    description: Which conflict policy the produced code actually implements.
+
+scorer:
+  primary_type: hidden_tests
+  checks:
+    - id: chk.newer_incoming_supersedes
+      kind: positive
+      type: hidden_tests
+      weight: 0.35
+      description: Incoming newer record becomes current; existing older record retained with superseded_by = incoming.id.
+      evidence_state_ids: [state.project_a.conflict_policy_supersession]
+      spec: { bundle: hidden_tests/import-preferences.test.ts, test_names: ["newer incoming record supersedes existing"] }
+    - id: chk.older_incoming_is_superseded
+      kind: positive
+      type: hidden_tests
+      weight: 0.20
+      description: Incoming older record is retained but marked superseded_by the existing current record.
+      evidence_state_ids: [state.project_a.conflict_policy_supersession]
+      spec: { bundle: hidden_tests/import-preferences.test.ts, test_names: ["older incoming record is kept but superseded"] }
+    - id: chk.retention
+      kind: positive
+      type: hidden_tests
+      weight: 0.10
+      description: No record is dropped; output length == existing.length + incoming.length.
+      evidence_state_ids: [state.project_a.conflict_policy_supersession]
+      spec: { bundle: hidden_tests/import-preferences.test.ts, test_names: ["all records are retained"] }
+    - id: chk.named_exports_only
+      kind: positive
+      type: deterministic_validator
+      weight: 0.15
+      description: "No `export default` in any produced file."
+      evidence_state_ids: [state.project_a.no_default_export]
+      spec: { validator: regex_absent, target: produced_files, patterns: ["\\bexport\\s+default\\b"] }
+    - id: chk.uses_vitest
+      kind: positive
+      type: deterministic_validator
+      weight: 0.10
+      description: The test file imports from "vitest" (not jest).
+      evidence_state_ids: [state.project_a.stack]
+      spec: { validator: regex_present, target: test_file, patterns: ["from\\s+['\"]vitest['\"]"] }
+    - id: chk.typechecks
+      kind: positive
+      type: deterministic_validator
+      weight: 0.10
+      description: "`tsc --noEmit` passes on the produced files with the provided PreferenceRecord type."
+      spec: { validator: typecheck }
+    - id: chk.append_only_as_current
+      kind: violation
+      type: deterministic_validator
+      weight: 0.30
+      description: Decision field policy_applied == append_only, or output text justifies the design by ADR-001 / "append-only is our policy".
+      evidence_state_ids: [state.project_a.conflict_policy_append_only]
+      spec: { validator: decision_field_equals, field: policy_applied, value: append_only, or_regex: ["ADR-001", "append[- ]only (is|remains) (our|the) (policy|rule)"] }
+    - id: chk.project_b_contamination
+      kind: violation
+      type: deterministic_validator
+      weight: 0.20
+      description: Output cites lattice-audit / ethics board / audit immutability as a constraint on lattice-core.
+      evidence_state_ids: [state.project_b.append_only]
+      spec: { validator: regex_present, target: output_text, patterns: ["lattice-audit", "ethics board", "audit (trail|requirement)"] }
+    - id: chk.jest_used
+      kind: violation
+      type: deterministic_validator
+      weight: 0.10
+      description: Test file uses jest instead of vitest (obsolete stack applied).
+      evidence_state_ids: [state.project_a.old_test_runner_jest]
+      spec: { validator: regex_present, target: test_file, patterns: ["from\\s+['\"]@jest", "\\bjest\\."] }
+    - id: chk.expired_deadline
+      kind: violation
+      type: deterministic_validator
+      weight: 0.10
+      description: Treats the already-past mentor demo as an upcoming constraint.
+      evidence_state_ids: [state.user.mentor_demo_deadline]
+      spec: { validator: regex_present, target: output_text, patterns: ["(?i)before (the|your) demo", "(?i)demo (is|on) day"] }
+
+leakage_guard:
+  forbidden_surface_terms: [okafor, rust, exhausted, "lattice-sync", "LatticeSync"]
+  allow_terms_in_quotes: false
+
+notes: >
+  Memory-dependence rationale: a no-memory reader has three plausible policies (overwrite, append-only,
+  supersession) and no way to pick; the oracle-minimal memory (three state sentences) makes the task
+  near-deterministic. The forbidden ADR-001 state is an attractive wrong answer because it is stated
+  three times in the history and the reversal only twice.

@@ -1,0 +1,201 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://memory-writer-benchmark.dev/schema/task-spec.v1.schema.json",
+  "title": "MWB TaskSpec v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "spec_version",
+    "task_id",
+    "world_id",
+    "task_kind",
+    "source_domains",
+    "target_domain",
+    "difficulty_level",
+    "capability_dimensions",
+    "required_state_ids",
+    "forbidden_active_state_ids",
+    "irrelevant_state_ids",
+    "prompt",
+    "memory_dependence",
+    "scorer",
+    "leakage_guard"
+  ],
+  "properties": {
+    "spec_version": { "type": "string", "const": "0.1" },
+    "task_id": { "type": "string", "pattern": "^task\\.[a-z0-9_]+(\\.[a-z0-9_]+)*$" },
+    "world_id": { "type": "string", "pattern": "^world\\." },
+    "task_kind": {
+      "type": "string",
+      "enum": [
+        "same_domain",
+        "positive_cross_domain",
+        "negative_transfer_null",
+        "temporal_update",
+        "counterfactual_twin",
+        "isolation"
+      ]
+    },
+    "source_domains": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "enum": ["coding", "project_building", "learning", "conversation"] }
+    },
+    "target_domain": { "type": "string", "enum": ["coding", "project_building", "learning", "conversation"] },
+    "difficulty_level": { "type": "string", "enum": ["L1", "L2", "L3", "L4", "L5"] },
+    "capability_dimensions": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "durable_retention",
+          "temporal_update",
+          "functional_forgetting",
+          "abstraction",
+          "scope_control",
+          "attribution",
+          "epistemic_calibration",
+          "deduplication",
+          "negative_experience",
+          "poisoning_resistance"
+        ]
+      }
+    },
+    "required_state_ids": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^state\\." } },
+    "forbidden_active_state_ids": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^state\\." } },
+    "irrelevant_state_ids": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^state\\." } },
+    "shared_latent_state_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^state\\." },
+      "description": "REQUIRED for positive_cross_domain. Every id MUST also be in required_state_ids and have transferability[target_domain]=true."
+    },
+    "variant_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["variant_id", "twin_of_task_id", "decision_field", "expected_value_base", "expected_value_variant"],
+      "properties": {
+        "variant_id": { "type": "string", "pattern": "^variant\\." },
+        "twin_of_task_id": { "type": "string", "pattern": "^task\\." },
+        "decision_field": { "type": "string" },
+        "expected_value_base": { "type": "string" },
+        "expected_value_variant": { "type": "string" }
+      }
+    },
+    "prompt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["user_message"],
+      "properties": {
+        "user_message": { "type": "string", "minLength": 20 },
+        "workspace_snapshot": { "type": ["string", "null"], "description": "Optional path to a sandbox bundle the reader gets (no history inside)." },
+        "tools": { "type": "array", "items": { "type": "string" } },
+        "must_not_echo_history_sentences": {
+          "type": "boolean",
+          "const": true,
+          "description": "Task text MUST NOT reuse goal sentences verbatim from the history (anti answer-cache)."
+        }
+      }
+    },
+    "memory_dependence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["certification_kind", "certification_status"],
+      "properties": {
+        "certification_kind": {
+          "type": "string",
+          "enum": ["standard", "null_task", "twin_pair"],
+          "description": "standard: oracle-no_memory>=delta etc.; null_task: solvable without memory, oracle==no_memory; twin_pair: certified together with its twin."
+        },
+        "certification_status": { "type": "string", "enum": ["pending", "certified", "failed", "waived_reference_only"] },
+        "certification_record": { "type": "string" }
+      }
+    },
+    "decision_fields": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "values", "extraction"],
+        "properties": {
+          "name": { "type": "string" },
+          "values": { "type": "array", "minItems": 2, "items": { "type": "string" } },
+          "extraction": { "type": "string", "enum": ["deterministic", "structured_extractor", "blinded_judge"] },
+          "description": { "type": "string" }
+        }
+      }
+    },
+    "scorer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["primary_type", "checks"],
+      "properties": {
+        "primary_type": {
+          "type": "string",
+          "enum": ["hidden_tests", "deterministic_validator", "structured_rubric", "blinded_llm_judge"]
+        },
+        "checks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "kind", "type", "weight", "description"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^chk\\.[a-z0-9_]+$" },
+              "kind": { "type": "string", "enum": ["positive", "violation"] },
+              "type": {
+                "type": "string",
+                "enum": ["hidden_tests", "deterministic_validator", "structured_rubric", "blinded_llm_judge"]
+              },
+              "weight": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+              "description": { "type": "string" },
+              "evidence_state_ids": {
+                "type": "array",
+                "items": { "type": "string", "pattern": "^state\\." },
+                "description": "Which hidden states this check operationalizes. Enables per-state audit."
+              },
+              "spec": { "type": "object", "description": "Type-specific parameters (test bundle path, regex list, rubric item text, ...)." }
+            }
+          }
+        }
+      }
+    },
+    "leakage_guard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["forbidden_surface_terms"],
+      "properties": {
+        "forbidden_surface_terms": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Case-insensitive terms whose presence in the reader output indicates irrelevant/forbidden memory leakage. May be empty."
+        },
+        "allow_terms_in_quotes": { "type": "boolean", "default": false }
+      }
+    },
+    "notes": { "type": "string" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "task_kind": { "const": "positive_cross_domain" } } },
+      "then": { "required": ["shared_latent_state_ids"], "properties": { "shared_latent_state_ids": { "minItems": 1 } } }
+    },
+    {
+      "if": { "properties": { "task_kind": { "const": "counterfactual_twin" } } },
+      "then": { "required": ["variant_binding", "decision_fields"] }
+    },
+    {
+      "if": { "properties": { "task_kind": { "const": "negative_transfer_null" } } },
+      "then": {
+        "properties": {
+          "required_state_ids": { "maxItems": 0 },
+          "memory_dependence": { "properties": { "certification_kind": { "const": "null_task" } } }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://memory-writer-benchmark.dev/schema/world-spec.v1.schema.json",
+  "title": "MWB WorldSpec v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "spec_version",
+    "world_id",
+    "name",
+    "language",
+    "fictional",
+    "split",
+    "domains_covered",
+    "virtual_time",
+    "files",
+    "tasks",
+    "task_mix",
+    "authoring"
+  ],
+  "properties": {
+    "spec_version": { "type": "string", "const": "0.1" },
+    "world_id": { "type": "string", "pattern": "^world\\.[a-z0-9_]+$" },
+    "name": { "type": "string" },
+    "language": { "type": "string", "pattern": "^[a-z]{2}(-[A-Z]{2})?$" },
+    "fictional": {
+      "type": "boolean",
+      "const": true,
+      "description": "All projects, people, APIs, numbers and organizations MUST be fictional to limit parametric-knowledge leakage."
+    },
+    "split": { "type": "string", "enum": ["reference", "public_dev", "private_test"] },
+    "domains_covered": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "enum": ["coding", "project_building", "learning", "conversation"] }
+    },
+    "virtual_time": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["epoch", "history_start", "history_end", "task_cutoff"],
+      "properties": {
+        "epoch": { "type": "string", "format": "date", "description": "Calendar date that 'day-1' maps to." },
+        "history_start": { "type": "string", "pattern": "^day-[0-9]+$" },
+        "history_end": { "type": "string", "pattern": "^day-[0-9]+$" },
+        "task_cutoff": { "type": "string", "pattern": "^day-[0-9]+$", "description": "Virtual 'now' for all future tasks. MUST be > history_end." }
+      }
+    },
+    "files": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["states", "events", "labels"],
+      "properties": {
+        "states": { "type": "string" },
+        "events": { "type": "string", "description": "The ONLY file writers may consume." },
+        "labels": { "type": "string", "description": "Hidden event->state mapping. Never shipped to writers." },
+        "reader_prompt": { "type": "string" }
+      }
+    },
+    "variants": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["variant_id", "kind", "overrides_file"],
+        "properties": {
+          "variant_id": { "type": "string", "pattern": "^variant\\.[a-z0-9_]+$" },
+          "kind": { "type": "string", "enum": ["counterfactual", "noise"] },
+          "description": { "type": "string" },
+          "pivot_state_id": { "type": "string", "pattern": "^state\\." },
+          "replacement_content": { "type": "string" },
+          "overrides_file": { "type": "string" }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "kind": { "const": "counterfactual" } } },
+            "then": { "required": ["pivot_state_id", "replacement_content"] }
+          }
+        ]
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "minItems": 4,
+      "uniqueItems": true,
+      "items": { "type": "string" }
+    },
+    "task_mix": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["same_domain", "positive_cross_domain", "negative_transfer_null", "temporal_or_counterfactual"],
+      "properties": {
+        "same_domain": { "type": "integer", "minimum": 1 },
+        "positive_cross_domain": { "type": "integer", "minimum": 1 },
+        "negative_transfer_null": { "type": "integer", "minimum": 1 },
+        "temporal_or_counterfactual": { "type": "integer", "minimum": 1 },
+        "isolation": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "authoring": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "authored_on"],
+      "properties": {
+        "method": { "type": "string", "enum": ["manual", "template_generated", "hybrid"] },
+        "generator_version": { "type": "string" },
+        "seed": { "type": "integer" },
+        "authored_on": { "type": "string", "format": "date" },
+        "reviewed_by_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "notes": { "type": "string" }
+  }
+}

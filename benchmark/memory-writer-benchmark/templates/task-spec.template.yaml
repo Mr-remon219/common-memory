@@ -1,0 +1,65 @@
+# TaskSpec template — copy into <world>/tasks/ and fill in. Validate with tools/validate.mjs.
+spec_version: "0.1"
+task_id: task.<domain>.<short_name>
+world_id: world.<id>
+task_kind: same_domain            # same_domain | positive_cross_domain | negative_transfer_null | temporal_update | counterfactual_twin | isolation
+source_domains: [coding]
+target_domain: coding
+difficulty_level: L3              # L1..L5
+capability_dimensions: [durable_retention]
+
+required_state_ids: []            # never obsolete or noise states; empty for null tasks
+forbidden_active_state_ids: []    # states whose ACTIVE use is a violation; isolation tasks need >= 1
+irrelevant_state_ids: []          # states that should have no effect
+# shared_latent_state_ids: []     # REQUIRED for positive_cross_domain; subset of required; transferable to target
+
+# variant_binding:                # REQUIRED for counterfactual_twin
+#   variant_id: variant.<id>
+#   twin_of_task_id: task.<base>
+#   decision_field: <name>
+#   expected_value_base: <v>
+#   expected_value_variant: <v>
+
+prompt:
+  user_message: |
+    <A neighbour of the history's work item. Never restate a history sentence verbatim.
+     Never name the answer (e.g. do not say "use supersession"). Give word/format limits.>
+  # workspace_snapshot: path/to/bundle
+  # tools: [read_file, write_file, run_shell]
+  must_not_echo_history_sentences: true
+
+memory_dependence:
+  certification_kind: standard    # standard | null_task | twin_pair
+  certification_status: pending   # pending | certified | failed | waived_reference_only
+
+decision_fields: []
+#  - name: policy_applied
+#    values: [a, b, other]
+#    extraction: structured_extractor   # deterministic | structured_extractor | blinded_judge
+
+scorer:
+  primary_type: deterministic_validator   # hidden_tests | deterministic_validator | structured_rubric | blinded_llm_judge
+  checks:
+    # positive weights MUST sum to 1.0; blinded_llm_judge positive weight <= 0.30
+    - id: chk.example_positive
+      kind: positive
+      type: deterministic_validator
+      weight: 1.0
+      description: <what this operationalizes>
+      evidence_state_ids: []
+      spec: { validator: regex_present, target: output_text, patterns: [] }
+    # violations are subtracted from the positive sum; s = clamp(pos - viol, 0, 1)
+    - id: chk.example_violation
+      kind: violation
+      type: deterministic_validator
+      weight: 0.2
+      description: <which harmful state this detects>
+      evidence_state_ids: []
+      spec: { validator: regex_present, target: output_text, patterns: [] }
+
+leakage_guard:
+  forbidden_surface_terms: []     # must not appear in the prompt itself
+  allow_terms_in_quotes: false
+
+notes: >
+  Why is this task memory-dependent? What is the attractive wrong answer? Which states make it so?

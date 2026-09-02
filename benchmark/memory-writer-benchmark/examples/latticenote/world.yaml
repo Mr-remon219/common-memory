@@ -1,0 +1,51 @@
+spec_version: "0.1"
+world_id: world.latticenote
+name: LatticeNote (reference world)
+language: en
+fictional: true
+split: reference
+domains_covered: [coding, project_building, learning, conversation]
+virtual_time:
+  epoch: 2031-03-01
+  history_start: day-1
+  history_end: day-26
+  task_cutoff: day-30
+files:
+  states: states.yaml
+  events: history/events.yaml
+  labels: history/labels.yaml
+  reader_prompt: reader-prompt.md
+variants:
+  - variant_id: variant.cf_explanation_style
+    kind: counterfactual
+    description: Flip the user's explanation-order preference; used by task.learning.explain_salience_confidence.twin.
+    pivot_state_id: state.user.explanation_style
+    replacement_content: "When learning an abstract concept the user wants a concrete example FIRST, and the formula or constraint statement only afterwards."
+    overrides_file: history/variants/cf_explanation_style.yaml
+  - variant_id: variant.noise_logs
+    kind: noise
+    description: Only tool log noise differs; used for Causal Invariance on every task of this world.
+    overrides_file: history/variants/noise_logs.yaml
+tasks:
+  - tasks/task.coding.import_conflicts.yaml
+  - tasks/task.learning.explain_salience_confidence.yaml
+  - tasks/task.project.review_confidence_as_notability.yaml
+  - tasks/task.project_b.correction_adr.yaml
+  - tasks/task.conversation.rainy_weekend.yaml
+  - tasks/task.learning.explain_salience_confidence.twin.yaml
+task_mix:
+  same_domain: 1
+  positive_cross_domain: 2
+  negative_transfer_null: 1
+  temporal_or_counterfactual: 1
+  isolation: 1
+authoring:
+  method: manual
+  authored_on: 2026-09-02
+  reviewed_by_count: 1
+notes: >
+  Reference world shipped with the v0.1 specification. It is public, therefore it MUST NOT be used
+  for leaderboard scores; its purpose is to make every schema, protocol step and metric concrete.
+  Certification status of its tasks is `waived_reference_only` until pilot data exists.
+  Known gap (validator warnings): state.user.long_term_goal and state.project_a.race_condition_hypothesis
+  are only ever `irrelevant`; a dedicated uncertain-as-verified task is left for the public_dev worlds.

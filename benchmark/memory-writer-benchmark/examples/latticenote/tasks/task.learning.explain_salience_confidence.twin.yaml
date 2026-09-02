@@ -1,0 +1,104 @@
+spec_version: "0.1"
+task_id: task.learning.explain_salience_confidence.twin
+world_id: world.latticenote
+task_kind: counterfactual_twin
+source_domains: [learning, conversation, coding]
+target_domain: learning
+difficulty_level: L4
+capability_dimensions: [abstraction, durable_retention]
+
+# Same prompt as the base task; the writer ingested variant.cf_explanation_style instead of the base history.
+required_state_ids:
+  - state.user.explanation_style
+  - state.user.misconception.salience_confidence
+  - state.user.knowledge.embeddings
+forbidden_active_state_ids: []
+irrelevant_state_ids:
+  - state.project_a.stack
+  - state.user.tired_today
+  - state.third_party.mentor_prefers_rust
+  - state.noise.install_logs
+shared_latent_state_ids:
+  - state.user.explanation_style
+
+variant_binding:
+  variant_id: variant.cf_explanation_style
+  twin_of_task_id: task.learning.explain_salience_confidence
+  decision_field: explanation_order
+  expected_value_base: formula_first
+  expected_value_variant: example_first
+
+prompt:
+  user_message: |
+    I'm drafting the background chapter of my thesis. Explain to me the difference between the
+    salience of a memory record and the confidence of a memory record, and how each should affect
+    recall ranking. Under 300 words.
+  must_not_echo_history_sentences: true
+
+memory_dependence:
+  certification_kind: twin_pair
+  certification_status: waived_reference_only
+
+decision_fields:
+  - name: explanation_order
+    values: [formula_first, example_first, none]
+    extraction: structured_extractor
+
+scorer:
+  primary_type: structured_rubric
+  checks:
+    - id: chk.example_first
+      kind: positive
+      type: structured_rubric
+      weight: 0.30
+      description: A concrete example precedes any formula or constraint statement.
+      evidence_state_ids: [state.user.explanation_style]
+      spec: { rubric_item: "Does the answer give a concrete example or case BEFORE stating any formula, definition-as-constraint, or compact rule?", scale: binary }
+    - id: chk.orthogonal_dimensions
+      kind: positive
+      type: structured_rubric
+      weight: 0.30
+      description: Same as base task.
+      evidence_state_ids: [state.user.misconception.salience_confidence]
+      spec: { rubric_item: "Does the answer explicitly say that importance/usefulness and certainty/trust are separate and that one does not imply the other?", scale: binary }
+    - id: chk.targets_prior_belief
+      kind: positive
+      type: structured_rubric
+      weight: 0.15
+      description: Same as base task.
+      evidence_state_ids: [state.user.misconception.salience_confidence]
+      spec: { rubric_item: "Does the answer explicitly name and correct the idea that confidence measures how much a memory matters?", scale: binary }
+    - id: chk.ranking_roles
+      kind: positive
+      type: structured_rubric
+      weight: 0.15
+      description: Same as base task.
+      spec: { rubric_item: "Does the answer assign a distinct, non-contradictory role in recall ranking to each of the two dimensions?", scale: binary }
+    - id: chk.no_embedding_reteach
+      kind: positive
+      type: structured_rubric
+      weight: 0.10
+      description: Same as base task.
+      evidence_state_ids: [state.user.knowledge.embeddings]
+      spec: { rubric_item: "Is the explanation of embeddings/cosine similarity absent or limited to at most one sentence?", scale: binary }
+    - id: chk.project_leak
+      kind: violation
+      type: deterministic_validator
+      weight: 0.20
+      description: Same as base task.
+      spec: { validator: regex_present, target: output_text, patterns: ["\\bpnpm\\b", "\\bvitest\\b", "\\beslint\\b", "\\bsqlite\\b", "okafor", "\\brust\\b", "lattice-audit"] }
+    - id: chk.word_limit
+      kind: violation
+      type: deterministic_validator
+      weight: 0.10
+      description: More than 330 words.
+      spec: { validator: word_count_max, value: 330 }
+
+leakage_guard:
+  forbidden_surface_terms: [pnpm, vitest, eslint, sqlite, okafor, rust, lattice-audit, "lattice-sync", exhausted]
+
+notes: >
+  Scored on its own like any task, but its main use is Causal Sensitivity: for each writer,
+  CS counts the fraction of (base, twin) pairs where decision_field explanation_order moves from
+  formula_first to example_first. A writer that never stores the preference scores CS = 0; a writer
+  whose reader ignores memory scores CS = 0 as well.
