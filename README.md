@@ -2,6 +2,8 @@
 
 Common Memory Core 是 Node.js 24 / TypeScript 的本地权威记忆库。Canonical YAML 是唯一事实源，SQLite FTS5 是可重建索引；远程模型只提供无权建议，所有写入由本地 Core policy 决定。
 
+配套的 Writer 评测规范已迁移到独立仓库：[Memory Benchmark](https://github.com/Mr-remon219/memory-benchmark)。
+
 ## 能力
 
 - 人工 `propose` / `approve` / `editApprove` / `reject`
