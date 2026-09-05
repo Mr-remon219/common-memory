@@ -1,6 +1,6 @@
 {
   "name": "common-memory-core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "keywords": [
@@ -22,7 +22,6 @@
   },
   "files": [
     "dist",
-    "schema",
     ".env.sample",
     "README.md"
   ],
@@ -32,25 +31,25 @@
     ]
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && node scripts/build-assets.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "npm run typecheck && node scripts/check-boundaries.mjs",
     "test": "vitest run",
-    "test:fixtures": "vitest run tests/contracts tests/serialization tests/revision tests/search",
-    "test:recovery": "vitest run tests/transaction tests/repository",
+    "test:fixtures": "vitest run tests/v2",
+    "test:recovery": "vitest run tests/v2",
     "test:consumer": "node scripts/consumer-smoke.mjs",
-    "test:remote-contract": "vitest run tests/contracts/memory-analysis.test.ts tests/contracts/openai-schema-subset.test.ts tests/memory-manager/openai-responses-adapter.test.ts tests/memory-manager/bounded-body.test.ts tests/memory-manager/retry-cancel.test.ts tests/memory-manager/outbound-safety.test.ts tests/memory-manager/memory-manager-failure.test.ts",
-    "prepublishOnly": "npm run lint && npm test && npm run build"
+    "test:remote-contract": "vitest run tests/memory-manager",
+    "prepublishOnly": "npm run lint && npm test && npm run build",
+    "evaluate:v2": "npm run build && node scripts/evaluate-v2.mjs",
+    "ablate:v2": "npm run build && node scripts/ablate-v2.mjs --output=docs/v2-ablation-results.json",
+    "benchmark:v2": "npm run build && node scripts/benchmark-v2.mjs"
   },
   "dependencies": {
     "@clack/prompts": "^1.7.0",
-    "ajv": "^8.17.1",
-    "ajv-formats": "^3.0.1",
-    "yaml": "^2.8.2"
+    "ajv": "^8.17.1"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*",
-    "typebox": "*"
+    "@earendil-works/pi-coding-agent": "0.84.4"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",

@@ -1,0 +1,338 @@
+{
+  "version": 1,
+  "generatedAt": "2026-09-05T14:39:57.562Z",
+  "command": "node /home/mrremon/project/cm-input/scripts/benchmark-v2.mjs --candidate=/tmp/cm-v2-baseline-mBhkIU/dist --output=docs/v2-performance-baseline.json",
+  "environment": {
+    "node": "v24.16.0",
+    "platform": "linux",
+    "release": "6.18.33.2-microsoft-standard-WSL2",
+    "arch": "x64",
+    "cpu": "AMD Ryzen 7 7800X3D 8-Core Processor"
+  },
+  "method": {
+    "samples": 9,
+    "warmups": 2,
+    "unit": "milliseconds/operation",
+    "fixtureSetupTimed": false,
+    "firstOpen": "open-existing-history-20k is seeded using baseline schema and includes constructor/index creation; other cases exclude constructor",
+    "order": "alternating baseline/candidate",
+    "modelCalls": 0,
+    "semanticAssertions": true,
+    "timingAssertions": false,
+    "limitations": [
+      "Synthetic local SQLite/filesystem workloads; not real model latency, token cost, or semantic quality.",
+      "Recover measures repeated recovery after constructor startup, not cold startup.",
+      "p95 is nearest-rank over nine samples; use repeated runs before generalizing."
+    ]
+  },
+  "compiledTrees": {
+    "candidate": {
+      "sha256": "e2b0949ae0eeed639f37914f1fff611cc4ea8c62e0cf1cc8b2268a3a4ce2d006",
+      "files": {
+        "cli/main.d.ts": "fdbeaaceb1047d486b9d1e7fc381a8cb7f589bbe8e78d591cd17a7797f425c49",
+        "cli/main.d.ts.map": "7bf513d86cdf9b81b03644886bf7c3166f921575caee14b5ce1eef21ba6764eb",
+        "cli/main.js": "e62384bb61f396d8fe3596ab0a72397cc447cb19b33910bfb000cdd6f39be089",
+        "cli/main.js.map": "977af34464a9b52b4aa20c7d5bc934b2bcaf88d5156c12b0a876d58d3e565fa2",
+        "cli/tui.d.ts": "42e0999c9e2ef849c4683dd09143329da61a4134692f7f6e48aac67e8694fb85",
+        "cli/tui.d.ts.map": "a6234e0483780617b4483a134a644715878d1b93a790cac47d08ebf161d2193a",
+        "cli/tui.js": "0b20cc355b252c96c289f4ab077495183e5e036e42941288a49fc87ed0e09ed6",
+        "cli/tui.js.map": "07403d06a6a0a955a11e2644f43e9ff8cf7492f174dff4d7a95d0d87dd13783b",
+        "config/config.d.ts": "ddfd0bb337bfc5190ba0aa73d9c448ed344e0d39c06f4ad79c10e48d7832d462",
+        "config/config.d.ts.map": "5b087b1bec141915465bb33aed67735fd64fab82a42e3b7fb52e905d8df51b5f",
+        "config/config.js": "f2488508c35ca5434ed181e5a37e2c185086219ea753397468aaeeedbf96c5ea",
+        "config/config.js.map": "68c259a14cfe91f89a245ec22a05cc489b94cca0af31a91b812ec2bab57afcf3",
+        "config/runtime.d.ts": "367b12359f63b9fa7934a84dcf3d29d7e72546cd071d20066cfb1f67eff2415f",
+        "config/runtime.d.ts.map": "26328fa3e9d8f91cc758988ea51b14a8029839b3cce2cfd8d94f6489a3f16853",
+        "config/runtime.js": "c794a517ab5a33b5cb554b9d6cbfffd52775be6185dcae643d7598ae0ddc55d5",
+        "config/runtime.js.map": "cb23b683e51afdad76455b416169ce97436e62369d6eb064253b5af9901c8560",
+        "core/contracts/errors.d.ts": "afea3e2c21853648f57901fb3da35f0f886fafc0c29bc2133b87bb7e7bd676e1",
+        "core/contracts/errors.d.ts.map": "8abddaa5c8148fdd0349cfb3b3fcd8c4cc7bd67e63b26974163ef84c7f42a899",
+        "core/contracts/errors.js": "3690c9b7b6f8ecfdeb20af1a315bc55291216526be1f6ad2e39d61bc00a05a30",
+        "core/contracts/errors.js.map": "fbedc2a72f1e3c63f0820dc72482e07d33b4ab0897a3802b2243c02c8282f340",
+        "core/safety/external-preflight.d.ts": "80412727bdccd8c9df1c59ef055490082382d2e721e433ff15005aeb04839ae6",
+        "core/safety/external-preflight.d.ts.map": "75861923896e7334be9a4e23c917b00f0089f9df7af3f941da683220b80f0005",
+        "core/safety/external-preflight.js": "34e1a9a1e1a2853cde887bc3120298d5d929abd75fd8156634969818973f8c81",
+        "core/safety/external-preflight.js.map": "2e30d25fca37d33344d5e368c41d8493a2827d4eb0681ce3664b0ac5528e1c47",
+        "core/safety/redaction.d.ts": "1f0f4dda1f0fd704ddd7fd6a23019e72936040b5ad7043f20a77d3763dcefaae",
+        "core/safety/redaction.d.ts.map": "ac95ab74a2f829f6dc85e350f706c5f61ab90f8d8d27bde3d1bd95aa5b2da490",
+        "core/safety/redaction.js": "be1cc0272ac4813b38a135ca0b6a7ccb6e6b89c7596e2071110b98b0ba50bb85",
+        "core/safety/redaction.js.map": "e269d24d572a0ad3cdfeac684f035b266eb6fe7d74d99d8f94656d2774461506",
+        "core/safety/rules.d.ts": "d6f15eb16d3608757371243a385e60de7458e62bba4b76926ea7965d75c24297",
+        "core/safety/rules.d.ts.map": "b4a81bb24b3f9a8486b839913515d4b8388fcb9fa0fc58c94dd6e48144f39f16",
+        "core/safety/rules.js": "1a755f719bed0c4a68c5264fd87da3cd0f0c913a64bbee4425cc5b96b93c8cec",
+        "core/safety/rules.js.map": "5ba0024d273febee7cd49e880708b69874aa9c2a408ea2eb0869359200505a0c",
+        "core/safety/scanner.d.ts": "a6b0c9439838d86c353ca8a4e46b7999ff52c23df4addbea26821709f2879aca",
+        "core/safety/scanner.d.ts.map": "727fa2d9cc561cf9220aa8d85641539188430fe42e6d4426f21c658629d255dc",
+        "core/safety/scanner.js": "d2e8809a993494331f7a07477f7fbf59ab4b1a637dfc687cbe56fdaba1d3bb12",
+        "core/safety/scanner.js.map": "ce71acfb3c8b51aab38e0654e253f105b65fb3015d4a3d29c88abb5280c27c81",
+        "core/transaction/fsync.d.ts": "861972c3ad207e77a2dafca33f837ffdb5233daa26af748d1b40f94ee540d869",
+        "core/transaction/fsync.d.ts.map": "dc6e5115e8b6e4429b46b98e600d283392031ddd48e08f9dd1c0f8f136a86cb8",
+        "core/transaction/fsync.js": "ce2713591d2979324e024262008c6246296114f4d0a9c81309743025a38cee92",
+        "core/transaction/fsync.js.map": "a050a220a77e26f572416627d7c20ea69aeb2b51350da0b94cac4885f994b936",
+        "index.d.ts": "7dd66371294d218a7ac74c734e18422e4ab9dfd1cc6b2e838741e44bb95fcb1f",
+        "index.d.ts.map": "e42ed4f609600f3fd67b5ec9698cc5ff8fb99ae8257271a0cce8448dcc163cbc",
+        "index.js": "a8b38f5c0957c39a088b4c32f93a28bbcf3d1e3c84e309c19137174a4a6ec1c1",
+        "index.js.map": "4396170c04a96a31f9fcaa36785e1c3910555b0da2ea068c43235d2773d3008f",
+        "memory-manager/contracts/disclosure.d.ts": "209964b2287dd36ff1e96f41b9c14a4e1732d0205d22f3af13879ee672d72903",
+        "memory-manager/contracts/disclosure.d.ts.map": "6c99d8b2f32f8dc28416bedbc0334b3e7edc4b1b0bd3ac5cfb36cfc233808280",
+        "memory-manager/contracts/disclosure.js": "eaf8d12b488e15f47d41dda467516ce531f8434f50f097ba36c5d1df0cb65431",
+        "memory-manager/contracts/disclosure.js.map": "3a03856ac7587bc52ca3121ce888e9b232de2253f718e6eac9e4d96c1af6672f",
+        "memory-manager/contracts/errors.d.ts": "f0f2c28dc8ce91d8321fc0a23bf8db9760d1e4b54f1592f16cb4094f128753f2",
+        "memory-manager/contracts/errors.d.ts.map": "c158509398be2ec46e54e14435bd300501ef91b5be43bff1c896e72d7478821f",
+        "memory-manager/contracts/errors.js": "ace434c5e4d7ed3d5dc818fc6d376ecae945f1e187f53e6bd10e87169ac38efd",
+        "memory-manager/contracts/errors.js.map": "973172a3cff42505c81fa7af701dd565d3174993f8b877dce7bb95bffe8e0021",
+        "memory-manager/contracts/model-port.d.ts": "fc168f8e57277a1204790fc9ec3e9b74a396f3871036a5d96fb8d1aaa48c038e",
+        "memory-manager/contracts/model-port.d.ts.map": "5bd77bf9f7f623ffe5d84f9891a825527a4f246bc8c345cd43c6825f77deb310",
+        "memory-manager/contracts/model-port.js": "0796d0733fa92fa0f6d9afb1017fd9c24f5161ae095ba74adec903f2fe176a4a",
+        "memory-manager/contracts/model-port.js.map": "0f9c04a277001f8c298c1db2d54050d595048505dd29eb207d07a55cd9251a7d",
+        "memory-manager/openai/bounded-body.d.ts": "ea8e8876de0239a6d5b6996b2ea650e58f03032f4d8f42cf281a4e0a425871e9",
+        "memory-manager/openai/bounded-body.d.ts.map": "3975cd049ba96e67ec66b9c68e80df92934eda9f95ebb116668ed427a7963eeb",
+        "memory-manager/openai/bounded-body.js": "6cffb27d91fa62d27524fae3f81372381e7e34e06ec9f13bb6687de3531ab718",
+        "memory-manager/openai/bounded-body.js.map": "abb648b18bda9e60b398c412308dfebd4148ce6cd670a468aeb0a71e45d1ba9f",
+        "memory-manager/openai/openai-responses-adapter.d.ts": "8acdd6ba9301a59b29f6d47be7e75bee0d0a45b54680d959735d9dcdf1ff88e7",
+        "memory-manager/openai/openai-responses-adapter.d.ts.map": "8c9c2524f136b5c473a1a397599f19245a838a5fa76b15a928d8418393c9f19d",
+        "memory-manager/openai/openai-responses-adapter.js": "a88521618134bf4c175d409579aa9229abc62aff9a2f7bbcb73f002ae3764ac5",
+        "memory-manager/openai/openai-responses-adapter.js.map": "e1c7698f539c5869f7198dea067c10e1d772d07e31bd72e2c74a77d4672b21d0",
+        "memory-manager/openai/response-decoder.d.ts": "240ab9cd99074e3fe003408c82fc0cd0e2ba61242ba68ee4a8dea54ed1271d08",
+        "memory-manager/openai/response-decoder.d.ts.map": "552c00c69c14a4d6949a0566660d536cca7be52f9a52d709c69040d64a46fb06",
+        "memory-manager/openai/response-decoder.js": "30e261e7d55cac5a38ae21411fdb1e5b562f7072692a791097dadee124f4d947",
+        "memory-manager/openai/response-decoder.js.map": "cd68c18da4d97cd93e6ab54683d6e8065befe43b701dca1b164bcab287977eba",
+        "memory-manager/openai/retry.d.ts": "4be75189c318431f1ec7af522b9e7d6253981827fd1e039241d027cdfa016a1c",
+        "memory-manager/openai/retry.d.ts.map": "b62d86392e8569372e4b46e9539eafc0505835ab1f040b8d245e55efa9435a3a",
+        "memory-manager/openai/retry.js": "23b6d2f6911bc0f5bd8afa36535e62aae3af47b5662ae62b1e01207cd56c8946",
+        "memory-manager/openai/retry.js.map": "e4ab5abda3d2e0517f64b7ca0bfa89b1fb56ca7a581924b9705180e01fb3827d",
+        "pi-extension/extraction-runtime.d.ts": "cb4acaba13a17ecfb67790a9d9f219291336fd88e5307f80e00a8c358747b786",
+        "pi-extension/extraction-runtime.d.ts.map": "42ef005e21ac6941a4b110034642932a57d6cb7de3799c321c96140febcc1e9d",
+        "pi-extension/extraction-runtime.js": "3e0001122bad0449058bc4c0327dcf5db001ac9a500612859f42f925d91f6d07",
+        "pi-extension/extraction-runtime.js.map": "7d57f36667009d0f79cbe8aeae1cf9ba9132c99e8a7234be4dfbedcc899e9d3e",
+        "pi-extension/index.d.ts": "36b2612e105d9e9d43d4174a74ee348a32793d5f5784353165c899c7147bd300",
+        "pi-extension/index.d.ts.map": "f131ff099841b5f03744e05cb07107485ff3f2b7a5db832ce3795aa28e5e0285",
+        "pi-extension/index.js": "32041cee4e56440a38de96e165c0264cc654c056d65cb7263fd9a7e82e52ae81",
+        "pi-extension/index.js.map": "a40caa6239397d61d78aeba08c848043f135da93237d0c959bd5c31018466511",
+        "v2/canonical.d.ts": "9756c42a0129570b57b4775d9f3c50827920433fa535eb1efa0775918a256a78",
+        "v2/canonical.d.ts.map": "016a7419c14e20b66b7c43e037445a42a616b675b16f00b8c7f5fdf6f5b6427e",
+        "v2/canonical.js": "8863a7788a4878b58f548d43f7a5c35fde6da32f2f9fdcca9f347e60f693c65e",
+        "v2/canonical.js.map": "acfa6dd4886b39111b50149b67520a16a48996b0a3a1c27fa6383abb97a00b31",
+        "v2/contract.d.ts": "15b375a7342b28c51de6d040053d9c89ccf740c98437807c57df88c0a28232b3",
+        "v2/contract.d.ts.map": "b458b61b3a84fb034a6c8ff5842e7cf433af21350a709e29f93b6dbf64b8165f",
+        "v2/contract.js": "bc358f531316879db21aad2e3781176c780e8d8aa85abc5acd9906a87659df14",
+        "v2/contract.js.map": "ee8c7bad53c6e9f4db299aae28c91f33b6398a1c2cbff4a786d5c008256bccbd",
+        "v2/errors.d.ts": "2b30ff7b059cfe2b2ce33b9932b4b9a172055b28b594b32a050290dea74f9c3a",
+        "v2/errors.d.ts.map": "54c69f5455ae010aecfd2a7b0cef3dcc4e2e59bfc32cda326ddcdd995bc350ad",
+        "v2/errors.js": "cf1571864e1bfad8ae0f6d535a0fb2922acb0a7b60df80d81bd571fddbc59c69",
+        "v2/errors.js.map": "be6ec027e4f8e186426533463e3c3316c93824182d584d6bbcb62630422188f3",
+        "v2/lock.d.ts": "0d2a79b25df46f77df75412adc51363a099a2692a51ac55a64b471e22cd47e91",
+        "v2/lock.d.ts.map": "aeb2cc1fe0ffdb5070f0da3169960bf78dff7825512eec296901e0dc1b4286ea",
+        "v2/lock.js": "cbfaf62f998f1d45e0d6239056b2fa040313bfb8beb50c25abad8ab9278d0c0a",
+        "v2/lock.js.map": "715d37692ca36ac6c27488c63880067bd43d9f72442cf4bd60801ecaae3888ec",
+        "v2/memory-maintainer.md": "11da5c25a99cb8107e9c3b689b996ed2fc98bec7f3ffce958335aaf6566eb25b",
+        "v2/registry.d.ts": "142946b846b3df0236056b995a05bf60920f65c1082ffdc36a9b9b3826b016f2",
+        "v2/registry.d.ts.map": "4e412f5012d9366a70e08e253c3675e702f203e872dd028b532587533f6beb57",
+        "v2/registry.js": "b3a297b78ab4ad0f07e557375d314cf26596545a183abfe06c6912c5df0acff7",
+        "v2/registry.js.map": "b26249f980491c45e48e41b2e6e71767c7154fa99416187e3f1c0f420ad6fab5",
+        "v2/runtime.d.ts": "ed242aadc3d0bae98e54887639cd3f93e96f100a93cc3027d48eab9467f419a6",
+        "v2/runtime.d.ts.map": "8d07449c76889323b5cea71e5b4124de6490f5839a5fa3a69e91920da3c05d84",
+        "v2/runtime.js": "af4032235502d708f59267832319f51c5f2d5766cbae53e740a01f7d03a4a196",
+        "v2/runtime.js.map": "a756f96ed5bf3b47ff0eea21964c3c137d8325053adbf72990ac3791fd619a0f",
+        "v2/writer.d.ts": "aa9d4a903ba67760b34793f7550ca7f3afd3b7f1844047fb29f41ff9d11a0ae9",
+        "v2/writer.d.ts.map": "9fd1c512917494c3530a23ec60e75518502eca2e5296db43ce33c8db0bcbb517",
+        "v2/writer.js": "59f1e9cee19d65ac6ea88eebced68b8ce6f112c012866a43e730d7dfa3d086ac",
+        "v2/writer.js.map": "906e592b48fe07355103ca80f286e51cc6ef2ea1d8463f9a9178ac2a6a237643"
+      }
+    }
+  },
+  "modules": {
+    "candidate": {
+      "runtime": "af4032235502d708f59267832319f51c5f2d5766cbae53e740a01f7d03a4a196",
+      "writer": "59f1e9cee19d65ac6ea88eebced68b8ce6f112c012866a43e730d7dfa3d086ac",
+      "canonical": "8863a7788a4878b58f548d43f7a5c35fde6da32f2f9fdcca9f347e60f693c65e"
+    }
+  },
+  "results": [
+    {
+      "name": "idle-small",
+      "kind": "idle",
+      "history": 20,
+      "pending": 0,
+      "receipts": 0,
+      "iterations": 10,
+      "candidate": {
+        "medianMs": 0.019862499999999273,
+        "p95Ms": 0.04113320000000016,
+        "samplesMs": [
+          0.019862499999999273,
+          0.01752010000000013,
+          0.01734379999999902,
+          0.03233959999999882,
+          0.022207999999999117,
+          0.017351700000000393,
+          0.018916699999999766,
+          0.04113320000000016,
+          0.0210487999999998
+        ]
+      }
+    },
+    {
+      "name": "idle-history-20k",
+      "kind": "idle",
+      "history": 20000,
+      "pending": 0,
+      "receipts": 0,
+      "iterations": 10,
+      "candidate": {
+        "medianMs": 6.556703300000004,
+        "p95Ms": 6.993912299999988,
+        "samplesMs": [
+          6.5732259,
+          6.906611799999996,
+          6.545624200000009,
+          6.505498499999999,
+          6.993912299999988,
+          6.500723000000017,
+          6.5912845999999945,
+          6.546758399999999,
+          6.556703300000004
+        ]
+      }
+    },
+    {
+      "name": "claim-small",
+      "kind": "claim",
+      "history": 20,
+      "pending": 6,
+      "receipts": 0,
+      "iterations": 3,
+      "candidate": {
+        "medianMs": 0.10468766666667761,
+        "p95Ms": 0.1563216666666752,
+        "samplesMs": [
+          0.10820433333333312,
+          0.09661933333328913,
+          0.09497933333333701,
+          0.11235199999994923,
+          0.1563216666666752,
+          0.09813200000000204,
+          0.10468766666667761,
+          0.11293966666668591,
+          0.09446499999997589
+        ]
+      }
+    },
+    {
+      "name": "claim-auto-backlog-2k",
+      "kind": "claim",
+      "force": false,
+      "history": 20000,
+      "pending": 2000,
+      "receipts": 0,
+      "iterations": 3,
+      "candidate": {
+        "medianMs": 11.45948833333326,
+        "p95Ms": 16.26518033333332,
+        "samplesMs": [
+          15.254366333333413,
+          11.45948833333326,
+          10.671887666666711,
+          10.93667466666678,
+          11.297301999999945,
+          11.408550333333247,
+          12.326116333333326,
+          16.26518033333332,
+          14.866601333333316
+        ]
+      }
+    },
+    {
+      "name": "open-existing-history-20k",
+      "kind": "open",
+      "history": 20000,
+      "pending": 0,
+      "receipts": 0,
+      "iterations": 1,
+      "candidate": {
+        "medianMs": 0.33850900000015827,
+        "p95Ms": 0.40693800000008196,
+        "samplesMs": [
+          0.40499499999987165,
+          0.3024110000001201,
+          0.25937999999996464,
+          0.30375299999968775,
+          0.3402729999997973,
+          0.33850900000015827,
+          0.33816899999965244,
+          0.39716000000044005,
+          0.40693800000008196
+        ]
+      }
+    },
+    {
+      "name": "claim-backlog-2k",
+      "kind": "claim",
+      "history": 20000,
+      "pending": 2000,
+      "receipts": 0,
+      "iterations": 3,
+      "candidate": {
+        "medianMs": 12.073949999999968,
+        "p95Ms": 12.911252666666769,
+        "samplesMs": [
+          11.038060666666752,
+          11.895235999999992,
+          12.911252666666769,
+          10.886192666666526,
+          12.553893333333386,
+          12.380438666666729,
+          10.719115666666767,
+          12.103612666666473,
+          12.073949999999968
+        ]
+      }
+    },
+    {
+      "name": "recover-small",
+      "kind": "recover",
+      "history": 0,
+      "pending": 0,
+      "receipts": 2,
+      "iterations": 1,
+      "candidate": {
+        "medianMs": 0.35240500000054453,
+        "p95Ms": 0.5506299999997282,
+        "samplesMs": [
+          0.5506299999997282,
+          0.2918210000007093,
+          0.4837840000000142,
+          0.3176599999997052,
+          0.36751300000014453,
+          0.2991650000003574,
+          0.41577500000039436,
+          0.35240500000054453,
+          0.2763520000007702
+        ]
+      }
+    },
+    {
+      "name": "recover-confirmed-500",
+      "kind": "recover",
+      "history": 0,
+      "pending": 0,
+      "receipts": 500,
+      "iterations": 1,
+      "candidate": {
+        "medianMs": 16.28148499999952,
+        "p95Ms": 18.92346499999985,
+        "samplesMs": [
+          15.851629999999204,
+          15.75727999999981,
+          18.92346499999985,
+          16.28148499999952,
+          17.24594199999956,
+          16.240429000000404,
+          18.55463400000008,
+          17.233863999999812,
+          16.13024099999984
+        ]
+      }
+    }
+  ]
+}

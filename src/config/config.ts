@@ -2,17 +2,17 @@ import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import type { ProvenanceType } from "../core/contracts/types.js";
+type ProvenanceType = RemoteDisclosurePolicy["allowedProvenance"][number];
 import { fsyncFile, persistDirectory } from "../core/transaction/fsync.js";
 import type { RemoteDisclosurePolicy } from "../memory-manager/contracts/disclosure.js";
 import { validateDisclosurePolicy } from "../memory-manager/contracts/disclosure.js";
 import { normalizeOpenAICompatibleBaseUrl } from "../memory-manager/openai/openai-responses-adapter.js";
 
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/u;
-const PROVENANCE = new Set<ProvenanceType>(["user_statement", "user_correction", "agent_observation", "imported_event", "project_evidence"]);
+const PROVENANCE = new Set<ProvenanceType>(["user_explicit", "agent_observation", "document_import"]);
 
 export interface CommonMemoryConfig {
-  schemaVersion: 1;
+  schemaVersion: 2;
   dataRoot: string;
   remote: {
     provider: "openai-compatible";
@@ -21,6 +21,8 @@ export interface CommonMemoryConfig {
     apiKeyEnv: string;
   };
   disclosure: RemoteDisclosurePolicy;
+  writableScopes: string[];
+  scheduler: { turnThreshold: number; byteThreshold: number; idleMs: number; maxWaitMs: number; leaseMs: number; maxAttempts: number };
 }
 
 export function configDirectory(env: NodeJS.ProcessEnv = process.env): string {
@@ -38,7 +40,7 @@ export function envFilePath(env: NodeJS.ProcessEnv = process.env): string {
 export function defaultConfig(env: NodeJS.ProcessEnv = process.env): CommonMemoryConfig {
   const directory = configDirectory(env);
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     dataRoot: join(directory, "data"),
     remote: {
       provider: "openai-compatible",
@@ -46,13 +48,15 @@ export function defaultConfig(env: NodeJS.ProcessEnv = process.env): CommonMemor
       model: "",
       apiKeyEnv: "OPENAI_API_KEY",
     },
+    writableScopes: ["global"],
+    scheduler: { turnThreshold: 6, byteThreshold: 16384, idleMs: 120000, maxWaitMs: 600000, leaseMs: 120000, maxAttempts: 5 },
     disclosure: {
       enabled: true,
       allowedScopes: ["global"],
-      allowedProvenance: ["user_statement", "user_correction"],
-      maxExcerptBytes: 8_000,
-      maxCandidateBytes: 4_000,
-      maxTotalBytes: 64_000,
+      allowedProvenance: ["user_explicit"],
+      maxExcerptBytes: 131_072,
+      maxCandidateBytes: 131_072,
+      maxTotalBytes: 131_072,
     },
   };
 }
@@ -93,7 +97,7 @@ export function resolveApiKey(config: CommonMemoryConfig, env: NodeJS.ProcessEnv
 }
 
 export function validateConfig(value: unknown): CommonMemoryConfig {
-  if (!isRecord(value) || !hasExactKeys(value, ["schemaVersion", "dataRoot", "remote", "disclosure"]) || value.schemaVersion !== 1) throw new TypeError("Unsupported Common Memory config");
+  if (!isRecord(value) || !hasExactKeys(value, ["schemaVersion", "dataRoot", "remote", "disclosure", "writableScopes", "scheduler"]) || value.schemaVersion !== 2) throw new TypeError("Unsupported Common Memory config");
   if (typeof value.dataRoot !== "string" || !isAbsolute(value.dataRoot)) throw new TypeError("dataRoot must be an absolute path");
   if (!isRecord(value.remote) || !hasExactKeys(value.remote, ["provider", "baseUrl", "model", "apiKeyEnv"]) || value.remote.provider !== "openai-compatible") throw new TypeError("Invalid remote provider config");
   const baseUrl = typeof value.remote.baseUrl === "string" ? normalizeOpenAICompatibleBaseUrl(value.remote.baseUrl) : "";
@@ -106,8 +110,13 @@ export function validateConfig(value: unknown): CommonMemoryConfig {
   validateDisclosurePolicy(disclosure);
   if (disclosure.allowedScopes.length === 0 || disclosure.allowedScopes.some((scope) => typeof scope !== "string" || !scope.trim())) throw new TypeError("At least one disclosure scope is required");
   if (disclosure.allowedProvenance.length === 0 || disclosure.allowedProvenance.some((item) => !PROVENANCE.has(item))) throw new TypeError("Invalid disclosure provenance");
+  if (!Array.isArray(value.writableScopes) || value.writableScopes.some((scope) => typeof scope !== "string" || !/^(global|project:[A-Za-z0-9_-]+)$/u.test(scope))) throw new TypeError("Invalid writable scopes");
+  const schedulerKeys = ["turnThreshold", "byteThreshold", "idleMs", "maxWaitMs", "leaseMs", "maxAttempts"];
+  if (!isRecord(value.scheduler) || !hasExactKeys(value.scheduler, schedulerKeys) || Object.values(value.scheduler).some((cap) => !Number.isSafeInteger(cap) || Number(cap) <= 0)) throw new TypeError("Invalid scheduler limits");
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
+    writableScopes: [...value.writableScopes] as string[],
+    scheduler: { ...value.scheduler } as CommonMemoryConfig["scheduler"],
     dataRoot: resolve(value.dataRoot),
     remote: { provider: "openai-compatible", baseUrl, model, apiKeyEnv },
     disclosure: {

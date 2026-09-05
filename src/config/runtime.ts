@@ -17,3 +17,9 @@ export function createConfiguredMemoryModel(
     disclosurePolicy: config.disclosure,
   });
 }
+
+import { Writer } from "../v2/writer.js";
+export function createConfiguredWriter(config: CommonMemoryConfig): Writer {
+  if (!config.disclosure.allowedProvenance.includes("user_explicit")) throw new Error("Delivered user evidence is not authorized for disclosure");
+  return new Writer({ modelVersion: config.remote.model, maxRequestBytes: config.disclosure.maxTotalBytes, dataRoot: config.dataRoot, model: createConfiguredMemoryModel(config), allowedScopes: config.disclosure.allowedScopes, writableScopes: config.writableScopes, scheduler: config.scheduler });
+}

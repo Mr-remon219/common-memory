@@ -3,7 +3,7 @@ import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const forbidden = ["@modelcontextprotocol", "embedding", "pgvector", "better-sqlite3"];
+const forbidden = ["memory_analysis_v1", "interface Fact", "class Recall", "@modelcontextprotocol", "embedding", "pgvector", "better-sqlite3"];
 const sourceRoot = join(root, "src");
 const files = [];
 async function walk(dir) {

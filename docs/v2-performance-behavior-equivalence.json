@@ -1,0 +1,17 @@
+{
+  "matched": true,
+  "executionsPerImplementation": 720,
+  "scenarioCount": 40,
+  "fixtureDigest": "1cdbe19eea7bb473bd807ad84defb5308cca6fe40cdc161f655a612e0a9d99eb",
+  "beforeRecordsDigest": "fe74b924ab8f4b538e7ca813bc0b5be3363035851e4123e7a59aefafb1bbd369",
+  "afterRecordsDigest": "fe74b924ab8f4b538e7ca813bc0b5be3363035851e4123e7a59aefafb1bbd369",
+  "summaryDigest": "4c2ff440760d5d9525b15af9bbe68986c834ed89e2c8c9a11f8c82f8c24ff3c1",
+  "checked": [
+    "full batches and per-turn timing",
+    "pending counts and ages",
+    "per-stratum summaries",
+    "all five trigger variants",
+    "three exact repeats"
+  ],
+  "modelCalls": 0
+}

@@ -1,0 +1,272 @@
+[
+  {
+    "id": "count-burst",
+    "stratum": "targeted-defaults",
+    "turns": [
+      {
+        "atMs": 0
+      },
+      {
+        "atMs": 10000
+      },
+      {
+        "atMs": 20000
+      },
+      {
+        "atMs": 30000
+      },
+      {
+        "atMs": 40000
+      },
+      {
+        "atMs": 50000
+      }
+    ],
+    "horizonMs": 110000
+  },
+  {
+    "id": "byte-single-turn",
+    "stratum": "targeted-defaults",
+    "turns": [
+      {
+        "atMs": 0,
+        "bytes": 20480
+      }
+    ],
+    "horizonMs": 60000
+  },
+  {
+    "id": "idle-open-tail",
+    "stratum": "targeted-defaults",
+    "turns": [
+      {
+        "atMs": 0
+      },
+      {
+        "atMs": 30000
+      }
+    ],
+    "horizonMs": 210000
+  },
+  {
+    "id": "lifecycle-short-tail",
+    "stratum": "targeted-defaults",
+    "turns": [
+      {
+        "atMs": 0
+      },
+      {
+        "atMs": 10000
+      }
+    ],
+    "events": [
+      {
+        "atMs": 20000,
+        "kind": "flush"
+      }
+    ],
+    "horizonMs": 60000
+  },
+  {
+    "id": "shutdown-restart-tail",
+    "stratum": "targeted-defaults",
+    "turns": [
+      {
+        "atMs": 0
+      },
+      {
+        "atMs": 10000
+      }
+    ],
+    "events": [
+      {
+        "atMs": 20000,
+        "kind": "close"
+      },
+      {
+        "atMs": 40000,
+        "kind": "open"
+      }
+    ],
+    "horizonMs": 60000
+  },
+  {
+    "id": "continuous-defaults",
+    "stratum": "targeted-defaults",
+    "turns": [
+      {
+        "atMs": 0
+      },
+      {
+        "atMs": 100000
+      },
+      {
+        "atMs": 200000
+      },
+      {
+        "atMs": 300000
+      },
+      {
+        "atMs": 400000
+      },
+      {
+        "atMs": 500000
+      },
+      {
+        "atMs": 600000
+      },
+      {
+        "atMs": 700000
+      },
+      {
+        "atMs": 800000
+      },
+      {
+        "atMs": 900000
+      },
+      {
+        "atMs": 1000000
+      },
+      {
+        "atMs": 1100000
+      }
+    ],
+    "horizonMs": 1300000
+  },
+  {
+    "id": "interleaved-scopes",
+    "stratum": "targeted-defaults",
+    "turns": [
+      {
+        "atMs": 0,
+        "scope": "global"
+      },
+      {
+        "atMs": 10000,
+        "scope": "project:a"
+      },
+      {
+        "atMs": 20000,
+        "scope": "global"
+      },
+      {
+        "atMs": 30000,
+        "scope": "project:b"
+      },
+      {
+        "atMs": 40000,
+        "scope": "global"
+      },
+      {
+        "atMs": 50000,
+        "scope": "project:a"
+      }
+    ],
+    "horizonMs": 210000
+  },
+  {
+    "id": "busy-boundary",
+    "stratum": "targeted-defaults",
+    "turns": [
+      {
+        "atMs": 0
+      },
+      {
+        "atMs": 10000
+      },
+      {
+        "atMs": 20000
+      },
+      {
+        "atMs": 30000
+      },
+      {
+        "atMs": 40000
+      },
+      {
+        "atMs": 50000
+      }
+    ],
+    "events": [
+      {
+        "atMs": 0,
+        "kind": "busy"
+      },
+      {
+        "atMs": 200000,
+        "kind": "stable"
+      }
+    ],
+    "horizonMs": 210000
+  },
+  {
+    "id": "busy-aged-backlog",
+    "stratum": "targeted-defaults",
+    "turns": [
+      {
+        "atMs": 0
+      },
+      {
+        "atMs": 650000
+      }
+    ],
+    "events": [
+      {
+        "atMs": 0,
+        "kind": "busy"
+      },
+      {
+        "atMs": 660000,
+        "kind": "stable"
+      }
+    ],
+    "horizonMs": 700000
+  },
+  {
+    "id": "max-wait-high-count",
+    "stratum": "sensitivity-high-count",
+    "scheduler": {
+      "turnThreshold": 100,
+      "byteThreshold": 1000000000
+    },
+    "turns": [
+      {
+        "atMs": 0
+      },
+      {
+        "atMs": 100000
+      },
+      {
+        "atMs": 200000
+      },
+      {
+        "atMs": 300000
+      },
+      {
+        "atMs": 400000
+      },
+      {
+        "atMs": 500000
+      },
+      {
+        "atMs": 600000
+      },
+      {
+        "atMs": 700000
+      },
+      {
+        "atMs": 800000
+      },
+      {
+        "atMs": 900000
+      },
+      {
+        "atMs": 1000000
+      },
+      {
+        "atMs": 1100000
+      }
+    ],
+    "horizonMs": 1150000
+  }
+]

@@ -4,4 +4,4 @@ export type MemoryModelResult =
   | { kind: "output"; body: unknown; usage: ModelUsage }
   | { kind: "refusal"; category: "provider_refusal"; fingerprint: string; usage: ModelUsage };
 export interface AnalyzeOptions { requestId: string; signal?: AbortSignal; deadlineMs: number }
-export interface MemoryModelPort { analyze(request: ApprovedModelRequest, options: AnalyzeOptions): Promise<MemoryModelResult> }
+export interface MemoryModelPort { serializedRequestBytes?(request: ApprovedModelRequest): number; analyze(request: ApprovedModelRequest, options: AnalyzeOptions): Promise<MemoryModelResult> }

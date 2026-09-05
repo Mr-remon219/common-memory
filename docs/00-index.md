@@ -1,14 +1,11 @@
-# Common Memory 文档索引
+# Common Memory V2 文档
 
-当前版本实现本地 Canonical Core 与 OpenAI Responses 原生 fetch 的自主记忆管理。模型只产出 MemoryAnalysis v1 建议；本地 policy、revision guard、nominal authority 和原子事务拥有最终权力。
+- [实施规格与架构决定](03-target-architecture.md)
+- [旧测试替换边界](v2-replacement-test-map.md)
+- [合成轨迹与真实模型评测边界](v2-evaluation.md)
+- [实现性能优化](v2-performance.md)
+- [调度机制消融实验](v2-ablation.md)
+- [交付验证与独立审查](v2-verification.md)
+- [使用与配置](../README.md)
 
-- [01-problem-and-principles.md](01-problem-and-principles.md)：目标、信任与安全原则
-- [02-reference-systems.md](02-reference-systems.md)：外部系统借鉴边界
-- [03-target-architecture.md](03-target-architecture.md)：Core、MemoryManager、provider、scheduler 边界
-- [04-memory-model.md](04-memory-model.md)：Canonical、批次审计、revision、undo
-- [05-memory-manager-api.md](05-memory-manager-api.md)：公开 API 与 disclosure
-- [06-retrieval-and-context.md](06-retrieval-and-context.md)：FTS 与远程候选投影
-- [07-openai-responses-adapter.md](07-openai-responses-adapter.md)：固定 Responses REST contract
-- [08-delivery-roadmap.md](08-delivery-roadmap.md)：验收与非目标
-
-MemoryAnalysis wire schema 随包发布，但 Canonical schema bundle 永远只包含 repository/fact/proposal/review 四项。
+仅实现 Write/current-state。旧 YAML Fact、Proposal、Review、Recall、FTS、Undo 文档及资产随实现删除，不作为 V2 规范或兼容保证。

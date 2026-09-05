@@ -1,0 +1,1322 @@
+[
+  {
+    "id": "retain-1",
+    "category": "retain",
+    "target": "preferences",
+    "turns": [
+      {
+        "text": "请记住：偏好 A0",
+        "action": "put",
+        "atMs": 0,
+        "value": "偏好 A0"
+      },
+      {
+        "text": "今天第 1 条临时计算问题 0",
+        "action": "ignore",
+        "atMs": 15000
+      },
+      {
+        "text": "今天第 2 条临时计算问题 0",
+        "action": "ignore",
+        "atMs": 30000
+      },
+      {
+        "text": "今天第 3 条临时计算问题 0",
+        "action": "ignore",
+        "atMs": 45000
+      },
+      {
+        "text": "今天第 4 条临时计算问题 0",
+        "action": "ignore",
+        "atMs": 60000
+      },
+      {
+        "text": "今天第 5 条临时计算问题 0",
+        "action": "ignore",
+        "atMs": 75000
+      },
+      {
+        "text": "今天第 6 条临时计算问题 0",
+        "action": "ignore",
+        "atMs": 90000
+      }
+    ],
+    "expected": "偏好 A0"
+  },
+  {
+    "id": "update-1",
+    "category": "update",
+    "target": "preferences",
+    "turns": [
+      {
+        "text": "请记住：偏好 A0",
+        "action": "put",
+        "atMs": 0,
+        "value": "偏好 A0"
+      },
+      {
+        "text": "今天第 1 条临时计算问题 0",
+        "action": "ignore",
+        "atMs": 15000
+      },
+      {
+        "text": "今天第 2 条临时计算问题 0",
+        "action": "ignore",
+        "atMs": 30000
+      },
+      {
+        "text": "今天第 3 条临时计算问题 0",
+        "action": "ignore",
+        "atMs": 45000
+      },
+      {
+        "text": "今天第 4 条临时计算问题 0",
+        "action": "ignore",
+        "atMs": 60000
+      },
+      {
+        "text": "今天第 5 条临时计算问题 0",
+        "action": "ignore",
+        "atMs": 75000
+      },
+      {
+        "text": "更正，现在改为 偏好 B0",
+        "action": "put",
+        "atMs": 90000,
+        "value": "偏好 B0"
+      }
+    ],
+    "expected": "偏好 B0"
+  },
+  {
+    "id": "forget-1",
+    "category": "forget",
+    "target": "preferences",
+    "turns": [
+      {
+        "text": "请记住：偏好 A0",
+        "action": "put",
+        "atMs": 0,
+        "value": "偏好 A0"
+      },
+      {
+        "text": "今天第 1 条临时计算问题 0",
+        "action": "ignore",
+        "atMs": 15000
+      },
+      {
+        "text": "今天第 2 条临时计算问题 0",
+        "action": "ignore",
+        "atMs": 30000
+      },
+      {
+        "text": "今天第 3 条临时计算问题 0",
+        "action": "ignore",
+        "atMs": 45000
+      },
+      {
+        "text": "今天第 4 条临时计算问题 0",
+        "action": "ignore",
+        "atMs": 60000
+      },
+      {
+        "text": "今天第 5 条临时计算问题 0",
+        "action": "ignore",
+        "atMs": 75000
+      },
+      {
+        "text": "忘记 偏好 A0",
+        "action": "forget",
+        "atMs": 90000
+      }
+    ],
+    "expected": null
+  },
+  {
+    "id": "ignore-1",
+    "category": "ignore",
+    "target": "preferences",
+    "turns": [
+      {
+        "text": "今天第 0 条临时计算问题 0",
+        "action": "ignore",
+        "atMs": 0
+      },
+      {
+        "text": "今天第 1 条临时计算问题 0",
+        "action": "ignore",
+        "atMs": 15000
+      },
+      {
+        "text": "今天第 2 条临时计算问题 0",
+        "action": "ignore",
+        "atMs": 30000
+      },
+      {
+        "text": "今天第 3 条临时计算问题 0",
+        "action": "ignore",
+        "atMs": 45000
+      },
+      {
+        "text": "今天第 4 条临时计算问题 0",
+        "action": "ignore",
+        "atMs": 60000
+      },
+      {
+        "text": "今天第 5 条临时计算问题 0",
+        "action": "ignore",
+        "atMs": 75000
+      },
+      {
+        "text": "今天第 6 条临时计算问题 0",
+        "action": "ignore",
+        "atMs": 90000
+      }
+    ],
+    "expected": null
+  },
+  {
+    "id": "conditional-1",
+    "category": "conditional",
+    "target": "preferences",
+    "turns": [
+      {
+        "text": "请记住：仅审阅中文文档时使用 偏好 A0",
+        "action": "put",
+        "atMs": 0,
+        "value": "仅审阅中文文档时使用 偏好 A0"
+      },
+      {
+        "text": "今天第 1 条临时计算问题 0",
+        "action": "ignore",
+        "atMs": 15000
+      },
+      {
+        "text": "今天第 2 条临时计算问题 0",
+        "action": "ignore",
+        "atMs": 30000
+      },
+      {
+        "text": "今天第 3 条临时计算问题 0",
+        "action": "ignore",
+        "atMs": 45000
+      },
+      {
+        "text": "今天第 4 条临时计算问题 0",
+        "action": "ignore",
+        "atMs": 60000
+      },
+      {
+        "text": "今天第 5 条临时计算问题 0",
+        "action": "ignore",
+        "atMs": 75000
+      },
+      {
+        "text": "今天第 6 条临时计算问题 0",
+        "action": "ignore",
+        "atMs": 90000
+      }
+    ],
+    "expected": "仅审阅中文文档时使用 偏好 A0"
+  },
+  {
+    "id": "project-1",
+    "category": "project",
+    "target": "project",
+    "turns": [
+      {
+        "text": "请记住：偏好 A0",
+        "action": "put",
+        "atMs": 0,
+        "value": "偏好 A0"
+      },
+      {
+        "text": "今天第 1 条临时计算问题 0",
+        "action": "ignore",
+        "atMs": 15000
+      },
+      {
+        "text": "今天第 2 条临时计算问题 0",
+        "action": "ignore",
+        "atMs": 30000
+      },
+      {
+        "text": "今天第 3 条临时计算问题 0",
+        "action": "ignore",
+        "atMs": 45000
+      },
+      {
+        "text": "今天第 4 条临时计算问题 0",
+        "action": "ignore",
+        "atMs": 60000
+      },
+      {
+        "text": "今天第 5 条临时计算问题 0",
+        "action": "ignore",
+        "atMs": 75000
+      },
+      {
+        "text": "今天第 6 条临时计算问题 0",
+        "action": "ignore",
+        "atMs": 90000
+      }
+    ],
+    "expected": "偏好 A0"
+  },
+  {
+    "id": "retain-2",
+    "category": "retain",
+    "target": "preferences",
+    "turns": [
+      {
+        "text": "请记住：偏好 A1",
+        "action": "put",
+        "atMs": 0,
+        "value": "偏好 A1"
+      },
+      {
+        "text": "今天第 1 条临时计算问题 1",
+        "action": "ignore",
+        "atMs": 15000
+      },
+      {
+        "text": "今天第 2 条临时计算问题 1",
+        "action": "ignore",
+        "atMs": 30000
+      },
+      {
+        "text": "今天第 3 条临时计算问题 1",
+        "action": "ignore",
+        "atMs": 195000
+      },
+      {
+        "text": "今天第 4 条临时计算问题 1",
+        "action": "ignore",
+        "atMs": 210000
+      },
+      {
+        "text": "今天第 5 条临时计算问题 1",
+        "action": "ignore",
+        "atMs": 225000
+      },
+      {
+        "text": "今天第 6 条临时计算问题 1",
+        "action": "ignore",
+        "atMs": 240000
+      }
+    ],
+    "expected": "偏好 A1"
+  },
+  {
+    "id": "update-2",
+    "category": "update",
+    "target": "preferences",
+    "turns": [
+      {
+        "text": "请记住：偏好 A1",
+        "action": "put",
+        "atMs": 0,
+        "value": "偏好 A1"
+      },
+      {
+        "text": "今天第 1 条临时计算问题 1",
+        "action": "ignore",
+        "atMs": 15000
+      },
+      {
+        "text": "今天第 2 条临时计算问题 1",
+        "action": "ignore",
+        "atMs": 30000
+      },
+      {
+        "text": "今天第 3 条临时计算问题 1",
+        "action": "ignore",
+        "atMs": 195000
+      },
+      {
+        "text": "今天第 4 条临时计算问题 1",
+        "action": "ignore",
+        "atMs": 210000
+      },
+      {
+        "text": "今天第 5 条临时计算问题 1",
+        "action": "ignore",
+        "atMs": 225000
+      },
+      {
+        "text": "更正，现在改为 偏好 B1",
+        "action": "put",
+        "atMs": 240000,
+        "value": "偏好 B1"
+      }
+    ],
+    "expected": "偏好 B1"
+  },
+  {
+    "id": "forget-2",
+    "category": "forget",
+    "target": "preferences",
+    "turns": [
+      {
+        "text": "请记住：偏好 A1",
+        "action": "put",
+        "atMs": 0,
+        "value": "偏好 A1"
+      },
+      {
+        "text": "今天第 1 条临时计算问题 1",
+        "action": "ignore",
+        "atMs": 15000
+      },
+      {
+        "text": "今天第 2 条临时计算问题 1",
+        "action": "ignore",
+        "atMs": 30000
+      },
+      {
+        "text": "今天第 3 条临时计算问题 1",
+        "action": "ignore",
+        "atMs": 195000
+      },
+      {
+        "text": "今天第 4 条临时计算问题 1",
+        "action": "ignore",
+        "atMs": 210000
+      },
+      {
+        "text": "今天第 5 条临时计算问题 1",
+        "action": "ignore",
+        "atMs": 225000
+      },
+      {
+        "text": "忘记 偏好 A1",
+        "action": "forget",
+        "atMs": 240000
+      }
+    ],
+    "expected": null
+  },
+  {
+    "id": "ignore-2",
+    "category": "ignore",
+    "target": "preferences",
+    "turns": [
+      {
+        "text": "今天第 0 条临时计算问题 1",
+        "action": "ignore",
+        "atMs": 0
+      },
+      {
+        "text": "今天第 1 条临时计算问题 1",
+        "action": "ignore",
+        "atMs": 15000
+      },
+      {
+        "text": "今天第 2 条临时计算问题 1",
+        "action": "ignore",
+        "atMs": 30000
+      },
+      {
+        "text": "今天第 3 条临时计算问题 1",
+        "action": "ignore",
+        "atMs": 195000
+      },
+      {
+        "text": "今天第 4 条临时计算问题 1",
+        "action": "ignore",
+        "atMs": 210000
+      },
+      {
+        "text": "今天第 5 条临时计算问题 1",
+        "action": "ignore",
+        "atMs": 225000
+      },
+      {
+        "text": "今天第 6 条临时计算问题 1",
+        "action": "ignore",
+        "atMs": 240000
+      }
+    ],
+    "expected": null
+  },
+  {
+    "id": "conditional-2",
+    "category": "conditional",
+    "target": "preferences",
+    "turns": [
+      {
+        "text": "请记住：仅审阅中文文档时使用 偏好 A1",
+        "action": "put",
+        "atMs": 0,
+        "value": "仅审阅中文文档时使用 偏好 A1"
+      },
+      {
+        "text": "今天第 1 条临时计算问题 1",
+        "action": "ignore",
+        "atMs": 15000
+      },
+      {
+        "text": "今天第 2 条临时计算问题 1",
+        "action": "ignore",
+        "atMs": 30000
+      },
+      {
+        "text": "今天第 3 条临时计算问题 1",
+        "action": "ignore",
+        "atMs": 195000
+      },
+      {
+        "text": "今天第 4 条临时计算问题 1",
+        "action": "ignore",
+        "atMs": 210000
+      },
+      {
+        "text": "今天第 5 条临时计算问题 1",
+        "action": "ignore",
+        "atMs": 225000
+      },
+      {
+        "text": "今天第 6 条临时计算问题 1",
+        "action": "ignore",
+        "atMs": 240000
+      }
+    ],
+    "expected": "仅审阅中文文档时使用 偏好 A1"
+  },
+  {
+    "id": "project-2",
+    "category": "project",
+    "target": "project",
+    "turns": [
+      {
+        "text": "请记住：偏好 A1",
+        "action": "put",
+        "atMs": 0,
+        "value": "偏好 A1"
+      },
+      {
+        "text": "今天第 1 条临时计算问题 1",
+        "action": "ignore",
+        "atMs": 15000
+      },
+      {
+        "text": "今天第 2 条临时计算问题 1",
+        "action": "ignore",
+        "atMs": 30000
+      },
+      {
+        "text": "今天第 3 条临时计算问题 1",
+        "action": "ignore",
+        "atMs": 195000
+      },
+      {
+        "text": "今天第 4 条临时计算问题 1",
+        "action": "ignore",
+        "atMs": 210000
+      },
+      {
+        "text": "今天第 5 条临时计算问题 1",
+        "action": "ignore",
+        "atMs": 225000
+      },
+      {
+        "text": "今天第 6 条临时计算问题 1",
+        "action": "ignore",
+        "atMs": 240000
+      }
+    ],
+    "expected": "偏好 A1"
+  },
+  {
+    "id": "retain-3",
+    "category": "retain",
+    "target": "preferences",
+    "turns": [
+      {
+        "text": "请记住：偏好 A2",
+        "action": "put",
+        "atMs": 0,
+        "value": "偏好 A2"
+      },
+      {
+        "text": "今天第 1 条临时计算问题 2",
+        "action": "ignore",
+        "atMs": 15000
+      },
+      {
+        "text": "今天第 2 条临时计算问题 2",
+        "action": "ignore",
+        "atMs": 30000
+      },
+      {
+        "text": "今天第 3 条临时计算问题 2",
+        "action": "ignore",
+        "atMs": 45000
+      },
+      {
+        "text": "今天第 4 条临时计算问题 2",
+        "action": "ignore",
+        "atMs": 60000
+      },
+      {
+        "text": "今天第 5 条临时计算问题 2",
+        "action": "ignore",
+        "atMs": 75000
+      },
+      {
+        "text": "今天第 6 条临时计算问题 2",
+        "action": "ignore",
+        "atMs": 90000
+      }
+    ],
+    "expected": "偏好 A2"
+  },
+  {
+    "id": "update-3",
+    "category": "update",
+    "target": "preferences",
+    "turns": [
+      {
+        "text": "请记住：偏好 A2",
+        "action": "put",
+        "atMs": 0,
+        "value": "偏好 A2"
+      },
+      {
+        "text": "今天第 1 条临时计算问题 2",
+        "action": "ignore",
+        "atMs": 15000
+      },
+      {
+        "text": "今天第 2 条临时计算问题 2",
+        "action": "ignore",
+        "atMs": 30000
+      },
+      {
+        "text": "今天第 3 条临时计算问题 2",
+        "action": "ignore",
+        "atMs": 45000
+      },
+      {
+        "text": "今天第 4 条临时计算问题 2",
+        "action": "ignore",
+        "atMs": 60000
+      },
+      {
+        "text": "今天第 5 条临时计算问题 2",
+        "action": "ignore",
+        "atMs": 75000
+      },
+      {
+        "text": "更正，现在改为 偏好 B2",
+        "action": "put",
+        "atMs": 90000,
+        "value": "偏好 B2"
+      }
+    ],
+    "expected": "偏好 B2"
+  },
+  {
+    "id": "forget-3",
+    "category": "forget",
+    "target": "preferences",
+    "turns": [
+      {
+        "text": "请记住：偏好 A2",
+        "action": "put",
+        "atMs": 0,
+        "value": "偏好 A2"
+      },
+      {
+        "text": "今天第 1 条临时计算问题 2",
+        "action": "ignore",
+        "atMs": 15000
+      },
+      {
+        "text": "今天第 2 条临时计算问题 2",
+        "action": "ignore",
+        "atMs": 30000
+      },
+      {
+        "text": "今天第 3 条临时计算问题 2",
+        "action": "ignore",
+        "atMs": 45000
+      },
+      {
+        "text": "今天第 4 条临时计算问题 2",
+        "action": "ignore",
+        "atMs": 60000
+      },
+      {
+        "text": "今天第 5 条临时计算问题 2",
+        "action": "ignore",
+        "atMs": 75000
+      },
+      {
+        "text": "忘记 偏好 A2",
+        "action": "forget",
+        "atMs": 90000
+      }
+    ],
+    "expected": null
+  },
+  {
+    "id": "ignore-3",
+    "category": "ignore",
+    "target": "preferences",
+    "turns": [
+      {
+        "text": "今天第 0 条临时计算问题 2",
+        "action": "ignore",
+        "atMs": 0
+      },
+      {
+        "text": "今天第 1 条临时计算问题 2",
+        "action": "ignore",
+        "atMs": 15000
+      },
+      {
+        "text": "今天第 2 条临时计算问题 2",
+        "action": "ignore",
+        "atMs": 30000
+      },
+      {
+        "text": "今天第 3 条临时计算问题 2",
+        "action": "ignore",
+        "atMs": 45000
+      },
+      {
+        "text": "今天第 4 条临时计算问题 2",
+        "action": "ignore",
+        "atMs": 60000
+      },
+      {
+        "text": "今天第 5 条临时计算问题 2",
+        "action": "ignore",
+        "atMs": 75000
+      },
+      {
+        "text": "今天第 6 条临时计算问题 2",
+        "action": "ignore",
+        "atMs": 90000
+      }
+    ],
+    "expected": null
+  },
+  {
+    "id": "conditional-3",
+    "category": "conditional",
+    "target": "preferences",
+    "turns": [
+      {
+        "text": "请记住：仅审阅中文文档时使用 偏好 A2",
+        "action": "put",
+        "atMs": 0,
+        "value": "仅审阅中文文档时使用 偏好 A2"
+      },
+      {
+        "text": "今天第 1 条临时计算问题 2",
+        "action": "ignore",
+        "atMs": 15000
+      },
+      {
+        "text": "今天第 2 条临时计算问题 2",
+        "action": "ignore",
+        "atMs": 30000
+      },
+      {
+        "text": "今天第 3 条临时计算问题 2",
+        "action": "ignore",
+        "atMs": 45000
+      },
+      {
+        "text": "今天第 4 条临时计算问题 2",
+        "action": "ignore",
+        "atMs": 60000
+      },
+      {
+        "text": "今天第 5 条临时计算问题 2",
+        "action": "ignore",
+        "atMs": 75000
+      },
+      {
+        "text": "今天第 6 条临时计算问题 2",
+        "action": "ignore",
+        "atMs": 90000
+      }
+    ],
+    "expected": "仅审阅中文文档时使用 偏好 A2"
+  },
+  {
+    "id": "project-3",
+    "category": "project",
+    "target": "project",
+    "turns": [
+      {
+        "text": "请记住：偏好 A2",
+        "action": "put",
+        "atMs": 0,
+        "value": "偏好 A2"
+      },
+      {
+        "text": "今天第 1 条临时计算问题 2",
+        "action": "ignore",
+        "atMs": 15000
+      },
+      {
+        "text": "今天第 2 条临时计算问题 2",
+        "action": "ignore",
+        "atMs": 30000
+      },
+      {
+        "text": "今天第 3 条临时计算问题 2",
+        "action": "ignore",
+        "atMs": 45000
+      },
+      {
+        "text": "今天第 4 条临时计算问题 2",
+        "action": "ignore",
+        "atMs": 60000
+      },
+      {
+        "text": "今天第 5 条临时计算问题 2",
+        "action": "ignore",
+        "atMs": 75000
+      },
+      {
+        "text": "今天第 6 条临时计算问题 2",
+        "action": "ignore",
+        "atMs": 90000
+      }
+    ],
+    "expected": "偏好 A2"
+  },
+  {
+    "id": "retain-4",
+    "category": "retain",
+    "target": "preferences",
+    "turns": [
+      {
+        "text": "请记住：偏好 A3",
+        "action": "put",
+        "atMs": 0,
+        "value": "偏好 A3"
+      },
+      {
+        "text": "今天第 1 条临时计算问题 3",
+        "action": "ignore",
+        "atMs": 15000
+      },
+      {
+        "text": "今天第 2 条临时计算问题 3",
+        "action": "ignore",
+        "atMs": 30000
+      },
+      {
+        "text": "今天第 3 条临时计算问题 3",
+        "action": "ignore",
+        "atMs": 195000
+      },
+      {
+        "text": "今天第 4 条临时计算问题 3",
+        "action": "ignore",
+        "atMs": 210000
+      },
+      {
+        "text": "今天第 5 条临时计算问题 3",
+        "action": "ignore",
+        "atMs": 225000
+      },
+      {
+        "text": "今天第 6 条临时计算问题 3",
+        "action": "ignore",
+        "atMs": 240000
+      }
+    ],
+    "expected": "偏好 A3"
+  },
+  {
+    "id": "update-4",
+    "category": "update",
+    "target": "preferences",
+    "turns": [
+      {
+        "text": "请记住：偏好 A3",
+        "action": "put",
+        "atMs": 0,
+        "value": "偏好 A3"
+      },
+      {
+        "text": "今天第 1 条临时计算问题 3",
+        "action": "ignore",
+        "atMs": 15000
+      },
+      {
+        "text": "今天第 2 条临时计算问题 3",
+        "action": "ignore",
+        "atMs": 30000
+      },
+      {
+        "text": "今天第 3 条临时计算问题 3",
+        "action": "ignore",
+        "atMs": 195000
+      },
+      {
+        "text": "今天第 4 条临时计算问题 3",
+        "action": "ignore",
+        "atMs": 210000
+      },
+      {
+        "text": "今天第 5 条临时计算问题 3",
+        "action": "ignore",
+        "atMs": 225000
+      },
+      {
+        "text": "更正，现在改为 偏好 B3",
+        "action": "put",
+        "atMs": 240000,
+        "value": "偏好 B3"
+      }
+    ],
+    "expected": "偏好 B3"
+  },
+  {
+    "id": "forget-4",
+    "category": "forget",
+    "target": "preferences",
+    "turns": [
+      {
+        "text": "请记住：偏好 A3",
+        "action": "put",
+        "atMs": 0,
+        "value": "偏好 A3"
+      },
+      {
+        "text": "今天第 1 条临时计算问题 3",
+        "action": "ignore",
+        "atMs": 15000
+      },
+      {
+        "text": "今天第 2 条临时计算问题 3",
+        "action": "ignore",
+        "atMs": 30000
+      },
+      {
+        "text": "今天第 3 条临时计算问题 3",
+        "action": "ignore",
+        "atMs": 195000
+      },
+      {
+        "text": "今天第 4 条临时计算问题 3",
+        "action": "ignore",
+        "atMs": 210000
+      },
+      {
+        "text": "今天第 5 条临时计算问题 3",
+        "action": "ignore",
+        "atMs": 225000
+      },
+      {
+        "text": "忘记 偏好 A3",
+        "action": "forget",
+        "atMs": 240000
+      }
+    ],
+    "expected": null
+  },
+  {
+    "id": "ignore-4",
+    "category": "ignore",
+    "target": "preferences",
+    "turns": [
+      {
+        "text": "今天第 0 条临时计算问题 3",
+        "action": "ignore",
+        "atMs": 0
+      },
+      {
+        "text": "今天第 1 条临时计算问题 3",
+        "action": "ignore",
+        "atMs": 15000
+      },
+      {
+        "text": "今天第 2 条临时计算问题 3",
+        "action": "ignore",
+        "atMs": 30000
+      },
+      {
+        "text": "今天第 3 条临时计算问题 3",
+        "action": "ignore",
+        "atMs": 195000
+      },
+      {
+        "text": "今天第 4 条临时计算问题 3",
+        "action": "ignore",
+        "atMs": 210000
+      },
+      {
+        "text": "今天第 5 条临时计算问题 3",
+        "action": "ignore",
+        "atMs": 225000
+      },
+      {
+        "text": "今天第 6 条临时计算问题 3",
+        "action": "ignore",
+        "atMs": 240000
+      }
+    ],
+    "expected": null
+  },
+  {
+    "id": "conditional-4",
+    "category": "conditional",
+    "target": "preferences",
+    "turns": [
+      {
+        "text": "请记住：仅审阅中文文档时使用 偏好 A3",
+        "action": "put",
+        "atMs": 0,
+        "value": "仅审阅中文文档时使用 偏好 A3"
+      },
+      {
+        "text": "今天第 1 条临时计算问题 3",
+        "action": "ignore",
+        "atMs": 15000
+      },
+      {
+        "text": "今天第 2 条临时计算问题 3",
+        "action": "ignore",
+        "atMs": 30000
+      },
+      {
+        "text": "今天第 3 条临时计算问题 3",
+        "action": "ignore",
+        "atMs": 195000
+      },
+      {
+        "text": "今天第 4 条临时计算问题 3",
+        "action": "ignore",
+        "atMs": 210000
+      },
+      {
+        "text": "今天第 5 条临时计算问题 3",
+        "action": "ignore",
+        "atMs": 225000
+      },
+      {
+        "text": "今天第 6 条临时计算问题 3",
+        "action": "ignore",
+        "atMs": 240000
+      }
+    ],
+    "expected": "仅审阅中文文档时使用 偏好 A3"
+  },
+  {
+    "id": "project-4",
+    "category": "project",
+    "target": "project",
+    "turns": [
+      {
+        "text": "请记住：偏好 A3",
+        "action": "put",
+        "atMs": 0,
+        "value": "偏好 A3"
+      },
+      {
+        "text": "今天第 1 条临时计算问题 3",
+        "action": "ignore",
+        "atMs": 15000
+      },
+      {
+        "text": "今天第 2 条临时计算问题 3",
+        "action": "ignore",
+        "atMs": 30000
+      },
+      {
+        "text": "今天第 3 条临时计算问题 3",
+        "action": "ignore",
+        "atMs": 195000
+      },
+      {
+        "text": "今天第 4 条临时计算问题 3",
+        "action": "ignore",
+        "atMs": 210000
+      },
+      {
+        "text": "今天第 5 条临时计算问题 3",
+        "action": "ignore",
+        "atMs": 225000
+      },
+      {
+        "text": "今天第 6 条临时计算问题 3",
+        "action": "ignore",
+        "atMs": 240000
+      }
+    ],
+    "expected": "偏好 A3"
+  },
+  {
+    "id": "retain-5",
+    "category": "retain",
+    "target": "preferences",
+    "turns": [
+      {
+        "text": "请记住：偏好 A4",
+        "action": "put",
+        "atMs": 0,
+        "value": "偏好 A4"
+      },
+      {
+        "text": "今天第 1 条临时计算问题 4",
+        "action": "ignore",
+        "atMs": 15000
+      },
+      {
+        "text": "今天第 2 条临时计算问题 4",
+        "action": "ignore",
+        "atMs": 30000
+      },
+      {
+        "text": "今天第 3 条临时计算问题 4",
+        "action": "ignore",
+        "atMs": 45000
+      },
+      {
+        "text": "今天第 4 条临时计算问题 4",
+        "action": "ignore",
+        "atMs": 60000
+      },
+      {
+        "text": "今天第 5 条临时计算问题 4",
+        "action": "ignore",
+        "atMs": 75000
+      },
+      {
+        "text": "今天第 6 条临时计算问题 4",
+        "action": "ignore",
+        "atMs": 90000
+      }
+    ],
+    "expected": "偏好 A4"
+  },
+  {
+    "id": "update-5",
+    "category": "update",
+    "target": "preferences",
+    "turns": [
+      {
+        "text": "请记住：偏好 A4",
+        "action": "put",
+        "atMs": 0,
+        "value": "偏好 A4"
+      },
+      {
+        "text": "今天第 1 条临时计算问题 4",
+        "action": "ignore",
+        "atMs": 15000
+      },
+      {
+        "text": "今天第 2 条临时计算问题 4",
+        "action": "ignore",
+        "atMs": 30000
+      },
+      {
+        "text": "今天第 3 条临时计算问题 4",
+        "action": "ignore",
+        "atMs": 45000
+      },
+      {
+        "text": "今天第 4 条临时计算问题 4",
+        "action": "ignore",
+        "atMs": 60000
+      },
+      {
+        "text": "今天第 5 条临时计算问题 4",
+        "action": "ignore",
+        "atMs": 75000
+      },
+      {
+        "text": "更正，现在改为 偏好 B4",
+        "action": "put",
+        "atMs": 90000,
+        "value": "偏好 B4"
+      }
+    ],
+    "expected": "偏好 B4"
+  },
+  {
+    "id": "forget-5",
+    "category": "forget",
+    "target": "preferences",
+    "turns": [
+      {
+        "text": "请记住：偏好 A4",
+        "action": "put",
+        "atMs": 0,
+        "value": "偏好 A4"
+      },
+      {
+        "text": "今天第 1 条临时计算问题 4",
+        "action": "ignore",
+        "atMs": 15000
+      },
+      {
+        "text": "今天第 2 条临时计算问题 4",
+        "action": "ignore",
+        "atMs": 30000
+      },
+      {
+        "text": "今天第 3 条临时计算问题 4",
+        "action": "ignore",
+        "atMs": 45000
+      },
+      {
+        "text": "今天第 4 条临时计算问题 4",
+        "action": "ignore",
+        "atMs": 60000
+      },
+      {
+        "text": "今天第 5 条临时计算问题 4",
+        "action": "ignore",
+        "atMs": 75000
+      },
+      {
+        "text": "忘记 偏好 A4",
+        "action": "forget",
+        "atMs": 90000
+      }
+    ],
+    "expected": null
+  },
+  {
+    "id": "ignore-5",
+    "category": "ignore",
+    "target": "preferences",
+    "turns": [
+      {
+        "text": "今天第 0 条临时计算问题 4",
+        "action": "ignore",
+        "atMs": 0
+      },
+      {
+        "text": "今天第 1 条临时计算问题 4",
+        "action": "ignore",
+        "atMs": 15000
+      },
+      {
+        "text": "今天第 2 条临时计算问题 4",
+        "action": "ignore",
+        "atMs": 30000
+      },
+      {
+        "text": "今天第 3 条临时计算问题 4",
+        "action": "ignore",
+        "atMs": 45000
+      },
+      {
+        "text": "今天第 4 条临时计算问题 4",
+        "action": "ignore",
+        "atMs": 60000
+      },
+      {
+        "text": "今天第 5 条临时计算问题 4",
+        "action": "ignore",
+        "atMs": 75000
+      },
+      {
+        "text": "今天第 6 条临时计算问题 4",
+        "action": "ignore",
+        "atMs": 90000
+      }
+    ],
+    "expected": null
+  },
+  {
+    "id": "conditional-5",
+    "category": "conditional",
+    "target": "preferences",
+    "turns": [
+      {
+        "text": "请记住：仅审阅中文文档时使用 偏好 A4",
+        "action": "put",
+        "atMs": 0,
+        "value": "仅审阅中文文档时使用 偏好 A4"
+      },
+      {
+        "text": "今天第 1 条临时计算问题 4",
+        "action": "ignore",
+        "atMs": 15000
+      },
+      {
+        "text": "今天第 2 条临时计算问题 4",
+        "action": "ignore",
+        "atMs": 30000
+      },
+      {
+        "text": "今天第 3 条临时计算问题 4",
+        "action": "ignore",
+        "atMs": 45000
+      },
+      {
+        "text": "今天第 4 条临时计算问题 4",
+        "action": "ignore",
+        "atMs": 60000
+      },
+      {
+        "text": "今天第 5 条临时计算问题 4",
+        "action": "ignore",
+        "atMs": 75000
+      },
+      {
+        "text": "今天第 6 条临时计算问题 4",
+        "action": "ignore",
+        "atMs": 90000
+      }
+    ],
+    "expected": "仅审阅中文文档时使用 偏好 A4"
+  },
+  {
+    "id": "project-5",
+    "category": "project",
+    "target": "project",
+    "turns": [
+      {
+        "text": "请记住：偏好 A4",
+        "action": "put",
+        "atMs": 0,
+        "value": "偏好 A4"
+      },
+      {
+        "text": "今天第 1 条临时计算问题 4",
+        "action": "ignore",
+        "atMs": 15000
+      },
+      {
+        "text": "今天第 2 条临时计算问题 4",
+        "action": "ignore",
+        "atMs": 30000
+      },
+      {
+        "text": "今天第 3 条临时计算问题 4",
+        "action": "ignore",
+        "atMs": 45000
+      },
+      {
+        "text": "今天第 4 条临时计算问题 4",
+        "action": "ignore",
+        "atMs": 60000
+      },
+      {
+        "text": "今天第 5 条临时计算问题 4",
+        "action": "ignore",
+        "atMs": 75000
+      },
+      {
+        "text": "今天第 6 条临时计算问题 4",
+        "action": "ignore",
+        "atMs": 90000
+      }
+    ],
+    "expected": "偏好 A4"
+  }
+]
