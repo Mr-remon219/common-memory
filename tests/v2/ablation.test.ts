@@ -19,7 +19,9 @@ it('isolates each trigger with paired horizons, durable lifecycle and no final f
  expect(row('busy-aged-backlog','baseline').batches[0]!.atMs).toBe(660000);
  expect(row('busy-aged-backlog','no-max-wait').pending).toBe(2);
  for(const r of report.records as Row[])expect(r.batches.every(batch=>batch.entries.length<=6)).toBe(true);
-});
+// 10 scenarios × 6 variants × 2 repeats use real on-disk stores; Windows CI
+// takes over 30 seconds. Keep this budget local rather than relaxing all tests.
+},120_000);
 it('disabling count keeps 6-turn batch capacity; enqueue wins over simultaneous idle deadline',async()=>{
  const report=await experiment.runAblation(RuntimeStore,{repeats:1,scenarios:[
   {id:'capacity',stratum:'test',turns:Array.from({length:20},()=>({atMs:0})),horizonMs:125000},
