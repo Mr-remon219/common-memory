@@ -29,7 +29,7 @@ for(const policy of policies){
    else{
     const changes=observations.map(o=>({o,t:fixture.turns.find(t=>t.text===o.text)})).filter(x=>x.t.action!=='ignore');
     const last=changes.at(-1);const doc=request.projection.documents.find(d=>d.target===target);const section=doc.sections.find(s=>s.title==='Current');
-    let decision={kind:'ignore',confidence:1,evidence:observations.map(o=>o.ref),reason:'Scripted oracle: no state change'};
+    let decision={kind:'ignore',applicability:project?'project':'global',confidence:1,evidence:observations.map(o=>o.ref),reason:'Scripted oracle: no state change'};
     if(last?.t.action==='put')decision={...decision,kind:'retain',admission:'update',lifetime:'until_changed',operations:[{op:'put_section',target,section:section?.ref??null,title:'Current',body:last.t.value+'\n'}]};
     else if(last?.t.action==='forget' && section)decision={...decision,kind:'forget',operations:[{op:'remove_section',target,section:section.ref}]};
     result={kind:'output',body:{version:'memory_maintenance_v2',request_id:options.requestId,decisions:[decision]},usage:{inputTokens:0,outputTokens:0,totalTokens:0}};

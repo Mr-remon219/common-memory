@@ -12,7 +12,7 @@ afterEach(()=>{for(const p of roots.splice(0))rmSync(p,{recursive:true,force:tru
 function model(decide:(r:ApprovedModelRequest)=>unknown):MemoryModelPort {return {async analyze(r){return {kind:'output',body:decide(r),usage:{inputTokens:100,outputTokens:20}};}};}
 function body(r:ApprovedModelRequest,kind='retain',operations:unknown[]=[{op:'put_section',target:'preferences',section:null,title:'Language',body:'Prefers Chinese.\n'}]) {
   const observations=r.projection.observations as {ref:string}[];
-  return {version:'memory_maintenance_v2',request_id:r.projection.request_id,decisions:[{kind,confidence:0.2,evidence:[observations[0]!.ref],reason:'private model rationale',...(kind==='retain'?{admission:'remember',lifetime:'until_changed'}:{}),...(kind==='ignore'?{}:{operations})}]};
+  return {version:'memory_maintenance_v2',request_id:r.projection.request_id,decisions:[{kind,applicability:(operations[0] as {target?:string})?.target?.startsWith('project:')?'project':'global',confidence:0.2,evidence:[observations[0]!.ref],reason:'private model rationale',...(kind==='retain'?{admission:'remember',lifetime:'until_changed'}:{}),...(kind==='ignore'?{}:{operations})}]};
 }
 function enqueue(w:Writer,text='请用中文回答',id='e1'){w.store.enqueue({sessionId:'s',entryId:id,text,scope:'global',source:'interactive',observedAt:new Date().toISOString()});}
 describe('V2 writer',()=>{
@@ -47,7 +47,7 @@ describe('V2 writer',()=>{
 
 describe('batch, permission and output boundaries',()=>{
  it('shrinks oversized multi-turn requests without splitting turns or losing the FIFO tail',async()=>{
-  const sizes:number[]=[];const w=new Writer({dataRoot:root(),allowedScopes:['global'],maxRequestBytes:12000,model:model(r=>{sizes.push((r.projection.observations as unknown[]).length);return body(r,'ignore');})});
+  const sizes:number[]=[];const w=new Writer({dataRoot:root(),allowedScopes:['global'],maxRequestBytes:18000,model:model(r=>{sizes.push((r.projection.observations as unknown[]).length);return body(r,'ignore');})});
   enqueue(w,'a'.repeat(5000),'a');enqueue(w,'b'.repeat(5000),'b');
   expect((await w.run({force:true})).outcome).toBe('ignored');expect(sizes).toEqual([1]);expect(w.store.pending().map(o=>o.entryId)).toEqual(['b']);expect((await w.run({force:true})).outcome).toBe('ignored');w.close();
  });
@@ -67,18 +67,19 @@ describe('batch, permission and output boundaries',()=>{
 
 
 describe('scope and source recovery boundaries',()=>{
- it('blocks project maintain with empty evidence from writing global',async()=>{
+ it('allows authorized project-batch global maintain with empty evidence',async()=>{
   const path=root(),project=new ProjectRegistry(path).register(root(),'Project');
-  const w=new Writer({dataRoot:path,allowedScopes:['global',`project:${project.id}`],model:model(r=>{const response=body(r,'maintain');response.decisions[0]!.evidence=[];return response;})});
+  const w=new Writer({dataRoot:path,allowedScopes:['global',`project:${project.id}`],model:model(r=>{const response=body(r,'maintain',[{op:'put_section',target:'preferences',section:'s1',title:'Language',body:'Prefers Chinese.\n'}]);response.decisions[0]!.evidence=[];return response;})});
+  writeFileSync(join(path,'memory/preferences.md'),'# Preferences\n\n## Old language heading\nPrefers Chinese.\n');
   w.store.enqueue({sessionId:'s',entryId:'p',text:'Project status',scope:`project:${project.id}`,source:'interactive',observedAt:new Date().toISOString()});
-  expect((await w.run({force:true})).outcome).toBe('failed');expect(readdirSync(join(path,'runtime/receipts'))).toEqual([]);w.close();
+  expect((await w.run({force:true})).outcome).toBe('committed');expect(readFileSync(join(path,'memory/preferences.md'),'utf8')).toContain('## Language');w.close();
  });
  it('does not spread unrelated decision sources, and partial forget retains other state',async()=>{
   const path=root();let phase=0;
   const w=new Writer({dataRoot:path,allowedScopes:['global'],model:model(r=>{
    if(phase===1)return body(r,'forget',[{op:'remove_section',target:'preferences',section:'s1'}]);
    const refs=(r.projection.observations as {ref:string}[]).map(o=>o.ref);
-   return {version:'memory_maintenance_v2',request_id:r.projection.request_id,decisions:refs.map((ref,i)=>({kind:'retain',confidence:1,evidence:[ref],reason:'state',admission:'remember',lifetime:'stable',operations:[{op:'put_section',target:'preferences',section:null,title:i?'B':'A',body:i?'other state':'forgotten state'}]}))};
+   return {version:'memory_maintenance_v2',request_id:r.projection.request_id,decisions:refs.map((ref,i)=>({kind:'retain',applicability:'global',confidence:1,evidence:[ref],reason:'state',admission:'remember',lifetime:'stable',operations:[{op:'put_section',target:'preferences',section:null,title:i?'B':'A',body:i?'other state':'forgotten state'}]}))};
   })});enqueue(w,'A','a');enqueue(w,'B','b');expect((await w.run({force:true})).outcome).toBe('committed');
   const key=(t:string)=>'preferences:'+createHash('sha256').update(t).digest('hex');expect(w.store.sources(key('A'))).toEqual([1]);expect(w.store.sources(key('B'))).toEqual([2]);
   phase=1;enqueue(w,'forget A','f');expect((await w.run({force:true})).outcome).toBe('committed');expect(w.store.sources(key('B'))).toEqual([2]);expect(w.store.db.prepare('SELECT text FROM observations WHERE id=2').get()!.text).toBe('B');expect(readFileSync(join(path,'memory/preferences.md'),'utf8')).toContain('other state');w.close();
@@ -95,7 +96,7 @@ it('two replacements in one decision do not exchange historical sources',async()
   const operations=['A','B'].map((title,i)=>({op:'put_section',target:'preferences',section:phase===0?null:`s${i+1}`,title,body:`${title} current`}));
   if(phase===1)return body(r,'retain',operations);
   const refs=(r.projection.observations as {ref:string}[]).map(o=>o.ref);
-  return {version:'memory_maintenance_v2',request_id:r.projection.request_id,decisions:operations.map((op,i)=>({kind:'retain',confidence:1,evidence:[refs[i]],reason:'state',admission:'remember',lifetime:'stable',operations:[op]}))};
+  return {version:'memory_maintenance_v2',request_id:r.projection.request_id,decisions:operations.map((op,i)=>({kind:'retain',applicability:'global',confidence:1,evidence:[refs[i]],reason:'state',admission:'remember',lifetime:'stable',operations:[op]}))};
  })});
  enqueue(w,'old A','a');enqueue(w,'old B','b');expect((await w.run({force:true})).outcome).toBe('committed');
  phase=1;enqueue(w,'update both','u');expect((await w.run({force:true})).outcome).toBe('committed');
@@ -120,4 +121,85 @@ it('revalidates project registration at commit after a concurrent removal',async
  const scope=`project:${project.id}`;const w=new Writer({dataRoot:path,allowedScopes:['global',scope],model:model(r=>{registry.remove(project.id);return body(r,'retain',[{op:'put_section',target:scope,section:null,title:'State',body:'Ready'}]);})});
  w.store.enqueue({sessionId:'s',entryId:'p',text:'Project is ready',scope,source:'interactive',observedAt:new Date().toISOString()});
  expect((await w.run({force:true})).outcome).toBe('failed');expect(readdirSync(join(path,'runtime/receipts'))).toEqual([]);expect(w.store.db.prepare('SELECT state FROM observations').get()!.state).not.toBe('processed');w.close();
+});
+
+describe('project promotion',()=>{
+ it.each([false,true])('promotes with explicit cleanup=%s, current sources and recoverable commit',async cleanup=>{
+  const path=root(),registry=new ProjectRegistry(path),project=registry.register(root(),'A');
+  const scope=`project:${project.id}`;let phase=0,calls=0;
+  const w=new Writer({dataRoot:path,allowedScopes:['global',scope],checkpoint:()=>{if(phase===1)throw new Error('DB interruption');},model:model(r=>{
+   calls++;
+   const observations=r.projection.observations as {ref:string;source_scope:string;scope?:string}[];
+   expect(observations[0]!.source_scope).toBe(scope);expect(observations[0]).not.toHaveProperty('scope');
+   for(const context of r.projection.context_only as Record<string,unknown>[]){expect(context.source_scope).toBe(scope);expect(context).not.toHaveProperty('scope');expect(context).not.toHaveProperty('ref');}
+   if(phase===0)return body(r,'retain',[{op:'put_section',target:scope,section:null,title:'Communication',body:'Prefers Chinese. Project release Friday.'}]);
+   if(phase===2)return body(r,'forget',[{op:'remove_section',target:'preferences',section:'s1'}]);
+   const response=body(r);
+   if(cleanup)response.decisions.push({...response.decisions[0]!,kind:'maintain',applicability:'project',evidence:[],operations:[{op:'put_section',target:scope,section:'s1',title:'Communication',body:'Project release Friday.'}]});
+   // retain-only fields are absent from the separate maintain decision.
+   if(cleanup){delete response.decisions[1]!.admission;delete response.decisions[1]!.lifetime;}
+   return response;
+  })});
+  const add=(entryId:string,text:string)=>w.store.enqueue({sessionId:'s',entryId,text,scope,source:'interactive',observedAt:new Date().toISOString()});
+  try {
+   add('old','Only this project: Chinese; release Friday');expect((await w.run({force:true})).outcome).toBe('committed');
+   const before=w.canonical.snapshot([project.id]).find(d=>d.target===scope)!.content;
+   phase=1;add('promotion','I prefer Chinese across all projects');expect((await w.run({force:true})).outcome).toBe('committed');
+   expect(calls).toBe(2);expect((await w.run({force:true})).outcome).toBe('idle');
+   const after=w.canonical.snapshot([project.id]).find(d=>d.target===scope)!.content;
+   if(cleanup){expect(after).not.toContain('Prefers Chinese');expect(after).toContain('Project release Friday');}else expect(after).toBe(before);
+   const key=(target:string,title:string)=>target+':'+createHash('sha256').update(title).digest('hex');
+   expect(w.store.sources(key('preferences','Language'))).toEqual([2]);
+   expect(w.store.sources(key(scope,'Communication'))).toEqual([1]);
+   phase=2;add('forget','Forget my global language preference');expect((await w.run({force:true})).outcome).toBe('committed');
+   expect(w.store.db.prepare('SELECT text FROM observations WHERE id=2').get()!.text).toBeNull();
+   expect(w.store.db.prepare('SELECT text FROM observations WHERE id=1').get()!.text).not.toBeNull();
+   expect(w.canonical.snapshot([project.id]).find(d=>d.target===scope)!.content).toBe(after);
+  } finally {w.close();}
+ });
+ it.each(['undisclosed','read-only','other-project','stale','unregistered','lease'])('rejects promotion boundary: %s',async variant=>{
+  const path=root(),registry=new ProjectRegistry(path),project=registry.register(root(),'A'),other=registry.register(root(),'B');
+  const scope=`project:${project.id}`;let now=0;
+  const w=new Writer({dataRoot:path,allowedScopes:variant==='undisclosed'?[scope]:['global',scope,`project:${other.id}`],writableScopes:variant==='read-only'?[scope]:['global',scope,`project:${other.id}`],scheduler:{now:()=>now,leaseMs:1000},model:model(r=>{
+   if(variant==='stale')writeFileSync(join(path,'memory/profile.md'),'# Profile\n\n## Manual\nNew state\n');
+   if(variant==='unregistered')registry.remove(project.id);
+   if(variant==='lease')now=1001;
+   return variant==='other-project'?body(r,'retain',[{op:'put_section',target:`project:${other.id}`,section:null,title:'A',body:'B'}]):body(r);
+  })});
+  try {
+   w.store.enqueue({sessionId:'s',entryId:'p',text:'Global preference: Chinese',scope,source:'interactive',observedAt:new Date().toISOString()});
+   expect((await w.run({force:true})).outcome).toBe('failed');expect(readdirSync(join(path,'runtime/receipts'))).toEqual([]);
+   expect(w.canonical.snapshot([project.id]).find(d=>d.target==='preferences')!.sections).toEqual([]);
+  } finally {w.close();}
+ });
+});
+
+it.each([
+ {text:'所有项目都用中文回答',applicability:'global',kind:'retain',admission:'remember',value:'Prefers Chinese.'},
+ {text:'只在本项目用中文回答',applicability:'project',kind:'retain',admission:'remember',value:'This project: Chinese.'},
+ {text:'也许中文吧',applicability:'uncertain',kind:'ignore',admission:'remember',value:''},
+ {text:'这次请用中文',applicability:'project',kind:'ignore',admission:'remember',value:''},
+ {text:'全局偏好补充：代码注释用英文',applicability:'global',kind:'retain',admission:'update',value:'Chinese responses; English code comments.'},
+ {text:'纠正之前说法：全局仅解释用中文',applicability:'global',kind:'retain',admission:'correct',value:'Chinese explanations only.'},
+ {text:'仅本项目例外，解释用英文',applicability:'project',kind:'retain',admission:'remember',value:'This project: English explanations.'},
+])('executes scripted scope judgment without inferring semantics: $text',async fixture=>{
+ const path=root(),project=new ProjectRegistry(path).register(root(),'A'),scope=`project:${project.id}`;
+ const w=new Writer({dataRoot:path,allowedScopes:['global',scope],model:model(r=>{
+  const target=fixture.applicability==='project'?scope:'preferences';
+  const response=body(r,fixture.kind,[{op:'put_section',target,section:target==='preferences'?'s1':null,title:'Communication',body:fixture.value}]);
+  response.decisions[0]!.applicability=fixture.applicability;
+  if(fixture.kind==='retain')response.decisions[0]!.admission=fixture.admission;
+  return response;
+ })});
+ try {
+  writeFileSync(join(path,'memory/preferences.md'),'# Preferences\n\n## Communication\nOriginal global preference.\n');
+  const before=w.canonical.snapshot([project.id]);
+  w.store.enqueue({sessionId:'s',entryId:'p',text:fixture.text,scope,source:'interactive',observedAt:new Date().toISOString()});
+  expect((await w.run({force:true})).outcome).toBe(fixture.kind==='ignore'?'ignored':'committed');
+  const after=w.canonical.snapshot([project.id]);
+  for(const doc of after){
+   if(fixture.kind==='retain'&&doc.target===(fixture.applicability==='global'?'preferences':scope))expect(doc.content).toContain(fixture.value);
+   else expect(doc.content).toBe(before.find(d=>d.target===doc.target)!.content);
+  }
+ } finally {w.close();}
 });
