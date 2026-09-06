@@ -106,8 +106,11 @@ admission does not retract evidence. Known SDK 2.0.0 limitation: cancellation wi
 JSON-RPC request ID `0` is ignored upstream (a same-tick call/cancel was reproduced);
 use nonzero request IDs if cancellation-before-admission matters. No SDK patch or
 request-ID compatibility shim is included in this first integration.
-On EOF/SIGTERM the server queues a flush, aborts its own Writer and closes after local
-cleanup; pending work survives for the next Pi/MCP process or `common-memory flush`.
+On EOF (all platforms) or SIGTERM (POSIX), the server queues a flush, aborts its own
+Writer and closes after local cleanup. On Windows, Node's SIGTERM emulation kills
+unconditionally: use stdin EOF for graceful shutdown; forced termination relies on
+lease expiry and restart recovery. Pending work survives for the next Pi/MCP process
+or `common-memory flush`.
 Nothing runs while all processes are stopped. Existing recovery wins over cancellation
 once a durable commit has begun. Logs go to stderr; stdout is reserved for MCP.
 
