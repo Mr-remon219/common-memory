@@ -59,6 +59,41 @@ operations are accepted; confidence is not an admission threshold. Unmodified
 Sections retain their bytes. The packaged `dist/v2/memory-maintainer.md` is trusted
 instruction text; document and conversation content cannot override it.
 
+Scope (`global` or the current project) means applicability. Profile, Preferences and
+Project Markdown are target documents, not semantic domains. The maintainer uses
+non-exhaustive domains such as background/abilities, goals/learning, communication,
+collaboration/decisions, technology/tools, constraints/resources and current state
+as cross-document guidance, not fixed slots. It may reuse or reorganize Sections;
+there is no automatic taxonomy migration and no `domain` or `memory_type` field.
+Domain ≠ Admission ≠ Lifetime ≠ Scope: classification alone does not justify retention.
+
+Runtime/database observation `scope` remains source metadata. Model observations and
+context-only turns expose it as `source_scope`. Every decision requires
+`applicability: "global" | "project" | "uncertain"`; global targets authorized Profile
+or Preferences, project targets only the current source project's Markdown (including
+project-limited personal facts/preferences), and uncertain permits only ignore.
+Operations within a decision share its applicability; a batch may contain separate
+decisions for different scopes. The protocol remains `memory_maintenance_v2`, but old
+responses lacking applicability are rejected rather than inferred: custom model
+responses must be updated. Existing Markdown, database, receipts and package exports
+need no migration.
+
+Project-source information may introduce, update, correct or qualify Global state only
+through retain with remember/update/correct admission, current valid evidence and the
+existing lifetime judgment. Source scope alone never promotes information. Maintain
+is not promotion: it only reorganizes state already in its target document, without
+introducing new information or corrections. Authorized Global maintain in a Project
+batch may use `evidence: []`; any supplied evidence must be current and valid.
+Retain and forget still require valid current-batch evidence, never context-only turns.
+
+Promotion alone leaves Project Markdown unchanged. Duplicate cleanup requires an
+explicit, separate Project maintain decision that preserves unrelated content, not
+forget; both scopes may commit atomically. Global retention associates the current
+promotion evidence, not automatically the old Project Section's historical sources.
+Disclosure, writable scopes, current-project registration, authorized target/section
+handles, path and content safety, complete-snapshot CAS, lease fencing and recovery
+continue to gate writes; cross-project A→B writes remain forbidden.
+
 Default triggers: 6 delivered turns, 16 KiB, 120-second idle debounce, 10-minute
 oldest backlog, lifecycle flush, or explicit flush. Timers run only within the Pi
 process and model work starts at stable boundaries. Empty queues do not call models.
@@ -88,7 +123,9 @@ npm pack --dry-run
 ```
 
 Tests use scripted model responses to prove protocol, capture, scheduling and commit
-behavior; they are not evidence of real-model semantic quality. Real-provider evaluation
+behavior; they do not prove that a real model will classify scope correctly or avoid
+misusing maintain for state changes. Those semantic judgments remain the model's
+responsibility; the executor does not use text-comparison heuristics to infer them. Real-provider evaluation
 requires explicit credentials and budget and is not run automatically. Transformed
 inputs are conservatively quarantined; assistant context is currently omitted rather
 than disclosed without independent permission. No old user data directory is cleaned.

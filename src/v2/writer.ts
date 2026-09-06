@@ -77,7 +77,7 @@ export class Writer {
       const evidence = new Map(job.observations.map(o => [`ev_${o.id}`,o.scope]));
       const decision = validateDecision(result.body, job.id, documents, evidence);
       const operations = decision.decisions.flatMap(d => d.kind === 'ignore' ? [] : d.operations);
-      for (const op of operations) if (scope !== 'global' && op.target !== scope) throw new Error('UNAUTHORIZED_SCOPE');
+      for (const op of operations) if (op.target.startsWith('project:') && op.target !== scope) throw new Error('UNAUTHORIZED_SCOPE');
       for (const op of operations) if (!this.#options.writableScopes!.includes(op.target.startsWith('project:') ? op.target : 'global')) throw new Error('UNAUTHORIZED_WRITE');
       const updates = this.canonical.apply(documents, operations);
       externalPreflight(Object.fromEntries(updates), {maxExcerptBytes:cap,maxCandidateBytes:cap,maxTotalBytes:cap});
@@ -113,9 +113,9 @@ export class Writer {
   #request(job: RuntimeJob, documents: DocumentSnapshot[], context: RuntimeJob['observations'] = []): ApprovedModelRequest {
     return {prompt:maintainerPrompt,schema:maintenanceSchema,schemaName:'memory_maintenance_v2',projection:{
       version:'memory_maintenance_v2',request_id:job.id,now:new Date().toISOString(),
-      observations:job.observations.map(o => ({ref:`ev_${o.id}`,text:o.text,scope:o.scope,observed_at:o.observedAt,context_only:false})),
+      observations:job.observations.map(o => ({ref:`ev_${o.id}`,text:o.text,source_scope:o.scope,observed_at:o.observedAt,context_only:false})),
       documents:documents.map(doc => ({target:doc.target,hash:doc.hash,content:doc.content,sections:doc.sections,soft_budget_bytes:this.#options.documentSoftBytes ?? 8192,hard_budget_bytes:this.canonical.hardLimitBytes,writable:this.#options.writableScopes!.includes(documentScope(doc))})),
-      context_only:context.map(o => ({text:o.text,observed_at:o.observedAt,scope:o.scope,context_only:true})),
+      context_only:context.map(o => ({text:o.text,observed_at:o.observedAt,source_scope:o.scope,context_only:true})),
     }};
   }
   #bytes(request: ApprovedModelRequest): number { return this.#options.model.serializedRequestBytes?.(request) ?? Buffer.byteLength(JSON.stringify(request)); }
