@@ -11,12 +11,4 @@ export const ALWAYS_REJECT_RULES: readonly SafetyRule[] = [
   { id: "payment.card", pattern: /\b(?:\d[ -]*?){13,19}\b/u },
   { id: "address.full", pattern: /(?:完整住址|家庭地址|home address)\s*[:：]/iu },
   { id: "content.private_conversation", pattern: /(?:完整私聊|完整私人对话|full private (?:chat|conversation))/iu },
-  { id: "content.transient", pattern: /(?:临时情绪|仅本次任务|只在这次任务|temporary mood|this task only)/iu },
-  { id: "content.repository_code_fact", pattern: /(?:仓库中可直接读取|directly readable from (?:the )?repository)/iu }
-];
-export const INFERENCE_REJECT_RULES: readonly SafetyRule[] = [
-  { id: "inference.health", pattern: /(?:健康|疾病|诊断|抑郁|焦虑|health|diagnosis|depression)/iu },
-  { id: "inference.politics", pattern: /(?:政治|党派|投票|politic|party affiliation)/iu },
-  { id: "inference.personality", pattern: /(?:人格|性格类型|personality|mbti)/iu },
-  { id: "inference.finance", pattern: /(?:财务状况|收入|债务|financial status|income|debt)/iu }
 ];

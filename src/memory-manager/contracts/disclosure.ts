@@ -1,4 +1,4 @@
-import type { ProvenanceType } from "../../core/contracts/types.js";
+type ProvenanceType = "user_explicit" | "agent_observation" | "document_import";
 export interface RemoteDisclosurePolicy {
   enabled: true;
   allowedScopes: readonly string[];

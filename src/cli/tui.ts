@@ -1,16 +1,14 @@
 import * as clack from "@clack/prompts";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import type { ProvenanceType } from "../core/contracts/types.js";
+import type { RemoteDisclosurePolicy } from "../memory-manager/contracts/disclosure.js";
+type ProvenanceType = RemoteDisclosurePolicy["allowedProvenance"][number];
 import { configFilePath, defaultConfig, envFilePath, loadConfig, loadLocalEnv, saveApiKeyToEnvFile, saveConfig, type CommonMemoryConfig } from "../config/config.js";
 import { normalizeOpenAICompatibleBaseUrl } from "../memory-manager/openai/openai-responses-adapter.js";
 
 const PROVENANCE_OPTIONS: Array<{ value: ProvenanceType; label: string; hint: string }> = [
-  { value: "user_statement", label: "User statements", hint: "explicit user facts" },
-  { value: "user_correction", label: "User corrections", hint: "explicit updates and corrections" },
-  { value: "agent_observation", label: "Agent observations", hint: "inferred patterns; higher risk" },
-  { value: "project_evidence", label: "Project evidence", hint: "verified project-local evidence" },
-  { value: "imported_event", label: "Imported events", hint: "external event sources" },
+  { value: "user_explicit", label: "Delivered user expressions", hint: "Includes corrections and forget requests" },
+  { value: "agent_observation", label: "Assistant context", hint: "Context only, not independent evidence" },
 ];
 
 export async function runTui(): Promise<void> {
@@ -78,7 +76,9 @@ export async function runSetupWizard(existing: CommonMemoryConfig | null = loadC
     required: true,
   }));
   const config: CommonMemoryConfig = {
-    schemaVersion: 1,
+    schemaVersion: 2,
+    writableScopes: [...current.writableScopes],
+    scheduler: {...current.scheduler},
     dataRoot: expandPath(dataRoot.trim()),
     remote: {
       provider: "openai-compatible",

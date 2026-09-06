@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { OpenAIResponsesMemoryModel } from "../../src/memory-manager/openai/openai-responses-adapter.js";
 
 const request = { prompt: "fixed", projection: { request_id: "req_12345678", excerpts: [] }, schema: { type: "object", additionalProperties: false, required: [], properties: {} } } as const;
-const disclosurePolicy = { enabled: true as const, allowedScopes: ["global"], allowedProvenance: ["user_statement" as const], maxExcerptBytes: 1000, maxCandidateBytes: 1000, maxTotalBytes: 5000 };
+const disclosurePolicy = { enabled: true as const, allowedScopes: ["global"], allowedProvenance: ["user_explicit" as const], maxExcerptBytes: 1000, maxCandidateBytes: 1000, maxTotalBytes: 5000 };
 const envelope = (content: unknown[]) => ({ status: "completed", incomplete_details: null, error: null, output: [{ type: "reasoning", id: "r1", summary: [] }, { type: "message", status: "completed", role: "assistant", content }], usage: { input_tokens: 3, output_tokens: 4, total_tokens: 7 } });
 
 describe("OpenAI Responses native fetch adapter", () => {
@@ -16,7 +16,7 @@ describe("OpenAI Responses native fetch adapter", () => {
     expect(url).toBe("https://api.openai.com/v1/responses");
     const body = JSON.parse(String(init?.body));
     expect(body.store).toBe(false);
-    expect(body.text.format).toMatchObject({ type: "json_schema", name: "memory_analysis_v1", strict: true });
+    expect(body.text.format).toMatchObject({ type: "json_schema", name: "memory_maintenance_v2", strict: true });
     expect(JSON.stringify(body)).not.toContain("sk-test-secret-value");
     expect(new Headers(init?.headers).get("authorization")).toBe("Bearer sk-test-secret-value");
   });

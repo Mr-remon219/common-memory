@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { OpenAIResponsesMemoryModel } from "../../src/memory-manager/openai/openai-responses-adapter.js";
 const request = { prompt: "fixed", projection: {}, schema: { type: "object", additionalProperties: false, required: [], properties: {} } };
-const disclosurePolicy = { enabled: true as const, allowedScopes: ["global"], allowedProvenance: ["user_statement" as const], maxExcerptBytes: 1000, maxCandidateBytes: 1000, maxTotalBytes: 5000 };
+const disclosurePolicy = { enabled: true as const, allowedScopes: ["global"], allowedProvenance: ["user_explicit" as const], maxExcerptBytes: 1000, maxCandidateBytes: 1000, maxTotalBytes: 5000 };
 it("retries 429 twice but never retries authentication failures", async () => {
   const sleeper = vi.fn(async () => undefined); const limited = vi.fn(async () => new Response("secret provider body", { status: 429, headers: { "retry-after": "0" } }));
   const adapter = new OpenAIResponsesMemoryModel({ disclosurePolicy, apiKey: "key", model: "model", fetch: limited, sleeper, jitter: () => 0 });

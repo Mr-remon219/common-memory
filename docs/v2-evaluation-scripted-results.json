@@ -1,0 +1,67 @@
+{
+  "mode": "scripted-executor",
+  "semanticQualityVerified": false,
+  "trajectories": 30,
+  "results": [
+    {
+      "policy": "every-turn",
+      "cases": 30,
+      "correctFinalState": 30,
+      "scopeErrors": 0,
+      "calls": 210,
+      "inputBytes": 1455570,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "tokensMeasured": false,
+      "retries": 0,
+      "failureCodes": {},
+      "maxLatencyMs": 0,
+      "meanLatencyMs": 0,
+      "outcomes": {
+        "committed": 35,
+        "ignored": 175,
+        "idle": 30
+      }
+    },
+    {
+      "policy": "fixed-six",
+      "cases": 30,
+      "correctFinalState": 30,
+      "scopeErrors": 0,
+      "calls": 60,
+      "inputBytes": 430525,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "tokensMeasured": false,
+      "retries": 0,
+      "failureCodes": {},
+      "maxLatencyMs": 225000,
+      "meanLatencyMs": 58000,
+      "outcomes": {
+        "idle": 210,
+        "committed": 35,
+        "ignored": 25
+      }
+    },
+    {
+      "policy": "hybrid",
+      "cases": 30,
+      "correctFinalState": 30,
+      "scopeErrors": 0,
+      "calls": 60,
+      "inputBytes": 430525,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "tokensMeasured": false,
+      "retries": 0,
+      "failureCodes": {},
+      "maxLatencyMs": 165000,
+      "meanLatencyMs": 85286,
+      "outcomes": {
+        "idle": 222,
+        "committed": 35,
+        "ignored": 25
+      }
+    }
+  ]
+}
