@@ -39,7 +39,8 @@
     "test:recovery": "vitest run tests/v2",
     "test:consumer": "node scripts/consumer-smoke.mjs",
     "test:remote-contract": "vitest run tests/memory-manager",
-    "prepublishOnly": "npm run lint && npm test && npm run build",
+    "prepublishOnly": "npm run verify",
+    "verify": "node scripts/verify.mjs",
     "evaluate:v2": "npm run build && node scripts/evaluate-v2.mjs",
     "ablate:v2": "npm run build && node scripts/ablate-v2.mjs --output=docs/v2-ablation-results.json",
     "benchmark:v2": "npm run build && node scripts/benchmark-v2.mjs"

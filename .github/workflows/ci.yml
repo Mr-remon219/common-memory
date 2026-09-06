@@ -15,9 +15,4 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npm run typecheck
-      - run: npm run lint
-      - run: npm run test:fixtures
-      - run: npm run test:recovery
-      - run: npm test
-      - run: npm run build
+      - run: node scripts/verify.mjs

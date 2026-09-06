@@ -80,11 +80,11 @@ re-expression from being remembered.
 ## Validation and limitations
 
 ```sh
-npm run lint
-npm test
-npm run build
-npm run test:consumer       # actually packs, extracts, imports and starts the package
-npm run test:remote-contract
+npm ci
+node scripts/verify.mjs
+# 修改包导出/消费方式时，构建后追加：
+npm run test:consumer
+npm pack --dry-run
 ```
 
 Tests use scripted model responses to prove protocol, capture, scheduling and commit
