@@ -8,7 +8,8 @@ import { printStatus, runSetupWizard, runTui, UserCancelled } from "./tui.js";
 
 async function main(): Promise<void> {
   const [command,...args]=process.argv.slice(2);
-  if(command==="--help" || command==="-h") {console.log("Common Memory V2\n\ncommon-memory [config|status|flush]\ncommon-memory project register <root> <name>\ncommon-memory project list\ncommon-memory project remove <id>\ncommon-memory retry <job-id>");return;}
+  if(command==="--help" || command==="-h") {console.log("Common Memory V2\n\ncommon-memory [config|status|flush]\ncommon-memory project register <root> <name>\ncommon-memory project list\ncommon-memory project remove <id>\ncommon-memory retry <job-id>\ncommon-memory mcp --client-id <id> [--workspace <absolute-path>] [--global] [--accept-client-reported-user-turns]");return;}
+  if(command==="mcp") {await (await import('../mcp/stdio.js')).runMcp(args);return;}
   if(command===undefined) {await runTui();return;}
   if(command==="config" && !args.length) {await runSetupWizard();return;}
   if(command==="status" && !args.length) {printStatus(); const config=loadConfig();if(config){const store=new RuntimeStore(config.dataRoot);try{console.log(JSON.stringify(store.status(),null,2));}finally{store.close();}}return;}

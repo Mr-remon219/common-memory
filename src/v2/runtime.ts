@@ -55,10 +55,15 @@ export class RuntimeStore {
     return this.transaction(() => {
       const existing = this.db.prepare("SELECT * FROM observations WHERE sessionId=? AND entryId=?").get(input.sessionId,input.entryId) as Row | undefined;
       if (existing) { if (existing.digest !== digest || existing.scope !== input.scope || existing.source !== input.source) throw new Error("Conflicting observation identity"); return existing as unknown as Observation; }
-      const state = ["interactive","rpc"].includes(input.source) ? "pending" : "quarantined";
+      const state = ["interactive","rpc","mcp_user_submission"].includes(input.source) ? "pending" : "quarantined";
       const result = this.db.prepare("INSERT INTO observations(sessionId,entryId,text,digest,scope,observedAt,source,state,enqueuedAt) VALUES(?,?,?,?,?,?,?,?,?)").run(input.sessionId,input.entryId,input.text,digest,input.scope,input.observedAt,input.source,state,this.#now());
       return this.db.prepare("SELECT * FROM observations WHERE id=?").get(result.lastInsertRowid) as unknown as Observation;
     });
+  }
+  /** Exact lookup only; callers own namespace authorization. Never returns conversation bodies. */
+  observationStatus(sessionId: string, entryId: string): {state: string} | null {
+    const row = this.db.prepare("SELECT state FROM observations WHERE sessionId=? AND entryId=?").get(sessionId, entryId);
+    return row ? {state: String(row.state)} : null;
   }
   hasWork(): boolean { return Boolean(this.db.prepare("SELECT 1 FROM observations WHERE state IN ('pending','claimed') LIMIT 1").get()); }
   pending(): Observation[] { return this.db.prepare("SELECT * FROM observations WHERE state='pending' ORDER BY id").all() as unknown as Observation[]; }

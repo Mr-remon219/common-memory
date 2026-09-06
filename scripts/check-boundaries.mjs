@@ -3,7 +3,7 @@ import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const forbidden = ["memory_analysis_v1", "interface Fact", "class Recall", "@modelcontextprotocol", "embedding", "pgvector", "better-sqlite3"];
+const forbidden = ["memory_analysis_v1", "interface Fact", "class Recall", "embedding", "pgvector", "better-sqlite3"];
 const sourceRoot = join(root, "src");
 const files = [];
 async function walk(dir) {
@@ -19,6 +19,7 @@ for (const file of files) {
   const text = await readFile(file, "utf8");
   const displayPath = relative(root, file).replaceAll("\\", "/");
   const projectPath = `/${displayPath}`;
+  if (!projectPath.startsWith('/src/mcp/') && text.includes('@modelcontextprotocol')) violations.push(`${displayPath} imports MCP outside its adapter`);
   for (const term of forbidden) if (text.toLowerCase().includes(term.toLowerCase())) violations.push(`${displayPath} contains forbidden term ${term}`);
   if (projectPath.includes("/service/") && /from ["']\.\.\/repository\/loader/.test(text)) violations.push(`${displayPath} bypasses LockedRepositorySession`);
   if (projectPath.includes("/src/core/") && text.includes("memory-manager/")) violations.push(`${displayPath} makes Core depend on the remote manager`);
