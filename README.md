@@ -1,6 +1,6 @@
 # Common Memory V2
 
-Write-only, durable memory maintenance for Pi. Markdown is the authority for current
+Write-only, durable memory maintenance for Pi and local MCP hosts. Markdown is the authority for current
 long-term content; SQLite stores pending deliveries, observations, jobs, leases,
 source links and recovery metadata. There is no Fact/Recall/Undo compatibility layer,
 search index, temporary memory product, or resident background service.
@@ -42,6 +42,82 @@ Removing a registration leaves its Markdown intact. `status` reports pending,
 quarantined, dead jobs and unbound deliveries without printing raw conversations.
 Pi also provides `/memory-flush`. Shutdown queues a flush and cancels in-flight work;
 it does not wait for a remote model. Restart resumes durable work.
+
+## MCP access (stdio)
+
+Build with `npm ci && npm run build`. Configure Common Memory using the existing
+CLI, then give your MCP host an explicit command and argument array, for example:
+
+```json
+{
+  "command": "/absolute/path/to/node",
+  "args": [
+    "/absolute/path/to/common-memory/dist/cli/main.js",
+    "mcp", "--client-id", "editor-a", "--global",
+    "--accept-client-reported-user-turns"
+  ],
+  "env": { "COMMON_MEMORY_HOME": "/absolute/path/to/.common-memory" }
+}
+```
+
+Node 24 is required. No running Pi process is needed; the existing Pi peer/package
+layout is unchanged. The SDK stdio entry serves modern and legacy clients. No HTTP
+port, automatic host installer, Roots discovery, Resources, Prompts or Recall is added.
+
+For project input, use `--workspace /absolute/project/path` (repeatable). Register
+projects with the existing CLI and separately authorize their disclosure/write scopes.
+Use `--global` explicitly to allow global-source submissions. There is no cwd fallback.
+Each call selects an allowed `contextId`; changed/unregistered workspace mappings are
+rejected rather than silently rebound. Project source does not prohibit authorized
+Global promotion: the existing Writer still decides applicability.
+
+Tools:
+
+- `memory_status {}`: submission availability and allowed context IDs.
+- `memory_submit_user_turn { submissionId, conversationId?, contextId, text }`:
+  submit one **complete user expression verbatim**, not an assistant summary or a
+  Markdown operation. IDs must be 1–128 ASCII letters/digits/underscores/hyphens.
+- `memory_status { submissionId, conversationId? }`: this client's exact submission
+  state, without conversation bodies or other clients' job details. `processed` can
+  mean ignored; it is not proof that information was remembered.
+
+Submissions are disabled unless `--accept-client-reported-user-turns` is set and
+existing config permits user-expression disclosure. This flag explicitly trusts this
+local host to relay user expressions: MCP cannot prove original user delivery or
+faithful copying. The server records `mcp_user_submission`, never fabricates Pi
+`rpc` delivery events. The flag gates new admissions, not retroactive revocation of
+already accepted evidence. Only use trusted local agents belonging to the same user.
+
+Use a distinct stable `--client-id` for each independent integration. Client identity
+is a local namespace, **not authentication**. Reuse the same submission/conversation
+IDs on retry, including after restart. Conflicting payloads are rejected. Without a
+conversation ID, each submission has its own logical session. Two clients may use the
+same IDs without colliding, but sharing a client ID deliberately shares that namespace.
+
+Pi capture, global thresholds, same-scope batching, context selection and Writer
+semantics are unchanged. Different Pi/MCP sessions **can share one batch**. Isolation
+covers input identities, per-call project context and status access, not separate
+model requests or multi-tenant storage. All processes sharing a dataRoot must use the
+same configuration authority and compatible release; stop old processes before upgrade.
+
+Accepted means durably queued, not immediately committed. Background processing uses
+the existing thresholds. Cancellation is best-effort; request cancellation after
+admission does not retract evidence. Known SDK 2.0.0 limitation: cancellation with
+JSON-RPC request ID `0` is ignored upstream (a same-tick call/cancel was reproduced);
+use nonzero request IDs if cancellation-before-admission matters. No SDK patch or
+request-ID compatibility shim is included in this first integration.
+On EOF (all platforms) or SIGTERM (POSIX), the server queues a flush, aborts its own
+Writer and closes after local cleanup. On Windows, Node's SIGTERM emulation kills
+unconditionally: use stdin EOF for graceful shutdown; forced termination relies on
+lease expiry and restart recovery. Pending work survives for the next Pi/MCP process
+or `common-memory flush`.
+Nothing runs while all processes are stopped. Existing recovery wins over cancellation
+once a durable commit has begun. Logs go to stderr; stdout is reserved for MCP.
+
+Full runtime diagnostics, retry, flush, configuration and project management remain
+CLI operations. Quotas, hot revocation, optional-Pi packaging, broader compatibility
+matrices and TUI controls are deferred. No personal data or live models are needed
+for the MCP fake-provider protocol tests.
 
 ## Maintenance
 
