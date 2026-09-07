@@ -71,8 +71,8 @@ import type {ExtensionAPI} from '@earendil-works/pi-coding-agent';
 function host(dataRoot:string,allowedScopes:string[]){
  const handlers=new Map<string,(event:unknown,ctx:unknown)=>unknown>();
  const pi={on:(name:string,fn:(event:unknown,ctx:unknown)=>unknown)=>{handlers.set(name,fn);},registerCommand:()=>{}} as unknown as ExtensionAPI;
- const store=new RuntimeStore(dataRoot);const runtime=new PiCaptureRuntime({store,run:vi.fn(async()=>({outcome:'idle'})),close:()=>store.close()});cleanup.push(()=>runtime.shutdown());
- createCommonMemoryPiExtension({runtimeFactory:()=>runtime,configFactory:()=>({...defaultConfig(),dataRoot,disclosure:{...defaultConfig().disclosure,allowedScopes}})})(pi);
+ // Read injection does not open the runtime database; keeping SQLite closed lets Windows delete the fixture.
+ createCommonMemoryPiExtension({configFactory:()=>({...defaultConfig(),dataRoot,disclosure:{...defaultConfig().disclosure,allowedScopes}})})(pi);
  const ctx=(cwd:string)=>({cwd,sessionManager:{getSessionId:()=>'s',getBranch:()=>[],getLeafId:()=>null},hasPendingMessages:()=>false});
  return {before:(cwd:string)=>handlers.get('before_agent_start')!({systemPrompt:'BASE',prompt:'我是谁？'},ctx(cwd)) as {systemPrompt?:string}|undefined,handlers};
 }
