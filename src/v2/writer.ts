@@ -7,11 +7,15 @@ import { withRepositoryLock } from './lock.js';
 import { failureCode } from './errors.js';
 import { maintenanceSchema, validateDecision, type Decision } from './contract.js';
 import { externalPreflight } from '../core/safety/external-preflight.js';
+import { AGENT_IMPORT_SOURCE, DOCUMENT_IMPORT_SOURCE, decodeAgentImport, isImportSource, provenanceOf, type ProvenanceKind } from './import.js';
+import { decodeDocumentChunk } from './document-import.js';
 import type { ApprovedModelRequest, MemoryModelPort } from '../memory-manager/contracts/model-port.js';
 
 export const maintainerPrompt = readFileSync(new URL('./memory-maintainer.md', import.meta.url), 'utf8');
 export interface WriterOptions {
   dataRoot: string; model: MemoryModelPort; allowedScopes: readonly string[]; writableScopes?: readonly string[];
+  /** Provenance classes that may be sent to the remote model; a batch outside it is quarantined, never disclosed. Omitted means all. */
+  allowedProvenance?: readonly ProvenanceKind[];
   documentSoftBytes?: number; documentHardBytes?: number; retentionMs?: number;
   scheduler?: RuntimeOptions; deadlineMs?: number; maxRequestBytes?: number; modelVersion?: string;
   checkpoint?: (phase: 'files_committed') => void;
@@ -50,6 +54,10 @@ export class Writer {
     try {
       const scope = job.observations[0]!.scope;
       if (!this.#options.allowedScopes.includes(scope)) return this.#quarantine(job, 'UNAUTHORIZED_SOURCE');
+      // Disclosure authorization is per provenance class, not per process: an init-only configuration
+      // processes imports while any user turn that reaches this queue stays local.
+      const provenance = provenanceOf(job.observations[0]!.source);
+      if (this.#options.allowedProvenance && (!provenance || !this.#options.allowedProvenance.includes(provenance))) return this.#quarantine(job, 'UNAUTHORIZED_PROVENANCE');
       const registered = new ProjectRegistry(this.#options.dataRoot).list();
       if (scope !== 'global' && !registered.some(p => `project:${p.id}` === scope)) return this.#quarantine(job, 'UNREGISTERED_PROJECT');
       const documents = withRepositoryLock(this.#options.dataRoot, () => this.canonical.snapshot(scope === 'global' ? [] : [scope.slice(8)]))
@@ -76,6 +84,7 @@ export class Writer {
       if (result.kind === 'refusal') throw new Error('MODEL_REFUSAL');
       const evidence = new Map(job.observations.map(o => [`ev_${o.id}`,o.scope]));
       const decision = validateDecision(result.body, job.id, documents, evidence);
+      this.#guardImports(job, decision.decisions, documents);
       const operations = decision.decisions.flatMap(d => d.kind === 'ignore' ? [] : d.operations);
       for (const op of operations) if (op.target.startsWith('project:') && op.target !== scope) throw new Error('UNAUTHORIZED_SCOPE');
       for (const op of operations) if (!this.#options.writableScopes!.includes(op.target.startsWith('project:') ? op.target : 'global')) throw new Error('UNAUTHORIZED_WRITE');
@@ -110,12 +119,41 @@ export class Writer {
     } finally { clearInterval(timer); }
   }
   #quarantine(job: RuntimeJob, issue: string): {outcome:string} { this.store.quarantine(job, job.observations[0]!.id, issue); return {outcome:'quarantined'}; }
+  /**
+   * Imports (another agent's summary, an imported document) are data, not authority over what the user
+   * said. A decision backed only by import evidence (or an evidence-free decision in an import-only
+   * batch) may append new Sections or rework Sections whose every linked source is itself an import;
+   * it can never forget, remove or replace user-derived or unlinked Sections.
+   */
+  #guardImports(job: RuntimeJob, decisions: Decision[], documents: DocumentSnapshot[]): void {
+    const imported = new Set(job.observations.filter(o => isImportSource(o.source)).map(o => `ev_${o.id}`));
+    if (!imported.size) return;
+    const importOnlyBatch = imported.size === job.observations.length;
+    for (const d of decisions) {
+      if (d.kind === 'ignore') continue;
+      const importOnly = d.evidence.length ? d.evidence.every(ref => imported.has(ref)) : importOnlyBatch;
+      if (!importOnly) continue;
+      if (d.kind === 'forget') throw new Error('UNAUTHORIZED_FORGET_EVIDENCE');
+      for (const op of d.operations) {
+        if (op.section === null) continue;
+        const doc = documents.find(doc => doc.target === op.target);
+        const title = doc?.sections.find(s => s.ref === op.section)?.title;
+        // A manually edited document has stale title links (the receipt below clears them); a hand-edited
+        // Section is the user's, so its old import links must not authorize an import to rewrite it.
+        const prior = doc ? this.store.documentVersion(doc.target) : null;
+        const externallyEdited = doc !== undefined && prior !== null && prior !== doc.hash;
+        const sources = title === undefined || externallyEdited ? [] : this.store.sources(`${op.target}:${digest(title)}`);
+        const ownedByImports = sources.length > 0 && this.store.sourceKinds(sources).every(isImportSource);
+        if (!ownedByImports) throw new Error('UNAUTHORIZED_IMPORT_OVERWRITE');
+      }
+    }
+  }
   #request(job: RuntimeJob, documents: DocumentSnapshot[], context: RuntimeJob['observations'] = []): ApprovedModelRequest {
     return {prompt:maintainerPrompt,schema:maintenanceSchema,schemaName:'memory_maintenance_v2',projection:{
       version:'memory_maintenance_v2',request_id:job.id,now:new Date().toISOString(),
-      observations:job.observations.map(o => ({ref:`ev_${o.id}`,text:o.text,source_scope:o.scope,observed_at:o.observedAt,context_only:false})),
+      observations:job.observations.map(o => ({ref:`ev_${o.id}`,...describeSource(o),source_scope:o.scope,observed_at:o.observedAt,context_only:false})),
       documents:documents.map(doc => ({target:doc.target,hash:doc.hash,content:doc.content,sections:doc.sections,soft_budget_bytes:this.#options.documentSoftBytes ?? 8192,hard_budget_bytes:this.canonical.hardLimitBytes,writable:this.#options.writableScopes!.includes(documentScope(doc))})),
-      context_only:context.map(o => ({text:o.text,observed_at:o.observedAt,source_scope:o.scope,context_only:true})),
+      context_only:context.map(o => ({...describeSource(o),observed_at:o.observedAt,source_scope:o.scope,context_only:true})),
     }};
   }
   #bytes(request: ApprovedModelRequest): number { return this.#options.model.serializedRequestBytes?.(request) ?? Buffer.byteLength(JSON.stringify(request)); }
@@ -160,6 +198,24 @@ export class Writer {
   close(): void { this.store.close(); }
 }
 function documentScope(doc: DocumentSnapshot): string { return doc.target.startsWith('project:') ? doc.target : 'global'; }
+type SourceDescription =
+  | { text: string | null; source_kind: 'user_turn' }
+  | { text: string | null; source_kind: 'agent_import'; import: { source_label: string; basis: string; gaps: string | null } }
+  | { text: string | null; source_kind: 'document_import'; import: { source_label: string; declared_author: string; file_name: string; part: { index: number; count: number }; heading_path: string[] } };
+/** The host, not the text, tells the model whether it reads a user turn, another agent's summary or an imported file. */
+function describeSource(o: RuntimeJob['observations'][number]): SourceDescription {
+  if (o.source === AGENT_IMPORT_SOURCE) {
+    const payload = o.text === null ? null : decodeAgentImport(o.text);
+    if (!payload) return { text: o.text, source_kind: 'agent_import', import: { source_label: 'unknown', basis: 'unknown', gaps: null } };
+    return { text: payload.understanding, source_kind: 'agent_import', import: { source_label: payload.sourceLabel, basis: payload.basis, gaps: payload.gaps ?? null } };
+  }
+  if (o.source === DOCUMENT_IMPORT_SOURCE) {
+    const chunk = o.text === null ? null : decodeDocumentChunk(o.text);
+    if (!chunk) return { text: o.text, source_kind: 'document_import', import: { source_label: 'unknown', declared_author: 'unknown', file_name: 'unknown', part: { index: 1, count: 1 }, heading_path: [] } };
+    return { text: chunk.text, source_kind: 'document_import', import: { source_label: chunk.sourceLabel, declared_author: chunk.declaredAuthor, file_name: chunk.fileName, part: chunk.part, heading_path: chunk.headingPath } };
+  }
+  return { text: o.text, source_kind: 'user_turn' };
+}
 function digest(value:string):string { return createHash('sha256').update(value).digest('hex'); }
 function abortable<T>(promise:Promise<T>,signal:AbortSignal):Promise<T> {
   return new Promise((resolve,reject) => { const abort = () => reject(new Error('CANCELLED')); signal.addEventListener('abort',abort,{once:true}); if(signal.aborted) abort(); promise.then(resolve,reject).finally(() => signal.removeEventListener('abort',abort)); });

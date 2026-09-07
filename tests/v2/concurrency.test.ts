@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
@@ -14,6 +14,9 @@ function moduleUrl(file:string):string {
 it('two real processes cannot claim the same dataRoot maintenance lease',async()=>{
  const path=mkdtempSync(join(tmpdir(),'cm-process-'));roots.push(path);const store=new RuntimeStore(path);store.enqueue({sessionId:'s',entryId:'e',text:'user',source:'interactive',scope:'global',observedAt:new Date().toISOString()});store.close();
  const url=moduleUrl(resolve('src/v2/runtime.ts'));
- const run=()=>new Promise<string>((ok,fail)=>{const child=spawn(process.execPath,['--input-type=module','-e',`import {RuntimeStore} from ${JSON.stringify(url)};const s=new RuntimeStore(${JSON.stringify(path)});const j=s.claim({force:true});console.log(j?'claimed':'idle');s.close();`]);let output='',error='';child.stdout.on('data',b=>output+=b);child.stderr.on('data',b=>error+=b);child.on('error',fail);child.on('exit',code=>code===0?ok(output.trim()):fail(new Error(error)));});
+ // The inlined module tree is far larger than a Windows command line allows: run it from a file, not `-e`.
+ const scripts=mkdtempSync(join(tmpdir(),'cm-process-script-'));roots.push(scripts);const script=join(scripts,'claim.mjs');
+ writeFileSync(script,`import {RuntimeStore} from ${JSON.stringify(url)};const s=new RuntimeStore(${JSON.stringify(path)});const j=s.claim({force:true});console.log(j?'claimed':'idle');s.close();`);
+ const run=()=>new Promise<string>((ok,fail)=>{const child=spawn(process.execPath,[script]);let output='',error='';child.stdout.on('data',b=>output+=b);child.stderr.on('data',b=>error+=b);child.on('error',fail);child.on('exit',code=>code===0?ok(output.trim()):fail(new Error(error)));});
  expect((await Promise.all([run(),run()])).sort()).toEqual(['claimed','idle']);
 });

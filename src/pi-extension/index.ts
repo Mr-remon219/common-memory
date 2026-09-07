@@ -1,19 +1,29 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { loadConfig } from "../config/config.js";
+import { loadConfig, type CommonMemoryConfig } from "../config/config.js";
 import { createConfiguredWriter } from "../config/runtime.js";
 import { ProjectRegistry } from "../v2/registry.js";
+import { readAuthorizedMemory, renderMemoryView } from "../v2/reader.js";
 import { PiCaptureRuntime, type SessionUserEntry } from "./extraction-runtime.js";
 
-export function createCommonMemoryPiExtension(options: {runtimeFactory?: () => PiCaptureRuntime; resolveScope?: (cwd:string) => string} = {}) {
+export function createCommonMemoryPiExtension(options: {runtimeFactory?: () => PiCaptureRuntime; resolveScope?: (cwd:string) => string; configFactory?: () => CommonMemoryConfig | null} = {}) {
   return (pi: ExtensionAPI): void => {
     let runtime: PiCaptureRuntime | undefined;
     let registry: ProjectRegistry | undefined;
+    let config: CommonMemoryConfig | undefined;
+    // Only a valid configuration is cached; an unconfigured host is re-checked on the next event.
+    const cfg = (): CommonMemoryConfig => {
+      config ??= (options.configFactory ? options.configFactory() : loadConfig()) ?? undefined;
+      if (!config) throw new Error("Common Memory is not configured");
+      registry ??= new ProjectRegistry(config.dataRoot);
+      return config;
+    };
     const get = (): PiCaptureRuntime => {
       if (runtime) return runtime;
       if (options.runtimeFactory) return runtime = options.runtimeFactory();
-      const config = loadConfig(); if (!config) throw new Error("Common Memory is not configured");
-      registry = new ProjectRegistry(config.dataRoot);
-      return runtime = new PiCaptureRuntime(createConfiguredWriter(config));
+      // Pi only captures delivered user turns; without permission to disclose them there is nothing to capture.
+      const current = cfg();
+      if (!current.disclosure.allowedProvenance.includes("user_explicit")) throw new Error("Delivered user evidence is not authorized for disclosure");
+      return runtime = new PiCaptureRuntime(createConfiguredWriter(current));
     };
     const safe = (fn:(r:PiCaptureRuntime)=>void): void => { try { fn(get()); } catch { process.stderr.write("[common-memory] capture unavailable; inspect common-memory status.\n"); } };
     const bind = (ctx:ExtensionContext): void => safe(r=>r.bind(ctx.sessionManager.getSessionId(),branchUsers(ctx.sessionManager.getBranch())));
@@ -21,6 +31,16 @@ export function createCommonMemoryPiExtension(options: {runtimeFactory?: () => P
     pi.on("input", (event,ctx)=>{
       safe(r=>{ if(!ctx.hasPendingMessages())r.cancelInputs(ctx.sessionManager.getSessionId()); const project = registry?.resolve(ctx.cwd); const scope = options.resolveScope?.(ctx.cwd) ?? (project ? `project:${project.id}` : "global"); r.input({sessionId:ctx.sessionManager.getSessionId(),text:event.text,source:event.source,scope,parentEntryId:ctx.sessionManager.getLeafId(),hasUnsupportedContent:(event.images?.length??0)>0,...(event.streamingBehavior?{streamingBehavior:event.streamingBehavior}:{})}); });
       return {action:"continue"};
+    });
+    // Reading is independent of capture: no Writer, model or API key is needed to disclose current memory.
+    pi.on("before_agent_start", (event,ctx)=>{
+      try {
+        const current = cfg();
+        const project = registry!.resolve(ctx.cwd);
+        const contexts = ["global", ...(project ? [`project:${project.id}`] : [])].filter(scope => current.disclosure.allowedScopes.includes(scope));
+        const view = readAuthorizedMemory({dataRoot: current.dataRoot, contexts});
+        return {systemPrompt: `${event.systemPrompt}\n\n## Common Memory\n${renderMemoryView(view)}`};
+      } catch { process.stderr.write("[common-memory] memory unavailable for this turn; inspect common-memory status.\n"); return undefined; }
     });
     pi.on("agent_start", ()=>safe(r=>r.busy()));
     pi.on("message_end", (event,ctx)=>{

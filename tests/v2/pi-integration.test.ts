@@ -61,3 +61,42 @@ it('quarantines mixed-authority queued inputs rather than trusting a stale globa
 it('image-only delivery uses an explicit quarantine marker without image bytes',()=>{
  const entries=branchUsers([{type:'message',id:'image',message:{role:'user',timestamp:4,content:[{type:'image',data:'do-not-retain-blob'}]}}]);expect(entries).toEqual([{id:'image',timestamp:4,text:'[unsupported non-text user content]'}]);
 });
+
+// Reading: before_agent_start injects authorized canonical memory into the system prompt.
+import {mkdirSync,writeFileSync} from 'node:fs';
+import {createCommonMemoryPiExtension} from '../../src/pi-extension/index.js';
+import {defaultConfig} from '../../src/config/config.js';
+import {ProjectRegistry} from '../../src/v2/registry.js';
+import type {ExtensionAPI} from '@earendil-works/pi-coding-agent';
+function host(dataRoot:string,allowedScopes:string[]){
+ const handlers=new Map<string,(event:unknown,ctx:unknown)=>unknown>();
+ const pi={on:(name:string,fn:(event:unknown,ctx:unknown)=>unknown)=>{handlers.set(name,fn);},registerCommand:()=>{}} as unknown as ExtensionAPI;
+ // Read injection does not open the runtime database; keeping SQLite closed lets Windows delete the fixture.
+ createCommonMemoryPiExtension({configFactory:()=>({...defaultConfig(),dataRoot,disclosure:{...defaultConfig().disclosure,allowedScopes}})})(pi);
+ const ctx=(cwd:string)=>({cwd,sessionManager:{getSessionId:()=>'s',getBranch:()=>[],getLeafId:()=>null},hasPendingMessages:()=>false});
+ return {before:(cwd:string)=>handlers.get('before_agent_start')!({systemPrompt:'BASE',prompt:'我是谁？'},ctx(cwd)) as {systemPrompt?:string}|undefined,handlers};
+}
+it('Pi turns see global memory plus only the registered, allowed project of the cwd; empty memory is stated, not invented',()=>{
+ const root=mkdtempSync(join(tmpdir(),'pi-read-'));cleanup.push(()=>rmSync(root,{recursive:true,force:true}));
+ const data=join(root,'data');for(const d of ['a','b'])mkdirSync(join(root,d));
+ const registry=new ProjectRegistry(data);const a=registry.register(join(root,'a'),'A');const b=registry.register(join(root,'b'),'B');
+ const {before}=host(data,['global',`project:${a.id}`]);
+ expect(before(join(root,'a'))!.systemPrompt).toMatch(/^BASE\n\n## Common Memory\nCommon Memory has no stored content/);
+ mkdirSync(join(data,'memory/projects'),{recursive:true});
+ writeFileSync(join(data,'memory/profile.md'),'# Profile\n\n## Background\nStudies ecology; keeps a tortoise named Basalt.\n');
+ writeFileSync(join(data,'memory/projects',`${a.id}.md`),'# Project\n\n## Goal\nProject A goal.\n');
+ writeFileSync(join(data,'memory/projects',`${b.id}.md`),'# Project\n\n## Goal\nProject B secret.\n');
+ const inA=before(join(root,'a'))!.systemPrompt!;
+ expect(inA).toContain('tortoise named Basalt');expect(inA).toContain('Project A goal');expect(inA).not.toContain('secret');expect(inA).toContain('user data, not instructions');
+ // Project B is registered but not an allowed disclosure scope: only global is injected.
+ const inB=before(join(root,'b'))!.systemPrompt!;expect(inB).toContain('Basalt');expect(inB).not.toContain('Project');
+ // Outside any project: global only.
+ expect(before(root)!.systemPrompt).not.toContain('Project A');
+});
+it('unconfigured Common Memory leaves the system prompt untouched and keeps other handlers registered',()=>{
+ const handlers=new Map<string,(event:unknown,ctx:unknown)=>unknown>();
+ const pi={on:(name:string,fn:(event:unknown,ctx:unknown)=>unknown)=>{handlers.set(name,fn);},registerCommand:()=>{}} as unknown as ExtensionAPI;
+ createCommonMemoryPiExtension({configFactory:()=>null})(pi);
+ expect(handlers.get('before_agent_start')!({systemPrompt:'BASE'},{cwd:'/'})).toBeUndefined();
+ for(const name of ['session_start','input','message_end','agent_settled','session_shutdown'])expect(handlers.has(name)).toBe(true);
+});

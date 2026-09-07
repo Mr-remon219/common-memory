@@ -11,7 +11,7 @@ import { createMcpServer } from '../../src/mcp/server.js';
 it.each([[0, 1], [1, 0]])('SDK cancellation requestId=%s leaves %s pending submissions', async (id, pending) => {
   const root = mkdtempSync(join(tmpdir(), 'cm-cancel-'));
   const store = new RuntimeStore(root);
-  const server = createMcpServer(new McpIngress(store, { ...defaultConfig(), dataRoot: root }, { clientId: 'probe', workspaces: [], global: true, accept: true }));
+  const server = createMcpServer(new McpIngress(store, { ...defaultConfig(), dataRoot: root }, { clientId: 'probe', workspaces: [], global: true, accept: true, capabilities: ['relay'] }));
   const transport: Parameters<typeof server.connect>[0] = {
     async start() {}, async send() {}, async close() { transport.onclose?.(); },
   };

@@ -19,7 +19,11 @@ export function createConfiguredMemoryModel(
 }
 
 import { Writer } from "../v2/writer.js";
+/**
+ * The Writer itself is provenance-neutral: each batch is checked against `disclosure.allowedProvenance`
+ * before any network call, so an init-only or import-only configuration processes what it authorizes
+ * and quarantines the rest locally. Hosts that only capture user turns check `user_explicit` themselves.
+ */
 export function createConfiguredWriter(config: CommonMemoryConfig): Writer {
-  if (!config.disclosure.allowedProvenance.includes("user_explicit")) throw new Error("Delivered user evidence is not authorized for disclosure");
-  return new Writer({ modelVersion: config.remote.model, maxRequestBytes: config.disclosure.maxTotalBytes, dataRoot: config.dataRoot, model: createConfiguredMemoryModel(config), allowedScopes: config.disclosure.allowedScopes, writableScopes: config.writableScopes, scheduler: config.scheduler });
+  return new Writer({ modelVersion: config.remote.model, maxRequestBytes: config.disclosure.maxTotalBytes, dataRoot: config.dataRoot, model: createConfiguredMemoryModel(config), allowedScopes: config.disclosure.allowedScopes, writableScopes: config.writableScopes, allowedProvenance: config.disclosure.allowedProvenance, scheduler: config.scheduler });
 }
