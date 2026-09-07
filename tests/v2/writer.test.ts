@@ -203,3 +203,61 @@ it.each([
   }
  } finally {w.close();}
 });
+
+describe('agent import provenance',()=>{
+ const imported=(w:Writer,id='imp')=>w.store.enqueue({sessionId:'mcp-init:x',entryId:id,scope:'global',source:'agent_import',observedAt:new Date().toISOString(),text:JSON.stringify({kind:'agent_import',sourceLabel:'chatgpt-desktop',basis:'saved_memories',understanding:'Studies ecology; keeps a tortoise named Basalt.',gaps:'No older chats.'})});
+ it('projects host-assigned source_kind and import metadata; imports and user turns never share a batch',async()=>{
+  const seen:unknown[][]=[];const w=new Writer({dataRoot:root(),allowedScopes:['global'],model:model(r=>{seen.push(r.projection.observations as unknown[]);return body(r,'ignore');})});
+  imported(w);enqueue(w,'请用中文回答','u1');
+  expect((await w.run({force:true})).outcome).toBe('ignored');expect((await w.run({force:true})).outcome).toBe('ignored');
+  expect(seen.map(batch=>batch.length)).toEqual([1,1]);
+  expect(seen[0]).toEqual([expect.objectContaining({source_kind:'agent_import',text:'Studies ecology; keeps a tortoise named Basalt.',import:{source_label:'chatgpt-desktop',basis:'saved_memories',gaps:'No older chats.'}})]);
+  expect(seen[1]).toEqual([expect.objectContaining({source_kind:'user_turn',text:'请用中文回答'})]);
+  expect(JSON.stringify(seen[0])).not.toContain('"kind":"agent_import"');w.close();
+ });
+ it.each([
+  ['retain remove_section',{kind:'retain',admission:'correct',lifetime:'stable',operations:[{op:'remove_section',target:'profile',section:'s1'}]}],
+  ['retain replace user section',{kind:'retain',admission:'update',lifetime:'stable',operations:[{op:'put_section',target:'profile',section:'s1',title:'Background',body:'Rewritten by import.\n'}]}],
+  ['maintain without evidence',{kind:'maintain',operations:[{op:'remove_section',target:'profile',section:'s1'}],evidence:[]}],
+ ] as const)('an import-only batch cannot remove or replace a user-derived Section (%s)',async(_name,shape)=>{
+  const path=root();let phase=0;
+  const w=new Writer({dataRoot:path,allowedScopes:['global'],model:model(r=>{
+   if(phase===0)return body(r,'retain',[{op:'put_section',target:'profile',section:null,title:'Background',body:'Studies ecology.\n'}]);
+   const refs=(r.projection.observations as {ref:string}[]).map(o=>o.ref);
+   return {version:'memory_maintenance_v2',request_id:r.projection.request_id,decisions:[{applicability:'global',confidence:1,reason:'x',evidence:refs,...shape}]};
+  })});
+  enqueue(w,'我在学生态学','u0');expect((await w.run({force:true})).outcome).toBe('committed');
+  phase=1;imported(w);expect(await w.run({force:true})).toEqual({outcome:'failed',reason:'UNAUTHORIZED_IMPORT_OVERWRITE'});
+  expect(readFileSync(join(path,'memory/profile.md'),'utf8')).toContain('Studies ecology.');w.close();
+ });
+ it('an import may append new Sections and later rework Sections that only imports produced',async()=>{
+  const path=root();let phase=0;
+  const w=new Writer({dataRoot:path,allowedScopes:['global'],model:model(r=>{
+   const refs=(r.projection.observations as {ref:string}[]).map(o=>o.ref);
+   const op=phase===0?{op:'put_section',target:'profile',section:null,title:'Imported understanding',body:'Imported from chatgpt-desktop: v1.\n'}:{op:'put_section',target:'profile',section:'s1',title:'Imported understanding',body:'Imported from chatgpt-desktop: v2.\n'};
+   return {version:'memory_maintenance_v2',request_id:r.projection.request_id,decisions:[{kind:'retain',admission:phase===0?'remember':'update',lifetime:'until_changed',applicability:'global',confidence:1,reason:'x',evidence:refs,operations:[op]}]};
+  })});
+  imported(w,'imp1');expect((await w.run({force:true})).outcome).toBe('committed');
+  phase=1;imported(w,'imp2');expect((await w.run({force:true})).outcome).toBe('committed');
+  expect(readFileSync(join(path,'memory/profile.md'),'utf8')).toContain('v2');w.close();
+ });
+ it('forget backed only by an import is rejected without canonical side effects; forget with user evidence still works',async()=>{
+  const path=root();let phase=0;
+  const w=new Writer({dataRoot:path,allowedScopes:['global'],model:model(r=>{
+   const refs=(r.projection.observations as {ref:string;source_kind:string}[]);
+   if(phase===0)return body(r,'retain',[{op:'put_section',target:'profile',section:null,title:'Background',body:'Studies ecology.\n'}]);
+   if(phase===2)return body(r,'ignore');
+   const evidence=phase===1?refs.filter(o=>o.source_kind==='agent_import').map(o=>o.ref):refs.map(o=>o.ref);
+   return {version:'memory_maintenance_v2',request_id:r.projection.request_id,decisions:[{kind:'forget',applicability:'global',confidence:1,evidence,reason:'x',operations:[{op:'remove_section',target:'profile',section:'s1'}]}]};
+  })});
+  enqueue(w,'我在学生态学','u0');expect((await w.run({force:true})).outcome).toBe('committed');
+  phase=1;imported(w);expect(await w.run({force:true})).toEqual({outcome:'failed',reason:'UNAUTHORIZED_FORGET_EVIDENCE'});
+  expect(readFileSync(join(path,'memory/profile.md'),'utf8')).toContain('Studies ecology');
+  expect(w.store.status().jobs.at(-1)).toMatchObject({state:'retry',issue:'UNAUTHORIZED_FORGET_EVIDENCE'});
+  // The retried batch keeps its original observations; a corrected model answer consumes it.
+  phase=2;w.store.db.prepare("UPDATE jobs SET available=0").run();expect((await w.run({force:true})).outcome).toBe('ignored');
+  // A delivered user turn legitimately carries the forget.
+  phase=3;enqueue(w,'忘掉我的专业','u2');
+  expect((await w.run({force:true})).outcome).toBe('committed');expect(readFileSync(join(path,'memory/profile.md'),'utf8')).not.toContain('Studies ecology');w.close();
+ });
+});

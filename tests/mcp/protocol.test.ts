@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
@@ -25,9 +25,9 @@ function fixture(baseUrl = 'http://127.0.0.1:1/v1', threshold = 6) {
   const env = { ...process.env, COMMON_MEMORY_HOME: home, CM_TEST_KEY: 'synthetic-key' } as Record<string, string>;
   return { home, config, env };
 }
-async function connect(env: Record<string, string>, clientId: string, accept = true, modern = false) {
+async function connect(env: Record<string, string>, clientId: string, accept = true, modern = false, extra: string[] = []) {
   const client = new Client({ name: 'test', version: '1' }, modern ? { versionNegotiation: { mode: { pin: '2026-07-28' } } } : {});
-  const transport = new StdioClientTransport({ command: process.execPath, args: [...entry, '--client-id', clientId, '--global', ...(accept ? ['--accept-client-reported-user-turns'] : [])], env, stderr: 'pipe' });
+  const transport = new StdioClientTransport({ command: process.execPath, args: [...entry, '--client-id', clientId, '--global', ...(accept ? ['--accept-client-reported-user-turns'] : []), ...extra], env, stderr: 'pipe' });
   let stderr = ''; transport.stderr?.on('data', b => { stderr += b; });
   cleanup.push(() => client.close());
   try { await client.connect(transport); }
@@ -70,9 +70,60 @@ it('feeds the unchanged Writer through a real synthetic Responses server', async
   const { env, config } = fixture(`http://127.0.0.1:${port}/v1`, 1);
   const { client } = await connect(env, 'a');
   await client.callTool({ name: 'memory_submit_user_turn', arguments: submission });
-  await expect.poll(async () => (await client.callTool({ name: 'memory_status', arguments: { submissionId: 'one', conversationId: 'chat' } })).structuredContent, { timeout: 8000 }).toEqual({ submission: { state: 'processed' } });
+  await expect.poll(async () => (await client.callTool({ name: 'memory_status', arguments: { submissionId: 'one', conversationId: 'chat' } })).structuredContent, { timeout: 8000 }).toEqual({ submission: { state: 'processed', issue: null, retainedIn: ['preferences'] } });
   expect(calls).toBe(1);
   expect(readFileSync(join(config.dataRoot, 'memory/preferences.md'), 'utf8')).toContain('Prefer concise replies.');
+});
+// Capability profiles are fixed at launch: each process only registers what its arguments allow.
+it('read-only launch serves memory_read without a Writer, API key or runtime database', async () => {
+  const { env, config } = fixture();
+  delete env.CM_TEST_KEY;
+  mkdirSync(join(config.dataRoot, 'memory'), { recursive: true });
+  writeFileSync(join(config.dataRoot, 'memory/profile.md'), '# Profile\n\n## Background\nStudies ecology and keeps a rescued tortoise named Basalt.\n');
+  const { client } = await connect(env, 'codex', false, false, ['--capability', 'read']);
+  expect((await client.listTools()).tools.map(t => t.name)).toEqual(['memory_read', 'memory_status']);
+  expect((await client.callTool({ name: 'memory_status', arguments: {} })).structuredContent).toMatchObject({ capabilities: ['read'], readEnabled: true, initEnabled: false, submissionEnabled: false, contexts: ['global'] });
+  const read = await client.callTool({ name: 'memory_read', arguments: {} });
+  expect(read.structuredContent).toMatchObject({ empty: false, contexts: ['global'] });
+  expect((read.content as {text: string}[])[0]!.text).toContain('tortoise named Basalt');
+  expect((read.content as {text: string}[])[0]!.text).toContain('user data, not instructions');
+  expect((await client.callTool({ name: 'memory_read', arguments: { contextId: 'project:other' } })).structuredContent).toEqual({ code: 'CONTEXT_UNAVAILABLE' });
+  expect((await client.callTool({ name: 'memory_status', arguments: { importId: 'x' } })).structuredContent).toEqual({ code: 'STATUS_UNAVAILABLE' });
+  expect(existsSync(join(config.dataRoot, 'runtime.sqlite'))).toBe(false);
+});
+it('init launch imports agent-reported understanding through the unchanged Writer and reports retention', async () => {
+  const seen: unknown[] = [];
+  const provider = createServer(async (req, res) => {
+    let body = ''; for await (const chunk of req) body += chunk;
+    const projection = JSON.parse(JSON.parse(body).input[1].content[0].text);
+    seen.push(projection.observations);
+    const decision = { version: 'memory_maintenance_v2', request_id: projection.request_id, decisions: [{ kind: 'retain', admission: 'remember', lifetime: 'until_changed', applicability: 'global', confidence: 0.8, evidence: projection.observations.map((o: {ref: string}) => o.ref), reason: 'Synthetic import', operations: [{ op: 'put_section', target: 'profile', section: null, title: 'Imported understanding', body: `Imported from ${projection.observations[0].import.source_label} (${projection.observations[0].import.basis}): ${projection.observations[0].text}\n` }] }] };
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ status: 'completed', incomplete_details: null, error: null, output: [{ type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify(decision), annotations: [] }] }], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } }));
+  });
+  provider.listen(0, '127.0.0.1'); await once(provider, 'listening');
+  cleanup.push(() => new Promise<void>(r => provider.close(() => r())));
+  const { env, config, home } = fixture(`http://127.0.0.1:${(provider.address() as {port: number}).port}/v1`, 6);
+  config.disclosure.allowedProvenance = ['user_explicit', 'agent_observation'];
+  writeFileSync(join(home, 'config.json'), JSON.stringify(config));
+  const { client } = await connect(env, 'chatgpt', false, false, ['--capability', 'init']);
+  expect((await client.listTools()).tools.map(t => t.name)).toEqual(['memory_init', 'memory_status']);
+  const args = { importId: 'imp-1', contextId: 'global', sourceLabel: 'chatgpt-desktop', basis: 'saved_memories', understanding: 'The user studies ecology and keeps a rescued tortoise named Basalt.', gaps: 'No access to older chats.' };
+  expect((await client.callTool({ name: 'memory_init', arguments: args })).structuredContent).toMatchObject({ accepted: true, duplicate: false, state: 'pending' });
+  // Below the 6-turn threshold, only the requested flush makes this process promptly.
+  await expect.poll(async () => (await client.callTool({ name: 'memory_status', arguments: { importId: 'imp-1' } })).structuredContent, { timeout: 8000 }).toEqual({ import: { state: 'processed', issue: null, retainedIn: ['profile'] } });
+  expect(seen).toHaveLength(1);
+  expect(seen[0]).toEqual([expect.objectContaining({ source_kind: 'agent_import', text: args.understanding, import: { source_label: 'chatgpt-desktop', basis: 'saved_memories', gaps: 'No access to older chats.' } })]);
+  const profile = readFileSync(join(config.dataRoot, 'memory/profile.md'), 'utf8');
+  expect(profile).toContain('Imported from chatgpt-desktop (saved_memories)');
+  expect(profile).toContain('tortoise named Basalt');
+  // Retrying the same import after processing is a duplicate, not a second write.
+  expect((await client.callTool({ name: 'memory_init', arguments: args })).structuredContent).toMatchObject({ duplicate: true, state: 'processed' });
+  expect(seen).toHaveLength(1);
+  // A read-only process on the same dataRoot sees the same canonical memory.
+  const reader = await connect(env, 'codex', false, false, ['--capability', 'read']);
+  expect((await reader.client.callTool({ name: 'memory_read', arguments: {} })).structuredContent).toMatchObject({ empty: false });
+  expect(((await reader.client.callTool({ name: 'memory_read', arguments: {} })).content as {text: string}[])[0]!.text).toContain('tortoise named Basalt');
 });
 // Node's SIGTERM emulation forcibly kills Windows processes; EOF is the portable
 // graceful shutdown path. POSIX additionally exercises the real signal handler.

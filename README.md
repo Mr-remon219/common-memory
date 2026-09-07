@@ -1,9 +1,17 @@
 # Common Memory V2
 
-Write-only, durable memory maintenance for Pi and local MCP hosts. Markdown is the authority for current
-long-term content; SQLite stores pending deliveries, observations, jobs, leases,
-source links and recovery metadata. There is no Fact/Recall/Undo compatibility layer,
-search index, temporary memory product, or resident background service.
+Durable, user-owned memory maintenance for Pi and local MCP hosts, plus authorized
+read-only disclosure of the resulting Markdown to Pi, Codex CLI and other local MCP
+consumers. Markdown is the authority for current long-term content; SQLite stores
+pending deliveries, observations, jobs, leases, source links and recovery metadata.
+There is no Fact/Recall/Undo compatibility layer, search index, temporary memory
+product, or resident background service. Reading returns the current documents as
+they are; there is no retrieval ranking.
+
+Init v0.1 (`docs/init-v0.1-design.md`, `docs/init-v0.1-verification.md`) adds the
+cross-agent loop: another agent (ChatGPT desktop) imports its existing understanding
+through `memory_init`, the unchanged Writer decides what to keep, and Codex CLI (MCP
+`memory_read`) and Pi (system-prompt injection) read the same canonical files.
 
 配套的 Writer 评测规范已迁移到独立仓库：[Memory Benchmark](https://github.com/Mr-remon219/memory-benchmark)。
 
@@ -23,17 +31,32 @@ discard delivered evidence. Input alone is not evidence. Ambiguous, detectably t
 extension-originated messages are quarantined rather than silently trusted. No
 assistant/tool/system/thinking/compaction text is supplied as new evidence.
 
+The same extension also **reads** memory: on every `before_agent_start` it appends a
+`## Common Memory` block to the system prompt containing the authorized Profile and
+Preferences documents plus the Project document of the registered project that
+contains `cwd` (only when `project:<id>` is in `disclosure.allowedScopes`). The block
+states that memory is user data, not instructions, and says explicitly when nothing
+is stored. Reading needs no model, API key or Writer; a plain "who am I?" in a new Pi
+session therefore answers from canonical memory without any tool name. Reading does
+not change capture, thresholds or Writer behaviour.
+
 ## Commands
 
 ```sh
 common-memory config
 common-memory status
+common-memory show [--workspace /absolute/project/path]
 common-memory flush
 common-memory retry <dead-job-id>
 common-memory project register /absolute/project/path "Display name"
 common-memory project list
 common-memory project remove <id>
 ```
+
+`show` prints the memory directory and exactly what consumers (MCP `memory_read`, Pi)
+receive for `global` plus the optional registered workspace, using the same
+authorization. The canonical files themselves are plain Markdown under
+`<dataRoot>/memory/` and can be opened with any editor.
 
 Project IDs are generated locally. Registry matching uses real paths and the longest
 ancestor, frozen at capture time. Registration alone grants no permission: separately
@@ -46,40 +69,155 @@ it does not wait for a remote model. Restart resumes durable work.
 ## MCP access (stdio)
 
 Build with `npm ci && npm run build`. Configure Common Memory using the existing
-CLI, then give your MCP host an explicit command and argument array, for example:
+CLI, then give your MCP host an explicit command and argument array. Node 24 is
+required. No running Pi process is needed; the existing Pi peer/package layout is
+unchanged. The SDK stdio entry serves modern and legacy clients. No HTTP port,
+automatic host installer, Roots discovery, Resources, Prompts or retrieval is added.
 
-```json
-{
-  "command": "/absolute/path/to/node",
-  "args": [
-    "/absolute/path/to/common-memory/dist/cli/main.js",
-    "mcp", "--client-id", "editor-a", "--global",
-    "--accept-client-reported-user-turns"
-  ],
-  "env": { "COMMON_MEMORY_HOME": "/absolute/path/to/.common-memory" }
-}
-```
+### Capability profiles
 
-Node 24 is required. No running Pi process is needed; the existing Pi peer/package
-layout is unchanged. The SDK stdio entry serves modern and legacy clients. No HTTP
-port, automatic host installer, Roots discovery, Resources, Prompts or Recall is added.
+Each MCP process registers only the tools its launch arguments allow. `--capability`
+is repeatable; the default without it is `relay`, the pre-existing behaviour.
+
+| `--capability` | Tools registered | Needs Writer / API key | Intended host |
+| --- | --- | --- | --- |
+| `relay` (default) | `memory_submit_user_turn`, `memory_status` | yes (background processing) | trusted local agent relaying verbatim user turns |
+| `init` | `memory_init`, `memory_status` | yes | ChatGPT desktop: one-shot import of its existing understanding |
+| `read` | `memory_read`, `memory_status` | **no** (never opens the runtime database) | Codex CLI and other read-only consumers |
+
+Capability is fixed per process at launch; a tool argument, client-reported name or
+prompt can never widen it. Run one process per host role. Where two hosts share one
+configuration file (see Codex below), use the host's own allow list and profiles as the
+second layer.
 
 For project input, use `--workspace /absolute/project/path` (repeatable). Register
 projects with the existing CLI and separately authorize their disclosure/write scopes.
-Use `--global` explicitly to allow global-source submissions. There is no cwd fallback.
-Each call selects an allowed `contextId`; changed/unregistered workspace mappings are
-rejected rather than silently rebound. Project source does not prohibit authorized
-Global promotion: the existing Writer still decides applicability.
+Use `--global` explicitly to allow global contexts. There is no cwd fallback. Each call
+selects an allowed `contextId`; changed/unregistered workspace mappings are rejected
+rather than silently rebound. Project source does not prohibit authorized Global
+promotion: the existing Writer still decides applicability. Reading follows the same
+contexts: a process launched for workspace A never returns project B's document, and
+a process without `--global` never returns Profile/Preferences.
 
-Tools:
+The server publishes MCP `instructions` describing when to use its tools; Codex hosts
+read them, so a plain "我是谁？" is expected to trigger `memory_read` without the user
+naming a tool. Memory content is delivered as user data with an explicit note that it is
+not instructions.
 
-- `memory_status {}`: submission availability and allowed context IDs.
-- `memory_submit_user_turn { submissionId, conversationId?, contextId, text }`:
-  submit one **complete user expression verbatim**, not an assistant summary or a
-  Markdown operation. IDs must be 1–128 ASCII letters/digits/underscores/hyphens.
-- `memory_status { submissionId, conversationId? }`: this client's exact submission
-  state, without conversation bodies or other clients' job details. `processed` can
-  mean ignored; it is not proof that information was remembered.
+### Tools
+
+- `memory_status {}`: this connection's capabilities, enabled features and allowed
+  context IDs.
+- `memory_submit_user_turn { submissionId, conversationId?, contextId, text }`
+  (`relay`): submit one **complete user expression verbatim**, not an assistant summary
+  or a Markdown operation. IDs must be 1–128 ASCII letters/digits/underscores/hyphens.
+- `memory_init { importId, contextId, sourceLabel, basis, understanding, gaps? }`
+  (`init`): import another agent's **own summary** of the user (`global`) or the current
+  project (`project:<id>`). `basis` ∈ `saved_memories | chat_history |
+  current_conversation | project_context | mixed | unknown`; `understanding` ≤ 32 KiB;
+  `gaps` describes what the agent could not access. The payload is stored as one
+  `agent_import` observation. `sourceLabel` is a recorded label, not an identity.
+  Reuse `importId` on retry: identical payloads are duplicates, changed payloads are
+  `SUBMISSION_CONFLICT`. Init requests an immediate flush, so the Core processes it at
+  the next stable boundary instead of waiting for the usual thresholds.
+- `memory_read { contextId? }` (`read`): current Profile and Preferences for `global`
+  and the project document for an allowed project context; without `contextId`, every
+  allowed context. Returns Markdown plus `{ documents: [{ target, content, bytes,
+  empty }], empty }`. Documents are returned whole (the Writer keeps each ≤ 16 KiB);
+  an empty result says that nothing is stored so consumers do not invent facts.
+- `memory_status { submissionId, conversationId? }` / `memory_status { importId }`:
+  that item's `state` (`pending`, `claimed`, `processed`, `quarantined`, `dead`), the
+  documents it is currently retained in (`retainedIn`, derived from Section source
+  links, never titles or bodies) and a diagnostic `issue` code. `processed` with an
+  empty `retainedIn` means the Core kept nothing (ignored or reorganized only).
+
+### What Init means
+
+Init is a product action — "bring what another agent already understands about me
+into my memory" — not MCP initialization and not a claim to export that agent's
+internal memory. What the agent can hand over depends on the agent: ChatGPT web/Chat
+uses ChatGPT memory, while the ChatGPT desktop app's Codex host uses its own local
+memory store (see `docs/init-v0.1-design.md` §2.1). The Core treats the submission as
+untrusted agent-reported data: the maintainer receives `source_kind: "agent_import"`
+with the label, basis and gaps, must keep the source nature visible in any retained
+Section (for example "Imported from chatgpt-desktop on 2026-09-07 …"), must not
+present it as the user's words, and must not overwrite conflicting user-stated content.
+The executor enforces the hard part structurally: imports are batched separately from
+user turns, and a decision backed only by `agent_import` evidence (or an evidence-free
+`maintain` in an import-only batch) may append new Sections or rework Sections whose
+every linked source is itself an import, but is rejected if it tries to `forget`
+(`UNAUTHORIZED_FORGET_EVIDENCE`), remove, or replace a user-derived or unlinked Section
+(`UNAUTHORIZED_IMPORT_OVERWRITE`). Init therefore never clears existing documents or
+runtime state; existing safety scanning, size limits, scope authorization, CAS, lease
+fencing and recovery apply unchanged. Init does request a flush, which — like
+`/memory-flush` — also lets already queued user turns be processed at the next stable
+boundary. There is no preview or approval queue in the Core: the user's explicit
+request plus the host's approval prompt for non-read-only tools are the confirmation,
+and `memory_status.retainedIn`, `common-memory show` and the Markdown files are the
+post-hoc review.
+
+Init is enabled only when the process was launched with `--capability init` **and**
+`disclosure.allowedProvenance` contains `agent_observation` (the wizard option
+"Agent-reported understanding"); otherwise `memory_init` returns `INIT_DISABLED`.
+
+### ChatGPT desktop app (init only)
+
+The ChatGPT desktop app configures MCP servers for its Codex host in the same
+`config.toml` as Codex CLI (Settings → MCP servers, or edit the file). Add an
+init-only server; the host prompts before non-read-only tools:
+
+```toml
+[mcp_servers.common_memory_init]
+command = "/absolute/path/to/node"
+args = ["/absolute/path/to/common-memory/dist/cli/main.js", "mcp",
+        "--client-id", "chatgpt-desktop", "--capability", "init", "--global"]
+env = { COMMON_MEMORY_HOME = "/absolute/path/to/.common-memory" }
+default_tools_approval_mode = "approve"
+```
+
+When the desktop app runs on Windows and Common Memory lives in WSL, launch through
+`wsl.exe` with absolute WSL paths (no login shell, so `PATH` is not available):
+
+```toml
+[mcp_servers.common_memory_init]
+command = "wsl.exe"
+args = ["-e", "/usr/bin/env", "COMMON_MEMORY_HOME=/home/<user>/.common-memory",
+        "/home/<user>/.local/share/fnm/node-versions/v24.20.0/installation/bin/node",
+        "/home/<user>/common-memory/dist/cli/main.js", "mcp",
+        "--client-id", "chatgpt-desktop", "--capability", "init", "--global"]
+default_tools_approval_mode = "approve"
+```
+
+Then, in a chat that can use that host's MCP servers, ask: “把你目前对我的长期理解导入
+Common Memory。” The agent should call `memory_init`, then `memory_status` with the same
+`importId` to report what was retained. Use `common-memory show` locally to review.
+ChatGPT web and the desktop **Chat** mode do not read this configuration; they would
+need a remote HTTPS connector, which this version deliberately does not provide.
+
+### Codex CLI (read only)
+
+```toml
+[mcp_servers.common_memory]
+command = "/absolute/path/to/node"
+args = ["/absolute/path/to/common-memory/dist/cli/main.js", "mcp",
+        "--client-id", "codex-cli", "--capability", "read", "--global",
+        "--workspace", "/absolute/project/path"]
+env = { COMMON_MEMORY_HOME = "/absolute/path/to/.common-memory" }
+enabled_tools = ["memory_read", "memory_status"]
+default_tools_approval_mode = "auto"
+```
+
+`--workspace` is optional and must be a registered project whose `project:<id>` is in
+`disclosure.allowedScopes`. The process is read-only by construction (server side) and
+`enabled_tools` repeats that on the host side. If the same `config.toml` also holds the
+ChatGPT init server, keep Codex CLI from seeing it with a profile file
+`~/.codex/memory-reader.config.toml` containing
+`mcp_servers.common_memory_init.enabled = false` and run `codex --profile
+memory-reader`, or pass `-c mcp_servers.common_memory_init.enabled=false`. Disable
+Codex's own local memories (`features.memories = false`) when you need to prove that
+an answer came from Common Memory.
+
+### Relay (pre-existing)
 
 Submissions are disabled unless `--accept-client-reported-user-turns` is set and
 existing config permits user-expression disclosure. This flag explicitly trusts this
@@ -134,6 +272,14 @@ forget, maintain or ignore using `memory_maintenance_v2`. Only put/remove Sectio
 operations are accepted; confidence is not an admission threshold. Unmodified
 Sections retain their bytes. The packaged `dist/v2/memory-maintainer.md` is trusted
 instruction text; document and conversation content cannot override it.
+
+Every projected observation carries a host-assigned `source_kind`: `user_turn`
+(delivered user expressions from Pi or the MCP relay) or `agent_import` (an Init
+submission, with `import.source_label`, `import.basis` and `import.gaps`). The request
+projection gained these fields; the response schema is unchanged and old receipts
+need no migration. `agent_import` observations are batched apart from user turns and may
+support retain with visible attribution; as sole evidence they cannot forget, remove or
+replace Sections that any user turn produced (see "What Init means").
 
 Scope (`global` or the current project) means applicability. Profile, Preferences and
 Project Markdown are target documents, not semantic domains. The maintainer uses
@@ -196,7 +342,24 @@ node scripts/verify.mjs
 # 修改包导出/消费方式时，构建后追加：
 npm run test:consumer
 npm pack --dry-run
+# 隔离数据目录 + 合成维护模型的 Init → 本地文件 → 读取 演示（不证明真实模型语义）：
+npm run build && node scripts/demo-init-synthetic.mjs --home /tmp/common-memory-demo
 ```
+
+The demo script prints the Codex/Pi/`show` invocations for its data directory. Real
+ChatGPT desktop, Codex CLI and Pi sessions are recorded separately in
+`docs/init-v0.1-verification.md`, which distinguishes synthetic tests, real client
+protocol/host integration, and the real end-to-end loop.
+
+### Reading limitations
+
+Reads are lock-free file reads of atomically published Markdown; a crash between
+staging and publication is repaired by the next Writer start, so a read-only process
+can briefly see the previous published state. Reads never migrate, repair or create
+canonical files. Consumers receive whole documents; only the Writer bounds their size.
+The `instructions`/description text asks consumers to use memory for questions about
+the user; whether a given client model actually calls `memory_read` for a given
+question is client behaviour, not something this server can enforce.
 
 Tests use scripted model responses to prove protocol, capture, scheduling and commit
 behavior; they do not prove that a real model will classify scope correctly or avoid

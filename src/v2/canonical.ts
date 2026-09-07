@@ -50,7 +50,7 @@ function parse(content: string, expectedTitle: string, hardLimitBytes: number): 
   for (const section of sections) { const newline = content.indexOf('\n', section.start); section.body = newline < 0 ? '' : content.slice(newline + 1, section.end); }
   return sections;
 }
-function targetInfo(target: string): { relative: string; title: string } {
+export function targetInfo(target: string): { relative: string; title: string } {
   if (target === 'profile') return { relative: 'memory/profile.md', title: 'Profile' };
   if (target === 'preferences') return { relative: 'memory/preferences.md', title: 'Preferences' };
   const match = /^project:([A-Za-z0-9_-]{1,128})$/.exec(target); if (!match) throw new Error('Invalid target');

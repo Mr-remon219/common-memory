@@ -55,7 +55,7 @@ export class RuntimeStore {
     return this.transaction(() => {
       const existing = this.db.prepare("SELECT * FROM observations WHERE sessionId=? AND entryId=?").get(input.sessionId,input.entryId) as Row | undefined;
       if (existing) { if (existing.digest !== digest || existing.scope !== input.scope || existing.source !== input.source) throw new Error("Conflicting observation identity"); return existing as unknown as Observation; }
-      const state = ["interactive","rpc","mcp_user_submission"].includes(input.source) ? "pending" : "quarantined";
+      const state = ["interactive","rpc","mcp_user_submission","agent_import"].includes(input.source) ? "pending" : "quarantined";
       const result = this.db.prepare("INSERT INTO observations(sessionId,entryId,text,digest,scope,observedAt,source,state,enqueuedAt) VALUES(?,?,?,?,?,?,?,?,?)").run(input.sessionId,input.entryId,input.text,digest,input.scope,input.observedAt,input.source,state,this.#now());
       return this.db.prepare("SELECT * FROM observations WHERE id=?").get(result.lastInsertRowid) as unknown as Observation;
     });
@@ -64,6 +64,13 @@ export class RuntimeStore {
   observationStatus(sessionId: string, entryId: string): {state: string} | null {
     const row = this.db.prepare("SELECT state FROM observations WHERE sessionId=? AND entryId=?").get(sessionId, entryId);
     return row ? {state: String(row.state)} : null;
+  }
+  /** Outcome without bodies: which documents currently link Sections to this observation, plus the diagnostic code. */
+  observationOutcome(sessionId: string, entryId: string): {state: string; issue: string | null; retainedIn: string[]} | null {
+    const row = this.db.prepare("SELECT id,state,issue FROM observations WHERE sessionId=? AND entryId=?").get(sessionId, entryId);
+    if (!row) return null;
+    const targets = this.db.prepare("SELECT DISTINCT target FROM associations WHERE sourceId=?").all(row.id!).map(link => String(link.target).replace(/:[a-f0-9]{64}$/, ''));
+    return {state: String(row.state), issue: row.issue === null || row.issue === undefined ? null : String(row.issue), retainedIn: [...new Set(targets)].sort()};
   }
   hasWork(): boolean { return Boolean(this.db.prepare("SELECT 1 FROM observations WHERE state IN ('pending','claimed') LIMIT 1").get()); }
   pending(): Observation[] { return this.db.prepare("SELECT * FROM observations WHERE state='pending' ORDER BY id").all() as unknown as Observation[]; }
@@ -107,7 +114,8 @@ export class RuntimeStore {
       }
       const observations: Observation[] = [];
       for (const observation of head) {
-        if (observation.scope !== head[0]!.scope) break;
+        // One batch shares a scope and a provenance class: agent imports never ride along with user turns.
+        if (observation.scope !== head[0]!.scope || (observation.source === "agent_import") !== (head[0]!.source === "agent_import")) break;
         observations.push(observation);
       }
       const id=randomUUID(),token=randomUUID();
@@ -145,6 +153,8 @@ export class RuntimeStore {
   documentVersion(target: string): string | null { const row=this.db.prepare("SELECT hash FROM document_versions WHERE target=?").get(target); return row ? String(row.hash) : null; }
   documentSourceKeys(target: string): string[] { return this.db.prepare("SELECT DISTINCT target FROM associations WHERE substr(target,1,?)=?").all(target.length+1,target+':').map(row=>String(row.target)); }
   sources(target: string): number[] {return this.db.prepare("SELECT sourceId FROM associations WHERE target=? ORDER BY sourceId").all(target).map(row=>Number(row.sourceId));}
+  /** Source kinds of linked observations; bodies may be pruned but provenance stays. */
+  sourceKinds(ids: readonly number[]): string[] { return ids.map(id => { const row=this.db.prepare("SELECT source FROM observations WHERE id=?").get(id); return row ? String(row.source) : 'unknown'; }); }
   fail(job: RuntimeJob, error: unknown): void {this.transaction(()=>{this.assertLease(job);const row=this.db.prepare("SELECT attempts FROM jobs WHERE id=?").get(job.id)!;const dead=Number(row.attempts)>=this.#options.maxAttempts;this.db.prepare("UPDATE jobs SET state=?,available=?,issue=? WHERE id=?").run(dead?"dead":"retry",this.#now()+Math.min(600000,1000*2**(Number(row.attempts)-1)),failureCode(error),job.id);if(dead)this.db.prepare("UPDATE observations SET state='dead' WHERE jobId=?").run(job.id);});}
   quarantine(job: RuntimeJob, observationId: number, issue: string): void {this.transaction(()=>{this.assertLease(job);if(!job.observations.some(o=>o.id===observationId))throw new Error("Unknown observation");this.db.prepare("UPDATE observations SET state='quarantined',jobId=NULL,issue=? WHERE id=?").run(issue,observationId);this.db.prepare("UPDATE observations SET state='pending',jobId=NULL WHERE jobId=?").run(job.id);this.db.prepare("UPDATE jobs SET state='done' WHERE id=?").run(job.id);});}
   retry(jobId: string): void {this.transaction(()=>{this.db.prepare("UPDATE observations SET state='pending',jobId=NULL WHERE jobId=? AND state='dead'").run(jobId);this.db.prepare("UPDATE jobs SET state='done' WHERE id=? AND state='dead'").run(jobId);});}

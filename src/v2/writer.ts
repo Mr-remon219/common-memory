@@ -7,6 +7,7 @@ import { withRepositoryLock } from './lock.js';
 import { failureCode } from './errors.js';
 import { maintenanceSchema, validateDecision, type Decision } from './contract.js';
 import { externalPreflight } from '../core/safety/external-preflight.js';
+import { AGENT_IMPORT_SOURCE, decodeAgentImport } from './import.js';
 import type { ApprovedModelRequest, MemoryModelPort } from '../memory-manager/contracts/model-port.js';
 
 export const maintainerPrompt = readFileSync(new URL('./memory-maintainer.md', import.meta.url), 'utf8');
@@ -76,6 +77,7 @@ export class Writer {
       if (result.kind === 'refusal') throw new Error('MODEL_REFUSAL');
       const evidence = new Map(job.observations.map(o => [`ev_${o.id}`,o.scope]));
       const decision = validateDecision(result.body, job.id, documents, evidence);
+      this.#guardImports(job, decision.decisions, documents);
       const operations = decision.decisions.flatMap(d => d.kind === 'ignore' ? [] : d.operations);
       for (const op of operations) if (op.target.startsWith('project:') && op.target !== scope) throw new Error('UNAUTHORIZED_SCOPE');
       for (const op of operations) if (!this.#options.writableScopes!.includes(op.target.startsWith('project:') ? op.target : 'global')) throw new Error('UNAUTHORIZED_WRITE');
@@ -110,12 +112,36 @@ export class Writer {
     } finally { clearInterval(timer); }
   }
   #quarantine(job: RuntimeJob, issue: string): {outcome:string} { this.store.quarantine(job, job.observations[0]!.id, issue); return {outcome:'quarantined'}; }
+  /**
+   * Another agent's summary is data, not authority over what the user said. A decision backed only by
+   * agent_import evidence (or an evidence-free decision in an import-only batch) may append new Sections
+   * or rework Sections whose every linked source is itself an import; it can never forget, remove or
+   * replace user-derived or unlinked Sections.
+   */
+  #guardImports(job: RuntimeJob, decisions: Decision[], documents: DocumentSnapshot[]): void {
+    const imported = new Set(job.observations.filter(o => o.source === AGENT_IMPORT_SOURCE).map(o => `ev_${o.id}`));
+    if (!imported.size) return;
+    const importOnlyBatch = imported.size === job.observations.length;
+    for (const d of decisions) {
+      if (d.kind === 'ignore') continue;
+      const importOnly = d.evidence.length ? d.evidence.every(ref => imported.has(ref)) : importOnlyBatch;
+      if (!importOnly) continue;
+      if (d.kind === 'forget') throw new Error('UNAUTHORIZED_FORGET_EVIDENCE');
+      for (const op of d.operations) {
+        if (op.section === null) continue;
+        const title = documents.find(doc => doc.target === op.target)?.sections.find(s => s.ref === op.section)?.title;
+        const sources = title === undefined ? [] : this.store.sources(`${op.target}:${digest(title)}`);
+        const ownedByImports = sources.length > 0 && this.store.sourceKinds(sources).every(kind => kind === AGENT_IMPORT_SOURCE);
+        if (!ownedByImports) throw new Error('UNAUTHORIZED_IMPORT_OVERWRITE');
+      }
+    }
+  }
   #request(job: RuntimeJob, documents: DocumentSnapshot[], context: RuntimeJob['observations'] = []): ApprovedModelRequest {
     return {prompt:maintainerPrompt,schema:maintenanceSchema,schemaName:'memory_maintenance_v2',projection:{
       version:'memory_maintenance_v2',request_id:job.id,now:new Date().toISOString(),
-      observations:job.observations.map(o => ({ref:`ev_${o.id}`,text:o.text,source_scope:o.scope,observed_at:o.observedAt,context_only:false})),
+      observations:job.observations.map(o => ({ref:`ev_${o.id}`,...describeSource(o),source_scope:o.scope,observed_at:o.observedAt,context_only:false})),
       documents:documents.map(doc => ({target:doc.target,hash:doc.hash,content:doc.content,sections:doc.sections,soft_budget_bytes:this.#options.documentSoftBytes ?? 8192,hard_budget_bytes:this.canonical.hardLimitBytes,writable:this.#options.writableScopes!.includes(documentScope(doc))})),
-      context_only:context.map(o => ({text:o.text,observed_at:o.observedAt,source_scope:o.scope,context_only:true})),
+      context_only:context.map(o => ({...describeSource(o),observed_at:o.observedAt,source_scope:o.scope,context_only:true})),
     }};
   }
   #bytes(request: ApprovedModelRequest): number { return this.#options.model.serializedRequestBytes?.(request) ?? Buffer.byteLength(JSON.stringify(request)); }
@@ -160,6 +186,13 @@ export class Writer {
   close(): void { this.store.close(); }
 }
 function documentScope(doc: DocumentSnapshot): string { return doc.target.startsWith('project:') ? doc.target : 'global'; }
+/** The host, not the text, tells the model whether it reads a user turn or another agent's summary. */
+function describeSource(o: RuntimeJob['observations'][number]): { text: string | null; source_kind: 'user_turn' | 'agent_import'; import?: { source_label: string; basis: string; gaps: string | null } } {
+  if (o.source !== AGENT_IMPORT_SOURCE) return { text: o.text, source_kind: 'user_turn' };
+  const payload = o.text === null ? null : decodeAgentImport(o.text);
+  if (!payload) return { text: o.text, source_kind: 'agent_import', import: { source_label: 'unknown', basis: 'unknown', gaps: null } };
+  return { text: payload.understanding, source_kind: 'agent_import', import: { source_label: payload.sourceLabel, basis: payload.basis, gaps: payload.gaps ?? null } };
+}
 function digest(value:string):string { return createHash('sha256').update(value).digest('hex'); }
 function abortable<T>(promise:Promise<T>,signal:AbortSignal):Promise<T> {
   return new Promise((resolve,reject) => { const abort = () => reject(new Error('CANCELLED')); signal.addEventListener('abort',abort,{once:true}); if(signal.aborted) abort(); promise.then(resolve,reject).finally(() => signal.removeEventListener('abort',abort)); });
