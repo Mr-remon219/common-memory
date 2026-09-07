@@ -9,8 +9,18 @@ import { printStatus, runSetupWizard, runTui, UserCancelled } from "./tui.js";
 
 async function main(): Promise<void> {
   const [command,...args]=process.argv.slice(2);
-  if(command==="--help" || command==="-h") {console.log("Common Memory V2\n\ncommon-memory [config|status|flush]\ncommon-memory show [--workspace <absolute-path>]\ncommon-memory project register <root> <name>\ncommon-memory project list\ncommon-memory project remove <id>\ncommon-memory retry <job-id>\ncommon-memory mcp --client-id <id> [--capability relay|init|read]... [--workspace <absolute-path>]... [--global] [--accept-client-reported-user-turns]");return;}
+  if(command==="--help" || command==="-h") {console.log("Common Memory V2\n\ncommon-memory [config|status|flush]\ncommon-memory show [--workspace <absolute-path>]\ncommon-memory import <file.md> [--workspace <absolute-path>] [--author user|agent|third_party|mixed|unknown] [--label <text>] [--no-wait]\ncommon-memory project register <root> <name>\ncommon-memory project list\ncommon-memory project remove <id>\ncommon-memory retry <job-id>\ncommon-memory mcp --client-id <id> [--capability relay|init|read]... [--workspace <absolute-path>]... [--global] [--accept-client-reported-user-turns]\ncommon-memory mcp-config [--wsl] [--distro <name>] [--user <name>] [--workspace <absolute-path>]...");return;}
   if(command==="mcp") {await (await import('../mcp/stdio.js')).runMcp(args);return;}
+  if(command==="import") {
+    const config=loadConfig();if(!config)throw new Error("Run common-memory config first");
+    const {runImport}=await import('./import-command.js');
+    const {exitCode}=await runImport(config,args);process.exitCode=exitCode;return;
+  }
+  if(command==="mcp-config") {
+    const config=loadConfig();if(!config)throw new Error("Run common-memory config first");
+    const {parseMcpConfigArgs,renderMcpConfig}=await import('./mcp-config.js');
+    process.stdout.write(renderMcpConfig(config,parseMcpConfigArgs(args)));return;
+  }
   if(command==="show") {
     // Same read path and authorization as MCP memory_read and the Pi extension: what consumers see.
     const config=loadConfig();if(!config)throw new Error("Run common-memory config first");

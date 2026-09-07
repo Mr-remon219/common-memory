@@ -3,12 +3,19 @@
 // It proves the local mechanics only: init MCP server -> durable queue -> unchanged Writer -> canonical Markdown -> read.
 // It does not prove real-model semantics, nor that a real ChatGPT/Codex/Pi client called these tools.
 //
-//   node scripts/demo-init-synthetic.mjs [--home <dir>] [--keep-provider]
+//   node scripts/demo-init-synthetic.mjs [--home <new-or-empty-dir>] [--markdown <file.md>] [--keep-provider]
 //
-// Afterwards the printed Codex/Pi/ChatGPT configuration points at the same COMMON_MEMORY_HOME.
+// --markdown additionally runs `common-memory import <file.md>` against the same isolated home, so both
+// chains (agent Init and Markdown import) land in one canonical memory that the printed readers see.
+//
+// The demo only ever writes into a fresh, isolated directory (default: a new directory under the OS
+// temp dir). It refuses a --home that already holds files, and never deletes or overwrites an
+// existing configuration, .env or data directory. Afterwards the printed Codex/Pi/ChatGPT
+// configuration points at the same COMMON_MEMORY_HOME.
 import { createServer } from 'node:http';
 import { once } from 'node:events';
-import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/client';
@@ -16,12 +23,19 @@ import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const args = process.argv.slice(2);
-const home = resolve(args.includes('--home') ? args[args.indexOf('--home') + 1] : '/tmp/common-memory-demo');
 const keepProvider = args.includes('--keep-provider');
+const value = (flag) => { if (!args.includes(flag)) return null; const raw = args[args.indexOf(flag) + 1]; if (raw === undefined || raw.startsWith('--')) throw new Error(`${flag} requires a value`); return resolve(raw); };
+const markdown = value('--markdown');
+let home = value('--home');
+if (home) {
+  if (existsSync(home)) {
+    if (!statSync(home).isDirectory()) throw new Error(`Refusing to use ${home}: not a directory`);
+    if (readdirSync(home).length) throw new Error(`Refusing to reuse non-empty ${home}: the demo never deletes or overwrites existing configuration or data. Pass a new --home.`);
+  } else mkdirSync(home, { recursive: true, mode: 0o700 });
+} else home = mkdtempSync(join(tmpdir(), 'common-memory-demo-'));
+console.log(`demo home (isolated): ${home}`);
 const cli = join(root, 'dist/cli/main.js');
 if (!existsSync(cli)) throw new Error('Run npm run build first');
-if (existsSync(join(home, 'data'))) { rmSync(join(home, 'data'), { recursive: true, force: true }); }
-mkdirSync(home, { recursive: true, mode: 0o700 });
 
 // Synthetic, clearly fictional facts: not in this repository, not guessable from common sense.
 const understanding = [
@@ -30,12 +44,16 @@ const understanding = [
   'They dislike being addressed with honorifics.',
 ].join(' ');
 
-// Scripted maintainer: retains the import as attributed understanding in Profile and the reply preference in Preferences.
+// Scripted maintainer: retains the agent import as attributed understanding in Profile and the reply preference in
+// Preferences; retains each imported Markdown part as one attributed Section (quoted in a fence, so headings stay data).
 const provider = createServer(async (req, res) => {
   let body = ''; for await (const chunk of req) body += chunk;
   const projection = JSON.parse(JSON.parse(body).input[1].content[0].text);
   const imports = projection.observations.filter(o => o.source_kind === 'agent_import');
-  const decisions = imports.length ? [
+  const documents = projection.observations.filter(o => o.source_kind === 'document_import');
+  const decisions = documents.length ? documents.map(o => ({ kind: 'retain', admission: 'remember', lifetime: 'until_changed', applicability: 'global', confidence: 0.6, evidence: [o.ref], reason: 'scripted demo',
+      operations: [{ op: 'put_section', target: 'profile', section: null, title: `Imported ${o.import.file_name} part ${o.import.part.index} of ${o.import.part.count}`, body: `Imported from ${o.import.file_name} (declared author: ${o.import.declared_author}) on ${projection.now.slice(0, 10)}; ancestor headings ${JSON.stringify(o.import.heading_path)}; not user-verified:\n\n\`\`\`\`markdown\n${o.text.trimEnd()}\n\`\`\`\`\n` }] }))
+    : imports.length ? [
     { kind: 'retain', admission: 'remember', lifetime: 'until_changed', applicability: 'global', confidence: 0.7, evidence: imports.map(o => o.ref), reason: 'scripted demo',
       operations: [{ op: 'put_section', target: 'profile', section: null, title: 'Imported understanding', body: `Imported from ${imports[0].import.source_label} on ${projection.now.slice(0, 10)} (basis: ${imports[0].import.basis}; not user-verified): ${imports[0].text}\nGaps reported by the source: ${imports[0].import.gaps ?? 'none'}\n` }] },
     { kind: 'retain', admission: 'remember', lifetime: 'until_changed', applicability: 'global', confidence: 0.7, evidence: imports.map(o => o.ref), reason: 'scripted demo',
@@ -51,12 +69,13 @@ const port = provider.address().port;
 const config = {
   schemaVersion: 2, dataRoot: join(home, 'data'),
   remote: { provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${port}/v1`, model: 'scripted-demo', apiKeyEnv: 'COMMON_MEMORY_DEMO_KEY' },
-  disclosure: { enabled: true, allowedScopes: ['global'], allowedProvenance: ['user_explicit', 'agent_observation'], maxExcerptBytes: 131072, maxCandidateBytes: 131072, maxTotalBytes: 131072 },
+  disclosure: { enabled: true, allowedScopes: ['global'], allowedProvenance: ['user_explicit', 'agent_observation', 'document_import'], maxExcerptBytes: 131072, maxCandidateBytes: 131072, maxTotalBytes: 131072 },
   writableScopes: ['global'],
   scheduler: { turnThreshold: 6, byteThreshold: 16384, idleMs: 120000, maxWaitMs: 600000, leaseMs: 120000, maxAttempts: 5 },
 };
-writeFileSync(join(home, 'config.json'), JSON.stringify(config, null, 2) + '\n', { mode: 0o600 });
-writeFileSync(join(home, '.env'), 'COMMON_MEMORY_DEMO_KEY="synthetic-demo-key"\n', { mode: 0o600 });
+// 'wx': create only; an existing file is a hard error, never overwritten.
+writeFileSync(join(home, 'config.json'), JSON.stringify(config, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+writeFileSync(join(home, '.env'), 'COMMON_MEMORY_DEMO_KEY="synthetic-demo-key"\n', { mode: 0o600, flag: 'wx' });
 const env = { ...process.env, COMMON_MEMORY_HOME: home };
 
 // 1. "ChatGPT" side: init-only MCP process.
@@ -78,6 +97,16 @@ console.log('memory_status ->', JSON.stringify(status));
 await client.close();
 if (status.state !== 'processed' || !status.retainedIn.length) { provider.close(); process.exit(1); }
 
+// 1b. Optional Markdown chain: the CLI import entry, the same Writer, the same canonical files.
+if (markdown) {
+  const { spawn } = await import('node:child_process');
+  console.log(`\n--- common-memory import ${markdown} ---`);
+  // Asynchronous: the scripted provider in this process must keep answering while the import runs.
+  const child = spawn(process.execPath, [cli, 'import', markdown], { env, stdio: 'inherit' });
+  const [status] = await once(child, 'exit');
+  if (status !== 0) { provider.close(); process.exit(status ?? 1); }
+}
+
 // 2. Local view (what the user can inspect, and exactly what consumers read).
 console.log('\n--- memory/profile.md ---\n' + readFileSync(join(home, 'data/memory/profile.md'), 'utf8'));
 console.log('--- memory/preferences.md ---\n' + readFileSync(join(home, 'data/memory/preferences.md'), 'utf8'));
@@ -98,6 +127,9 @@ COMMON_MEMORY_HOME=${home} node node_modules/@earendil-works/pi-coding-agent/dis
 
 Local view:
 COMMON_MEMORY_HOME=${home} node ${cli} show
+
+Host configuration with pinned paths (add --wsl on a WSL host for the Windows ChatGPT/Codex desktop app):
+COMMON_MEMORY_HOME=${home} node ${cli} mcp-config
 `);
 if (keepProvider) { console.log(`Synthetic provider stays up on 127.0.0.1:${port}; press Ctrl-C to stop.`); }
 else provider.close();

@@ -3,6 +3,22 @@ export const IMPORT_BASES = ['saved_memories', 'chat_history', 'current_conversa
 export type ImportBasis = typeof IMPORT_BASES[number];
 export interface AgentImportPayload { sourceLabel: string; basis: ImportBasis; understanding: string; gaps?: string | undefined }
 export const AGENT_IMPORT_SOURCE = 'agent_import';
+/** A local file the user chose to import; one observation per structural chunk (see document-import.ts). */
+export const DOCUMENT_IMPORT_SOURCE = 'document_import';
+export type ProvenanceKind = 'user_explicit' | 'agent_observation' | 'document_import';
+/**
+ * Host-assigned observation source -> disclosure provenance class. This single mapping decides
+ * what is admitted as pending, what shares a batch, which import guard applies and which
+ * `disclosure.allowedProvenance` entry authorizes sending it to the remote model.
+ */
+export function provenanceOf(source: string): ProvenanceKind | null {
+  if (source === 'interactive' || source === 'rpc' || source === 'mcp_user_submission') return 'user_explicit';
+  if (source === AGENT_IMPORT_SOURCE) return 'agent_observation';
+  if (source === DOCUMENT_IMPORT_SOURCE) return 'document_import';
+  return null;
+}
+/** Imports are data about the user reported by something other than the user; they never carry user authority. */
+export function isImportSource(source: string): boolean { const p = provenanceOf(source); return p !== null && p !== 'user_explicit'; }
 export const MAX_IMPORT_UNDERSTANDING_BYTES = 32768;
 export const MAX_IMPORT_GAPS_BYTES = 4096;
 const LABEL = /^[A-Za-z0-9][A-Za-z0-9 ._:-]{0,63}$/;

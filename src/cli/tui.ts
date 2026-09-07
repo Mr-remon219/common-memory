@@ -9,6 +9,7 @@ import { normalizeOpenAICompatibleBaseUrl } from "../memory-manager/openai/opena
 const PROVENANCE_OPTIONS: Array<{ value: ProvenanceType; label: string; hint: string }> = [
   { value: "user_explicit", label: "Delivered user expressions", hint: "Includes corrections and forget requests" },
   { value: "agent_observation", label: "Agent-reported understanding", hint: "Required for Init imports from other agents; stored as attributed, not as user statements" },
+  { value: "document_import", label: "Imported Markdown documents", hint: "Required for common-memory import <file.md>; stored as attributed material, never as user statements" },
 ];
 
 export async function runTui(): Promise<void> {

@@ -4,6 +4,7 @@ import { lstatSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID, createHash } from "node:crypto";
 import { safeDirectory } from "./lock.js";
+import { provenanceOf } from "./import.js";
 
 export interface ObservationInput { sessionId: string; entryId: string; text: string; scope: string; observedAt: string; source: string }
 export interface Observation extends Omit<ObservationInput, "text"> { id: number; text: string | null; state: string; enqueuedAt: number }
@@ -55,7 +56,7 @@ export class RuntimeStore {
     return this.transaction(() => {
       const existing = this.db.prepare("SELECT * FROM observations WHERE sessionId=? AND entryId=?").get(input.sessionId,input.entryId) as Row | undefined;
       if (existing) { if (existing.digest !== digest || existing.scope !== input.scope || existing.source !== input.source) throw new Error("Conflicting observation identity"); return existing as unknown as Observation; }
-      const state = ["interactive","rpc","mcp_user_submission","agent_import"].includes(input.source) ? "pending" : "quarantined";
+      const state = provenanceOf(input.source) !== null ? "pending" : "quarantined";
       const result = this.db.prepare("INSERT INTO observations(sessionId,entryId,text,digest,scope,observedAt,source,state,enqueuedAt) VALUES(?,?,?,?,?,?,?,?,?)").run(input.sessionId,input.entryId,input.text,digest,input.scope,input.observedAt,input.source,state,this.#now());
       return this.db.prepare("SELECT * FROM observations WHERE id=?").get(result.lastInsertRowid) as unknown as Observation;
     });
@@ -114,8 +115,9 @@ export class RuntimeStore {
       }
       const observations: Observation[] = [];
       for (const observation of head) {
-        // One batch shares a scope and a provenance class: agent imports never ride along with user turns.
-        if (observation.scope !== head[0]!.scope || (observation.source === "agent_import") !== (head[0]!.source === "agent_import")) break;
+        // One batch shares a scope and a provenance class: imports never ride along with user turns,
+        // and agent summaries never share a batch with imported documents.
+        if (observation.scope !== head[0]!.scope || provenanceOf(observation.source) !== provenanceOf(head[0]!.source)) break;
         observations.push(observation);
       }
       const id=randomUUID(),token=randomUUID();

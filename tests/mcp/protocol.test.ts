@@ -104,7 +104,8 @@ it('init launch imports agent-reported understanding through the unchanged Write
   provider.listen(0, '127.0.0.1'); await once(provider, 'listening');
   cleanup.push(() => new Promise<void>(r => provider.close(() => r())));
   const { env, config, home } = fixture(`http://127.0.0.1:${(provider.address() as {port: number}).port}/v1`, 6);
-  config.disclosure.allowedProvenance = ['user_explicit', 'agent_observation'];
+  // Init-only authorization: no user_explicit. The process must still start its Writer and process imports.
+  config.disclosure.allowedProvenance = ['agent_observation'];
   writeFileSync(join(home, 'config.json'), JSON.stringify(config));
   const { client } = await connect(env, 'chatgpt', false, false, ['--capability', 'init']);
   expect((await client.listTools()).tools.map(t => t.name)).toEqual(['memory_init', 'memory_status']);

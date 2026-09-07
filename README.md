@@ -10,8 +10,11 @@ they are; there is no retrieval ranking.
 
 Init v0.1 (`docs/init-v0.1-design.md`, `docs/init-v0.1-verification.md`) adds the
 cross-agent loop: another agent (ChatGPT desktop) imports its existing understanding
-through `memory_init`, the unchanged Writer decides what to keep, and Codex CLI (MCP
-`memory_read`) and Pi (system-prompt injection) read the same canonical files.
+through `memory_init`, the user imports local Markdown files with `common-memory import`,
+the unchanged Writer decides what to keep from either, and Codex CLI (MCP `memory_read`)
+and Pi (system-prompt injection) read the same canonical files. On Windows, Common
+Memory runs inside WSL and the ChatGPT/Codex desktop app reaches it through `wsl.exe`
+(`common-memory mcp-config --wsl`).
 
 配套的 Writer 评测规范已迁移到独立仓库：[Memory Benchmark](https://github.com/Mr-remon219/memory-benchmark)。
 
@@ -46,17 +49,64 @@ not change capture, thresholds or Writer behaviour.
 common-memory config
 common-memory status
 common-memory show [--workspace /absolute/project/path]
+common-memory import <file.md> [--workspace /absolute/project/path] [--author user|agent|third_party|mixed|unknown] [--label <text>] [--no-wait]
 common-memory flush
 common-memory retry <dead-job-id>
 common-memory project register /absolute/project/path "Display name"
 common-memory project list
 common-memory project remove <id>
+common-memory mcp-config [--wsl] [--distro <name>] [--user <name>] [--workspace /absolute/project/path]...
 ```
 
 `show` prints the memory directory and exactly what consumers (MCP `memory_read`, Pi)
 receive for `global` plus the optional registered workspace, using the same
 authorization. The canonical files themselves are plain Markdown under
 `<dataRoot>/memory/` and can be opened with any editor.
+
+### Importing a Markdown file
+
+`common-memory import <file.md>` brings one local Markdown file into memory through the
+same Writer that handles user turns and Init. It never copies the file into
+`profile.md` or bypasses the Core. The import step is input preprocessing only:
+
+- The file must be a regular `.md`/`.markdown` file (no symlinks), strict UTF-8 without
+  NUL bytes, non-empty after trimming, and at most 256 KiB. Anything else is rejected
+  with a code (`FILE_NOT_FOUND`, `UNSUPPORTED_FILE_TYPE`, `INVALID_ENCODING`,
+  `EMPTY_DOCUMENT`, `DOCUMENT_TOO_LARGE`) before anything is queued. Nothing is truncated.
+- A file that fits the 32 KiB per-item budget is one observation, verbatim. Larger files
+  are split only at Markdown structure: headings start new units, blank lines separate
+  paragraphs, fenced code is never split, and whole sections stay together when they fit.
+  Every part records the ancestor headings it sits under (`heading_path`) and its position
+  (`part i of n`). A single paragraph or fence larger than the budget rejects the whole
+  import (`IMPORT_CHUNK_TOO_LARGE`); an unterminated fence makes the rest of the file one
+  fence. The 32 KiB budget is fixed; with a lowered `disclosure.maxTotalBytes` the Writer
+  may still quarantine a part that does not fit its request (`OVERSIZED_COMPLETE_TURN`).
+- The Writer's outbound safety scan runs before queuing; a violating part is reported as
+  `SENSITIVE_CONTENT_REJECTED part i/n: <rule ids>` and the file is not imported.
+- `--author` records who the importer says wrote the file (default `unknown`), `--label`
+  a display label (default the file name). Both are recorded metadata for the maintainer;
+  neither grants authority. Even `--author user` remains `document_import`, not a user
+  statement, because Markdown is a format and choosing to import a file is not asserting
+  each sentence in it.
+- Identity is the content digest within the target context (`md-<sha256>`): the same bytes
+  under another file name, label or author are the same material (reported as a duplicate,
+  nothing new is queued, the original metadata stays); changed bytes are a new import.
+  Scope comes from `--workspace` (a registered project in `disclosure.allowedScopes`) or
+  defaults to `global`.
+
+All parts are queued in one transaction with a flush request, then the command runs the
+Writer loop like `flush` and prints per-part states (`pending`, `claimed`, `processed`,
+`quarantined`, `dead`), the documents each part is retained in, and a final `complete`
+flag that is true only when every part was processed. Parts are committed batch by batch
+with their own receipts; a partially processed import is reported as incomplete (exit
+code 1), never as success. Re-running `import` on the same file resumes pending or
+retrying parts (dead jobs need `common-memory retry <job-id>`); a quarantined part is
+final for that content and needs a changed file. `--no-wait` only queues. Enable the
+provenance first:
+`disclosure.allowedProvenance` must contain `document_import` (wizard option "Imported
+Markdown documents"), otherwise `IMPORT_DISABLED`. Text inside the file is data: memory
+commands, links and code in it are never executed or followed, and the import cannot
+forget, remove or replace Sections that user turns produced (see "What Init means").
 
 Project IDs are generated locally. Registry matching uses real paths and the longest
 ancestor, frozen at capture time. Registration alone grants no permission: separately
@@ -142,12 +192,17 @@ untrusted agent-reported data: the maintainer receives `source_kind: "agent_impo
 with the label, basis and gaps, must keep the source nature visible in any retained
 Section (for example "Imported from chatgpt-desktop on 2026-09-07 …"), must not
 present it as the user's words, and must not overwrite conflicting user-stated content.
-The executor enforces the hard part structurally: imports are batched separately from
-user turns, and a decision backed only by `agent_import` evidence (or an evidence-free
-`maintain` in an import-only batch) may append new Sections or rework Sections whose
-every linked source is itself an import, but is rejected if it tries to `forget`
-(`UNAUTHORIZED_FORGET_EVIDENCE`), remove, or replace a user-derived or unlinked Section
-(`UNAUTHORIZED_IMPORT_OVERWRITE`). Init therefore never clears existing documents or
+The executor enforces the hard part structurally for every import kind (`agent_import`
+and `document_import` alike): imports are batched separately from user turns, and a
+decision backed only by import evidence (or an evidence-free `maintain` in an import-only
+batch) may append new Sections or rework Sections whose every linked source is itself an
+import, but is rejected if it tries to `forget` (`UNAUTHORIZED_FORGET_EVIDENCE`), remove,
+or replace a user-derived or unlinked Section (`UNAUTHORIZED_IMPORT_OVERWRITE`). A Section the user edited by hand counts as the
+user's even if an import created it: its stale title links are not trusted. What the
+executor cannot judge is semantic: whether a new attributed Section quietly contradicts a
+user-stated one, or whether first-person text in a file describes the user; the packaged
+maintainer instructions make those the model's responsibility and require visible
+attribution. Init therefore never clears existing documents or
 runtime state; existing safety scanning, size limits, scope authorization, CAS, lease
 fencing and recovery apply unchanged. Init does request a flush, which — like
 `/memory-flush` — also lets already queued user turns be processed at the next stable
@@ -175,18 +230,10 @@ env = { COMMON_MEMORY_HOME = "/absolute/path/to/.common-memory" }
 default_tools_approval_mode = "approve"
 ```
 
-When the desktop app runs on Windows and Common Memory lives in WSL, launch through
-`wsl.exe` with absolute WSL paths (no login shell, so `PATH` is not available):
-
-```toml
-[mcp_servers.common_memory_init]
-command = "wsl.exe"
-args = ["-e", "/usr/bin/env", "COMMON_MEMORY_HOME=/home/<user>/.common-memory",
-        "/home/<user>/.local/share/fnm/node-versions/v24.20.0/installation/bin/node",
-        "/home/<user>/common-memory/dist/cli/main.js", "mcp",
-        "--client-id", "chatgpt-desktop", "--capability", "init", "--global"]
-default_tools_approval_mode = "approve"
-```
+When the desktop app runs on Windows and Common Memory lives in WSL, use the WSL bridge
+described under "Windows / WSL deployment" below: run `common-memory mcp-config --wsl`
+inside WSL and paste its output. It pins the distribution, Linux user, configuration
+directory, dataRoot, node binary and CLI entry, so the host cannot land on another store.
 
 Then, in a chat that can use that host's MCP servers, ask: “把你目前对我的长期理解导入
 Common Memory。” The agent should call `memory_init`, then `memory_status` with the same
@@ -215,7 +262,49 @@ ChatGPT init server, keep Codex CLI from seeing it with a profile file
 `mcp_servers.common_memory_init.enabled = false` and run `codex --profile
 memory-reader`, or pass `-c mcp_servers.common_memory_init.enabled=false`. Disable
 Codex's own local memories (`features.memories = false`) when you need to prove that
-an answer came from Common Memory.
+an answer came from Common Memory. `common-memory mcp-config` prints this block with the
+paths of the runtime you are actually using.
+
+### Windows / WSL deployment
+
+On Windows, Common Memory runs in WSL only: one configuration authority
+(`COMMON_MEMORY_HOME`, default `~/.common-memory` of the Linux user), one dataRoot, one
+build. PowerShell and the ChatGPT/Codex desktop app are thin bridges that start the WSL
+process with `wsl.exe`; there is no Windows-native Core, second store, installer or
+resident service. Different MCP processes still start per host role (`init`, `read`) and
+share the data the Core manages.
+
+Inside WSL, after `npm run build` and `common-memory config`:
+
+```sh
+common-memory mcp-config --wsl [--workspace /home/<user>/project]
+```
+
+prints ready-to-paste `[mcp_servers.*]` blocks of the form
+
+```toml
+[mcp_servers.common_memory_init]
+command = "wsl.exe"
+args = ["-d", "Ubuntu", "-u", "<linux-user>", "-e", "/usr/bin/env",
+        "COMMON_MEMORY_HOME=/home/<linux-user>/.common-memory",
+        "/home/<linux-user>/.local/share/fnm/node-versions/v24.20.0/installation/bin/node",
+        "/home/<linux-user>/common-memory/dist/cli/main.js", "mcp",
+        "--client-id", "chatgpt-desktop", "--capability", "init", "--global"]
+default_tools_approval_mode = "approve"
+```
+
+with a header recording the distribution (`WSL_DISTRO_NAME`), Linux user, configuration
+directory, dataRoot, node and CLI entry that were in effect. `-d`/`-u` fix the
+distribution and user instead of relying on the WSL defaults; `-e` runs no login shell,
+so `PATH` and shell profiles are unavailable and every path is absolute. Paste the blocks
+into the Windows `%USERPROFILE%\.codex\config.toml` (ChatGPT desktop / Codex host). The
+WSL `~/.codex/config.toml` used by Codex CLI inside WSL takes the non-`--wsl` output.
+Workspaces are WSL paths registered with `common-memory project register`; a Windows path
+string (`C:\...`) is not a registered project and is rejected rather than mapped. Pi is
+supported when it runs inside the same WSL distribution; Windows-native Pi is not covered.
+`docs/init-v0.1-verification.md` records that a read-only process launched through
+`wsl.exe -d Ubuntu -u <user> -e ...` returns byte-identical `memory_read` content to a
+direct launch of the same store (`tests/cli/demo-and-bridge.test.ts`, skipped off-WSL).
 
 ### Relay (pre-existing)
 
@@ -274,12 +363,23 @@ Sections retain their bytes. The packaged `dist/v2/memory-maintainer.md` is trus
 instruction text; document and conversation content cannot override it.
 
 Every projected observation carries a host-assigned `source_kind`: `user_turn`
-(delivered user expressions from Pi or the MCP relay) or `agent_import` (an Init
-submission, with `import.source_label`, `import.basis` and `import.gaps`). The request
-projection gained these fields; the response schema is unchanged and old receipts
-need no migration. `agent_import` observations are batched apart from user turns and may
-support retain with visible attribution; as sole evidence they cannot forget, remove or
-replace Sections that any user turn produced (see "What Init means").
+(delivered user expressions from Pi or the MCP relay), `agent_import` (an Init
+submission, with `import.source_label`, `import.basis` and `import.gaps`) or
+`document_import` (one part of a `common-memory import` file, with `import.source_label`,
+`import.file_name`, `import.declared_author`, `import.part {index, count}` and
+`import.heading_path`). The observation's stored `source` maps to one disclosure
+provenance class (`user_explicit`, `agent_observation`, `document_import`); that single
+mapping decides admission, batching, the import guard and authorization. A batch holds one
+scope and one provenance class: user turns, agent imports and document imports never
+share a batch (parts of different Markdown files may). Before any network call the Writer
+checks the batch's class against `disclosure.allowedProvenance`; an unauthorized batch is
+quarantined locally, one head observation per run (`UNAUTHORIZED_PROVENANCE`, like
+`UNAUTHORIZED_SOURCE`), so an init-only or import-only configuration processes what it
+authorizes and never discloses user turns. Import
+observations may support retain with visible attribution; as sole evidence they cannot
+forget, remove or replace Sections that any user turn produced (see "What Init means").
+The request projection gained these fields; the response schema, receipts, database
+schema and existing Markdown are unchanged and need no migration.
 
 Scope (`global` or the current project) means applicability. Profile, Preferences and
 Project Markdown are target documents, not semantic domains. The maintainer uses
@@ -342,12 +442,14 @@ node scripts/verify.mjs
 # 修改包导出/消费方式时，构建后追加：
 npm run test:consumer
 npm pack --dry-run
-# 隔离数据目录 + 合成维护模型的 Init → 本地文件 → 读取 演示（不证明真实模型语义）：
-npm run build && node scripts/demo-init-synthetic.mjs --home /tmp/common-memory-demo
+# 隔离数据目录 + 合成维护模型：Init 与 Markdown 导入 → 本地文件 → 读取 演示（不证明真实模型语义）：
+npm run build && node scripts/demo-init-synthetic.mjs [--home <new-or-empty-dir>] [--markdown notes.md]
 ```
 
-The demo script prints the Codex/Pi/`show` invocations for its data directory. Real
-ChatGPT desktop, Codex CLI and Pi sessions are recorded separately in
+The demo only writes into a fresh directory (a new temp directory by default); it refuses
+a non-empty `--home` and never deletes or overwrites an existing configuration, `.env` or
+data directory. It prints the Codex/Pi/`show`/`mcp-config` invocations for its data
+directory. Real ChatGPT desktop, Codex CLI and Pi sessions are recorded separately in
 `docs/init-v0.1-verification.md`, which distinguishes synthetic tests, real client
 protocol/host integration, and the real end-to-end loop.
 

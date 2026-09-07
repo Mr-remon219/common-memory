@@ -5,7 +5,7 @@
 持久化实际用户投递 → 稳定 Entry 绑定 → 混合触发 → 模型决策 → 有限 Markdown Section 更新 → 可恢复提交。
 Write 及必要当前状态检查。Markdown 是长期内容权威；runtime SQLite 是不可随意重建的队列、租约和来源元数据。删除 Fact/Proposal/Review、Recall/FTS/ranking/context pack、治理/Undo 及兼容层，不迁移、不删除工作区外用户数据。不引入 Temporary Store、向量库或常驻服务。
 
-**Init v0.1 增补（2026-09-07，见 `init-v0.1-design.md`）**：本节最初写的“仅 Write”已放宽为两条受授权约束的接口。(1) Init：`memory_init` 把其他 Agent 的自述理解作为 `agent_import` 观察进入同一队列，由不变的 Writer 决策；投影新增 `source_kind`/`import` 字段，输出协议不变；agent_import 不能单独作为 forget 证据。(2) 只读披露：`src/v2/reader.ts` 按启动上下文 ∩ `disclosure.allowedScopes` 返回当前 Markdown 原文（不建目录、不开 SQLite、不取锁），供 MCP `memory_read`（`--capability read` 进程）、Pi `before_agent_start` 注入与 CLI `show` 共用。仍不引入检索、索引、排序或 Recall 写权限。
+**Init v0.1 增补（2026-09-07，见 `init-v0.1-design.md`）**：本节最初写的“仅 Write”已放宽为两条受授权约束的接口。(1) Init：`memory_init` 把其他 Agent 的自述理解作为 `agent_import` 观察进入同一队列，由不变的 Writer 决策；投影新增 `source_kind`/`import` 字段，输出协议不变；agent_import 不能单独作为 forget 证据。(1b) Markdown 导入（收尾增补，见 `init-v0.1-design.md` §9）：`common-memory import <file.md>` 经输入预处理（文件校验、结构化分块、信封）成为 `document_import` 观察，走同一队列、同一 Writer、同一导入守卫；来源→provenance 映射（`src/v2/import.ts`）统一决定入队、分批与按 `disclosure.allowedProvenance` 的逐批授权。(2) 只读披露：`src/v2/reader.ts` 按启动上下文 ∩ `disclosure.allowedScopes` 返回当前 Markdown 原文（不建目录、不开 SQLite、不取锁），供 MCP `memory_read`（`--capability read` 进程）、Pi `before_agent_start` 注入与 CLI `show` 共用。仍不引入检索、索引、排序或 Recall 写权限。
 
 ## 理由与批准计划的研究记录
 

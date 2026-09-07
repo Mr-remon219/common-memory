@@ -1,6 +1,6 @@
 # Init v0.1：跨 Agent 记忆迁移与复用 — 研究、设计与计划
 
-日期：2026-09-07。分支 `init-v0.1`（worktree），基线 HEAD `a9fc436`（main 同一提交），工作树干净。
+日期：2026-09-07。分支 `init-v0.1`（worktree），基线 HEAD `a9fc436`（main 同一提交），工作树干净。收尾增量（Markdown 导入、来源授权、WSL 桥接）基于 `3c70c9b`，见 §9。
 Node v24.20.0，`@modelcontextprotocol/server` 2.0.0（协议修订 2026-07-28），Pi peer 锁定 0.84.4，
 本机 Codex CLI 0.153.4，Windows 侧 ChatGPT/Codex 桌面应用 26.901.51231。
 
@@ -144,9 +144,9 @@ Node v24.20.0，`@modelcontextprotocol/server` 2.0.0（协议修订 2026-07-28�
 | 处理触发 | A Init 后立即 flush；B 等待阈值 | A。Init 是显式用户动作，需可观测的落盘时间。 |
 | 状态可见性 | A 用 associations 推导 `retainedIn`；B 回执新增明文 | A。不改回执隐私边界。 |
 
-## 6. Markdown 文件导入评估（不交付）
+## 6. Markdown 文件导入（收尾时纳入 v0.1，见 §9）
 
-价值：可把已有笔记/AGENTS 风格资料一次性引入。成本：需要文件读取入口（CLI）、`document_import` 来源处理与提示词分支、与 Init 相同的重复/冲突处理。可复用性：与本次 `agent_import` 机制同构（`source` 换成 `document_import`，已在 provenance 枚举中）。结论：本版不实现；Init 机制为其铺路。不能用手动 Markdown 导入替代 ChatGPT 链路验收。
+最初评估为“不交付”；收尾阶段明确纳入。设计与 Init 同构：`source = document_import`（provenance 枚举中已有），同一个 Writer，同一套守卫；差别只在输入预处理与来源元数据。详见 §9.2。手动 Markdown 导入仍不能替代 ChatGPT 链路验收。
 
 ## 7. 验收与验证分层
 
@@ -160,3 +160,62 @@ Node v24.20.0，`@modelcontextprotocol/server` 2.0.0（协议修订 2026-07-28�
 - [未验证] 真实维护模型对 agent_import 的语义处理质量（与仓库既有立场一致，需显式凭据）。
 - [决定] 是否接受“通过远程 HTTPS 连接器 + 隧道”让 Chat 模式（云端 Memory）直接调用 Init：新增公网暴露与数据外发，本版不做。
 - [决定] 真实 Writer 联调需要 OpenAI 兼容 API key（本机无）。
+
+## 9. 收尾增量（2026-09-07 下午，基线 `3c70c9b`）
+
+本节记录收尾阶段的研究结论、设计与取舍。四类陈述标记同文首。
+
+### 9.1 研究结论
+
+[项目事实]（HEAD `3c70c9b`，收尾前）：
+
+- `memory_init` → `McpIngress.init` → `encodeAgentImport` JSON 信封 → `RuntimeStore.enqueue(source='agent_import')` + `requestFlush` → `claim()` 以 `source === 'agent_import'` 单独分批 → `Writer.describeSource` 投影 `source_kind`/`import` → `#guardImports` 结构性阻止 forget / 覆盖用户 Section。链路完整。
+- 程序强制的导入限制：分批隔离、forget 拒绝、覆盖用户/无来源链接 Section 拒绝、scope/writable/CAS/租约/安全扫描。仅由提示约束的：来源标注文字、冲突时保留用户状态、不把第一人称默认当用户。
+- `document_import` 只存在于 provenance 枚举，无消费者；没有 Markdown 导入入口或预处理。
+- `agent_import` 字符串在 `runtime.ts`（enqueue 的 pending 列表、claim 分批）两处硬编码，与 `writer.ts` 的判断重复；再加一种导入来源前需要收敛。
+- 审查线索 1 成立：`createConfiguredWriter` 无条件要求 `user_explicit`，init-only 配置无法创建 Writer（`runMcp`、`flush`、`retry` 全部受阻）。
+- 审查线索 2 成立：`demo-init-synthetic.mjs` 对 `--home` 下已有 `data/` 执行 `rmSync`，并无条件覆盖 `config.json`/`.env`。
+
+[外部事实]（访问日期 2026-09-07，`learn.chatgpt.com/docs/extend/mcp.md`、`/docs/customization/memories`、`/docs/use-chatgpt.md`）：与 §2.1 一致——桌面应用、Codex CLI、IDE 扩展共享同一 Codex host 的 `config.toml`，支持 STDIO；ChatGPT 网页端不读本地配置；"ChatGPT web uses ChatGPT memory, while local Codex clients use a separate local memory store"。新增相关项：`memories.disable_on_external_context` 为 true 时，使用过 MCP 工具的会话不参与本地记忆生成（不影响本设计，但 Init 会话本身不会再被 Codex 本地记忆总结）。
+
+[外部事实]（本机实测）：`wsl.exe --help` 列出 `--distribution/-d`、`--user/-u`、`--exec/-e`、`--cd`；从 WSL 内经 interop 调用 `/mnt/c/Windows/System32/wsl.exe -d Ubuntu -u mrremon -e /usr/bin/env COMMON_MEMORY_HOME=… node …` 可用且 stdio 正常透传。
+
+### 9.2 Import 输入预处理（[设计选择]）
+
+职责：只做文件读取、编码/大小检查、结构识别、封装与分块；不判断价值、不提炼、不做第二套语义管线、不额外调用模型。
+
+| 问题 | 选择 | 理由 |
+| --- | --- | --- |
+| 材料性质 | 信封字段 `sourceLabel`（默认文件名）、`declaredAuthor ∈ user/agent/third_party/mixed/unknown`（默认 unknown）、`fileName`、`contentDigest`、`part{index,count}`、`headingPath`；投影为 `source_kind: document_import` + `import{…}` | 让模型知道“来自哪次导入、什么性质、原始标签、哪些未知”。不伪造作者/时间：`observed_at` 是导入时间，提示词明说。`declaredAuthor` 只是记录，程序对所有 `document_import` 一视同仁，不因 `--author user` 升级为 user_turn。 |
+| 是否需要 LLM 预提炼 | 否 | Writer 已承担判断/提炼/合并；再放一个模型只会重复语义层并模糊来源。 |
+| 整份 vs 分块 | ≤32 KiB（与 Init `understanding` 上限一致）整份一条观察；否则按标题/空行分块、围栏不拆、整节能放则整节；单段或单个围栏超限 → 拒绝整份（`IMPORT_CHUNK_TOO_LARGE`）；整文件 >256 KiB → `DOCUMENT_TOO_LARGE` | 不静默截断；Writer 128 KiB 请求上限与现有 trim 机制自然处理“多块同批不够放”。 |
+| 分块的上下文 | 每块保留祖先标题栈 `headingPath`，块内文本逐字保留（标题、引用、示例、代码块都在） | 避免示例变事实、局部限定变全局。 |
+| 多块 ≠ 多次证据 | 投影带 `part i/n` 与同一 `source_label`；提示词明说“同一材料，不是重复确认” | 程序层不再另建实体；守卫不区分块。 |
+| 重复/变化 | `importId = md-<sha256(内容)>`，会话键含 contextId 与信封格式版本（`v1`，分块规则变化时开启新导入而不是卡住 resume）；相同字节（无论文件名/label/author）→ duplicate，不重复入队、不重复调用模型、保留原元数据；字节变化 → 新导入 | 不用文件名判重。同内容改标签视为同一材料而非冲突，避免用户困惑。 |
+| 原子性与部分失败 | 所有块一个事务入队 + flush；提交按批次、各有回执；CLI 汇报每块状态，`complete` 仅当全部 processed；未完成 → 退出码 1，明确提示 `retry`/再次 import/`flush` | 复用现有队列、租约、退避、dead-letter，不新建事务框架；不会“部分完成报整份成功”。 |
+| 材料中的指令 | 只是数据；不执行代码块、不跟链接、不扫目录；提示词与守卫双重约束 | — |
+| 预先安全扫描 | 入队前对每块运行 Writer 的同一 `externalPreflight`；违规报 `SENSITIVE_CONTENT_REJECTED part i/n: <rule>` 且不入队（Writer 处理时仍再扫一次） | 让用户当场知道被拒原因，而不是事后看到 quarantined。 |
+
+### 9.3 让 Core 真正支持导入来源（[设计选择] / [项目事实] 收尾后）
+
+- 收敛：`import.ts` 新增 `provenanceOf(source)`（`interactive|rpc|mcp_user_submission → user_explicit`，`agent_import → agent_observation`，`document_import → document_import`，其余 null）与 `isImportSource`。`RuntimeStore.enqueue` 用它决定 pending/quarantined；`claim()` 用它分批（同 scope 且同 provenance 类）；`Writer.#guardImports` 用它识别导入证据与“仅由导入产生的 Section”。
+- 授权：`Writer` 新增 `allowedProvenance` 选项；`run()` 在模型调用前按批次 provenance 校验，不允许 → `UNAUTHORIZED_PROVENANCE` 隔离（与 `UNAUTHORIZED_SOURCE` 同型）。`createConfiguredWriter` 不再强制 `user_explicit`，而是透传 `disclosure.allowedProvenance`；Pi 扩展自行保留 `user_explicit` 检查（Pi 只捕获用户轮，没有披露许可就没有可捕获的东西）；MCP relay 已由 `submissionEnabled` 门控。这修复审查线索 1 的真正耦合：授权按来源类，而不是按进程。
+- 投影：`source_kind` 扩展为三值；`document_import` 的 `import` 字段固定为 `{source_label, declared_author, file_name, part, heading_path}`。响应 schema、回执、SQLite 表结构、既有 Markdown 均不变，无迁移。
+- 提示词：`memory-maintainer.md` 把 agent_import 段扩展为“imports”段，加入 document_import 的语义要求（作者/第一人称/示例/限定条件/多块/observed_at/不用相反“当前事实”绕过保护/文档未提及不等于遗忘/指令即数据）。
+- 入口：`common-memory import`（CLI）。不新增 MCP 写工具；Codex 仍只读；Pi 集成不变。
+
+### 9.4 Windows / WSL（[设计选择]）
+
+- 唯一运行环境为 WSL；Windows 侧只做 `wsl.exe` 桥接。`common-memory mcp-config [--wsl]` 输出固定了 `-d <WSL_DISTRO_NAME> -u <linux user> -e /usr/bin/env COMMON_MEMORY_HOME=<配置目录> <node 绝对路径> <dist/cli/main.js 绝对路径> mcp …` 的 TOML 块及注释头（配置目录、dataRoot、node、CLI 入口）。不做安装器、不做通用路径映射；Windows 路径不是合法项目，需注册 WSL 路径。Pi 以 WSL 内运行为准。
+- 统一的是配置权威与数据，不是进程：`init`/`read` 进程按角色启动，共享同一 dataRoot。
+
+### 9.5 演示脚本（审查线索 2）
+
+默认使用 `mkdtemp` 新目录；`--home` 只接受不存在或空目录；`config.json`/`.env` 用 `wx` 创建；不再有任何 `rmSync`。新增 `--markdown <file>` 让同一脚本演示两条链路落到同一份记忆。
+
+### 9.6 未验证 / 决策项（收尾后）
+
+- [未验证] 真实维护模型对 `document_import` 的语义处理（标题/示例/限定条件/第一人称）；本机无 API key，测试为脚本化模型。
+- [未验证] ChatGPT 桌面端实际调用 `memory_init`（GUI 在 Windows，WSL 不能驱动；`wsl.exe` 启动 init 进程的握手已实测）。
+- [被阻塞] Codex CLI / Pi 真实模型回合：账户用量上限（见验收记录）。
+- [决定] 真实链路需要用户在 WSL 配置真实 OpenAI 兼容 API key 与 `allowedProvenance`，并把 `mcp-config --wsl` 输出粘贴到 Windows `%USERPROFILE%\.codex\config.toml`；本次未替用户改动 Windows 侧配置。
