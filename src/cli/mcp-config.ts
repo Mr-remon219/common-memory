@@ -44,6 +44,8 @@ export function renderMcpConfig(config: CommonMemoryConfig, options: McpConfigOp
   });
   const distro = options.distro ?? env.WSL_DISTRO_NAME;
   const user = options.user ?? userInfo().username;
+  // The bridge embeds the Linux paths of this runtime; generated from Windows they would point at nothing.
+  if (options.wsl && process.platform !== "linux") throw new Error("--wsl must run inside the WSL distribution that hosts Common Memory (Linux paths are embedded)");
   if (options.wsl && !distro) throw new Error("--wsl needs a distribution: run inside WSL or pass --distro <name>");
   const launch = (clientId: string, capability: string, extra: string[]) => {
     const inner = [cli, "mcp", "--client-id", clientId, "--capability", capability, "--global", ...extra];

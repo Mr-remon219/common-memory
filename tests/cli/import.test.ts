@@ -147,13 +147,18 @@ it('mcp-config pins node, CLI entry, configuration directory and dataRoot; --wsl
   expect(native.stdout).toContain('[mcp_servers.common_memory]'); expect(native.stdout).toContain('"--capability", "read", "--global"'); expect(native.stdout).toContain('enabled_tools = ["memory_read", "memory_status"]');
   expect(native.stdout).not.toContain('wsl.exe');
   const wsl = await cli(['mcp-config', '--wsl', '--user', 'tester'], { ...env, WSL_DISTRO_NAME: 'UbuntuTest' });
-  expect(wsl.code, wsl.stderr).toBe(0);
-  expect(wsl.stdout).toContain('command = "wsl.exe"');
-  expect(wsl.stdout).toContain(`args = ["-d", "UbuntuTest", "-u", "tester", "-e", "/usr/bin/env", "COMMON_MEMORY_HOME=${home}", `);
-  expect(wsl.stdout).toContain(resolve('src/cli/main.ts')); expect(wsl.stdout).toContain('WSL distribution: UbuntuTest; Linux user: tester');
-  expect(wsl.stdout).toContain('Windows-native Pi is not covered');
-  const noDistro = await cli(['mcp-config', '--wsl'], { ...env, WSL_DISTRO_NAME: '' });
-  expect(noDistro.code).toBe(1); expect(noDistro.stderr).toContain('--wsl needs a distribution');
+  if (process.platform === 'linux') {
+    expect(wsl.code, wsl.stderr).toBe(0);
+    expect(wsl.stdout).toContain('command = "wsl.exe"');
+    expect(wsl.stdout).toContain(`args = ["-d", "UbuntuTest", "-u", "tester", "-e", "/usr/bin/env", ${JSON.stringify(`COMMON_MEMORY_HOME=${home}`)}, `);
+    expect(wsl.stdout).toContain(resolve('src/cli/main.ts')); expect(wsl.stdout).toContain('WSL distribution: UbuntuTest; Linux user: tester');
+    expect(wsl.stdout).toContain('Windows-native Pi is not covered');
+    const noDistro = await cli(['mcp-config', '--wsl'], { ...env, WSL_DISTRO_NAME: '' });
+    expect(noDistro.code).toBe(1); expect(noDistro.stderr).toContain('--wsl needs a distribution');
+  } else {
+    // The bridge embeds Linux paths; generating it from a non-Linux host is refused rather than producing a broken config.
+    expect(wsl.code).toBe(1); expect(wsl.stderr).toContain('--wsl must run inside the WSL distribution');
+  }
   // A registered project adds --workspace and warns when it is not an allowed disclosure scope.
   mkdirSync(join(home, 'proj'));
   const registered = await cli(['project', 'register', join(home, 'proj'), 'Proj'], env); expect(registered.code).toBe(0);
