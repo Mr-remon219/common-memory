@@ -358,15 +358,20 @@ it('an import cannot rewrite a Section the user edited by hand, even if that Sec
 it.each(['timeout-first','cancel-first','lease-first'] as const)('preserves %s and fences late responses even if the model ignores cancellation',async variant=>{
  const {vi}=await import('vitest');let resolveModel!:(value:Awaited<ReturnType<MemoryModelPort['analyze']>>)=>void;let request:ApprovedModelRequest|undefined;
  const caller=new AbortController();const path=root();
- const w=new Writer({dataRoot:path,allowedScopes:['global'],deadlineMs:variant==='timeout-first'?15:2000,scheduler:{leaseMs:variant==='lease-first'?30:120000},model:{analyze:r=>{request=r;return new Promise(resolve=>{resolveModel=resolve;});}}});
- if(variant==='lease-first')vi.spyOn(w.store,'renew').mockImplementation(()=>{throw new Error('private lease failure');});
- enqueue(w);const pending=w.run({force:true,signal:caller.signal});
- if(variant==='cancel-first')caller.abort();
- const reason=variant==='timeout-first'?'TIMEOUT':variant==='cancel-first'?'CANCELLED':'LEASE_RENEWAL_FAILED';
- expect(await pending).toEqual({outcome:variant==='cancel-first'?'cancelled':'failed',reason});
- caller.abort();resolveModel({kind:'output',body:body(request!),usage:{}});await new Promise(resolve=>setTimeout(resolve,5));
- expect(w.store.status().jobs[0]).toMatchObject({issue:reason});expect(w.store.hasReceipt(w.store.status().jobs[0]!.id)).toBe(false);
- expect(readdirSync(join(path,'runtime/receipts'))).toEqual([]);expect(w.canonical.snapshot([]).every(d=>!d.content.includes('Chinese'))).toBe(true);w.close();
+ // Exercise terminal-cause ordering without letting slow filesystem work expire the lease.
+ vi.useFakeTimers();let w:Writer|undefined;
+ try {
+  w=new Writer({dataRoot:path,allowedScopes:['global'],deadlineMs:variant==='timeout-first'?15:2000,scheduler:{leaseMs:variant==='lease-first'?30:120000},model:{analyze:r=>{request=r;return new Promise(resolve=>{resolveModel=resolve;});}}});
+  if(variant==='lease-first')vi.spyOn(w.store,'renew').mockImplementation(()=>{throw new Error('private lease failure');});
+  enqueue(w);const pending=w.run({force:true,signal:caller.signal});
+  if(variant==='cancel-first')caller.abort();
+  else await vi.advanceTimersByTimeAsync(variant==='timeout-first'?15:10);
+  const reason=variant==='timeout-first'?'TIMEOUT':variant==='cancel-first'?'CANCELLED':'LEASE_RENEWAL_FAILED';
+  expect(await pending).toEqual({outcome:variant==='cancel-first'?'cancelled':'failed',reason});
+  caller.abort();resolveModel({kind:'output',body:body(request!),usage:{}});await vi.advanceTimersByTimeAsync(5);
+  expect(w.store.status().jobs[0]).toMatchObject({issue:reason});expect(w.store.hasReceipt(w.store.status().jobs[0]!.id)).toBe(false);
+  expect(readdirSync(join(path,'runtime/receipts'))).toEqual([]);expect(w.canonical.snapshot([]).every(d=>!d.content.includes('Chinese'))).toBe(true);
+ } finally {try{w?.close();}finally{vi.restoreAllMocks();vi.useRealTimers();}}
 });
 it('a competing quarantine retires a job without a receipt and must not produce committed',async()=>{
  let release!:()=>void;let started!:()=>void;const entered=new Promise<void>(resolve=>{started=resolve;});const delayed=new Promise<void>(resolve=>{release=resolve;});let now=0;
