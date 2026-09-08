@@ -1,5 +1,7 @@
 # Init v0.1 验收记录 — 2026-09-07
 
+本文早期章节为历史记录；2026-09-08 后续真实 Work 本地调用及本次指导修订见 [增补](#work-local-evidence-2026-09-08)，不把早期“未验证”作为当前全部证据的结论。
+
 后续收尾改动、真实 DeepSeek 结果与当前阻碍见 [Init v0.1 收尾验收](init-v0.1-closeout.md)。本文保留此前实验的历史记录。
 
 分支 `init-v0.1`（worktree，基线 `a9fc436`）。所有数据均为合成事实与隔离目录（`/tmp/common-memory-demo`、`/tmp/cm-codex-home`、`/tmp/cm-pi-home`），未使用真实个人资料。真实账户使用仅限本机已登录的 Codex CLI / Pi（ChatGPT OAuth），且实际被用量上限阻断（见 §3）。
@@ -260,3 +262,39 @@ WSL 无法驱动 Windows GUI。已实测：`mcp-config --wsl` 给出的 `wsl.exe
 ## 6. 独立审阅（收尾）
 
 一个只读审阅子 Agent 对全部未提交改动做缺陷优先审查（主 Agent 逐条核对）。未发现 P1。P2：`#guardImports` 在 `#receipt` 清理过期 title 链接之前读取来源链接，因此用户**手工编辑过**的、最初由导入产生的 Section 仍被视为“仅导入所有”，可被后续导入改写（HEAD 上对 `agent_import` 已存在，本次扩展到 `document_import`）；已修复为“文档被手改则不信任其来源链接”，新增用例 `tests/v2/writer.test.ts` “an import cannot rewrite a Section the user edited by hand…”。P3 已修复：分块丢失前导/连续空行（现逐字保留并加入 roundtrip 样本）、`\`\`\`js\`\`\`` 行内反引号被当作围栏、`# C#` 标题被截为 `C`、默认标签含控制字符、会话键加入信封格式版本、`mcp-config` 对缺 `global`/`agent_observation` 加 NOTE、演示脚本缺参处理、一条同义反复断言。P3 文档措辞已修正：按观察逐条隔离、不同 Markdown 文件的块可同批、32 KiB 预算固定、quarantined 为该内容的终态。审阅核实为正确的点：来源类只由宿主 `source` 决定、`--author` 不提升权限、文本以 JSON 字符串进入投影无法逃出数据块、provenance 校验先于任何模型输入构造、只读进程不开 SQLite、演示脚本无删除路径。
+
+
+<a id="work-local-evidence-2026-09-08"></a>
+
+## 7. Work 本地调用与迁移指导增补（2026-09-08）
+
+### 证据范围
+
+用户确认该会话运行于 Work 本地模式。本次只读复核用户提供的本机日志；不复制个人正文到仓库或测试夹具，也不再次导入个人记忆。
+
+- [提交及来源说明（第 56 行）](/mnt/c/Users/Administrator/.codex/sessions/2026/09/08/rollout-2026-09-08T15-58-54-01a08006-f5d0-7d70-b03e-13bac8fc0743.jsonl:56)：`basis: mixed`，来源标签为 Codex saved memories；材料说明包括本会话 MEMORY_SUMMARY 与已读取的本地 MEMORY.md 条目。第 18、23、32 行记录本地文件读取调用。标签仍是自报信息，不能认证全部来源。
+- 同日志第 74 行曾返回 `INVALID_RESPONSE` / `invalid_json`；[第 88 行处理结果](/mnt/c/Users/Administrator/.codex/sessions/2026/09/08/rollout-2026-09-08T15-58-54-01a08006-f5d0-7d70-b03e-13bac8fc0743.jsonl:88)为 `processed`、`jobState: done`、`attempts: 2`，`retainedIn` 为 preferences、profile。第 90 行调用 `memory_read`，[第 93 行](/mnt/c/Users/Administrator/.codex/sessions/2026/09/08/rollout-2026-09-08T15-58-54-01a08006-f5d0-7d70-b03e-13bac8fc0743.jsonl:93)读回两个文档。这证明该次真实路径可用，不证明全部云端理解被迁移或每次首次成功。
+
+这些是仅在该机器可访问的审计链接，不是可移植夹具。官方 [Memories](https://learn.chatgpt.com/docs/customization/memories) 对 Work 与本地记忆的体系描述和该会话观察存在差异；按实际材料记录来源，不推断其他账号、版本或额外云端记忆可见性。[Memory FAQ](https://help.openai.com/en/articles/8590148) 也不承诺 Summary 或回答来源列表完整（两页均于 2026-09-08 复核）。
+
+用户提供的前序审计报告包含 8 项隔离探针：两类导入不能覆盖/遗忘用户章节，但可能新增无依据断言及语义冲突；也报告本次接口可读、可导入的执行状态进入了 Profile。本轮没有重新运行这些探针，不将其表述为本轮自动化测试证据。该限制与当前 Writer 结构守卫的职责一致。
+
+### 指导的语义核对
+
+逐项人工检查本次 server instructions、`memory_init` description 与 README 操作流程；以下为合成审阅例，不是模型行为测试：
+
+| 核对项 | 合成材料 | 指导要求与核对结果 |
+| --- | --- | --- |
+| 历史目标 | “2024 年计划学习 Rust” | 保留历史日期与计划性质，不改为当前既定目标；已覆盖。 |
+| 条件/暂定 | “若时间允许，暂考虑周末学习” | 保留条件与暂定措辞，不改为固定习惯；已覆盖。 |
+| 项目范围 | “项目 A 使用 fish” | 保留项目范围，不推广为全局偏好；已覆盖。 |
+| 未知信息 | “源 Agent 不知道职业” | 放入 gaps，不生成“用户没有职业”；已覆盖。 |
+| 新增断言 | 源材料无职业信息，输出增加职业判断 | 无依据猜测留在导入外待核对；正式 show 仍须检查新增内容；已覆盖。 |
+| 执行状态 | “本次连接、导入、读回成功” | 不作为用户长期理解提交；已覆盖。 |
+
+直接引用允许保真但仍为导入归属；批准迁移不认证真实性。以上只证明指导包含这些要求；假模型测试只证明结构与处理行为，不能证明真实模型会遵守。独立试导入和正式库的结果均需核对，二次运行不保证一致。此次未进行新的真实客户端/模型会话，Linux 门禁不证明 Windows CI 或真实客户端行为。
+
+
+### 本次完整门禁
+
+Node v24.20.0，先执行 `npm ci` 安装锁定依赖，再执行 `node scripts/verify.mjs`：typecheck、boundary checks、27 个测试文件 / 355 项测试、build 全部通过。`git diff --check` 通过。测试日志包含既有 TLS ServerName IP 弃用警告和 SOCKS5 实验性警告，无失败。未改 package exports/消费者契约，因此未追加 consumer smoke；未运行真实模型语义评测或 Windows CI。门禁完整输出保存在本机 `/tmp/common-memory-migration-verify.log`（临时文件，不随仓库发布）。
