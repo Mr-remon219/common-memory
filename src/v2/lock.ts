@@ -1,9 +1,9 @@
 import { mkdirSync, lstatSync } from 'node:fs';
-import { resolve, join, parse, relative } from 'node:path';
+import { resolve, join, parse, relative, sep } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 export function safeDirectory(path: string): void {
   const full = resolve(path); let current = parse(full).root;
-  for (const part of relative(current, full).split('/').filter(Boolean)) {
+  for (const part of relative(current, full).split(sep).filter(Boolean)) {
     current = join(current, part);
     try { const stat = lstatSync(current); if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error('UNSAFE_PATH'); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; mkdirSync(current, { mode: 0o700 }); }

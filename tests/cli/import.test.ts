@@ -163,7 +163,7 @@ it('mcp-config pins node, CLI entry, configuration directory and dataRoot; --wsl
   }
   // A registered project adds --workspace and warns when it is not an allowed disclosure scope.
   mkdirSync(join(home, 'proj'));
-  const registered = await cli(['project', 'register', join(home, 'proj'), 'Proj'], env); expect(registered.code).toBe(0);
+  const registered = await cli(['project', 'register', join(home, 'proj'), 'Proj'], env); expect(registered.code, registered.stderr).toBe(0);
   const withProject = await cli(['mcp-config', '--workspace', join(home, 'proj')], env);
   expect(withProject.stdout).toContain(`"--workspace", ${JSON.stringify(join(home, 'proj'))}`); expect(withProject.stdout).toContain('not in disclosure.allowedScopes');
   expect((await cli(['mcp-config', '--workspace', join(home, 'nope')], env)).stderr).toContain('UNREGISTERED_WORKSPACE');
