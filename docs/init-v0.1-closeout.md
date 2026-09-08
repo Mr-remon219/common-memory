@@ -1,5 +1,7 @@
 # Init v0.1 收尾验收 — 2026-09-07
 
+后续证据：2026-09-08 用户确认的 Work 本地会话已实际完成 Init 与读回，见 [验证增补](init-v0.1-verification.md#work-local-evidence-2026-09-08)。下文保留各次运行当时的范围与结果。
+
 本轮基线 `e09262c`，Node `24.20.0`，Linux。`v0.1` 是 Init 里程碑；包仍为 `0.2.0`、`private:true`，未发布、未切换正式配置。修改范围来自审批版方案，不涉及检索、索引、HTTP MCP、额外模型预处理、Memory 自动清理或 provenance 扩权。
 
 后续 smoke 复用改造、重构后的 DeepSeek 复验及当前各 Provider 等级见 [Provider 验证复用](provider-verification.md)。本文保留各阶段原始验收条件与历史结果。

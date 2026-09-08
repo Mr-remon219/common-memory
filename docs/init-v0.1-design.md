@@ -4,6 +4,8 @@
 Node v24.20.0，`@modelcontextprotocol/server` 2.0.0（协议修订 2026-07-28），Pi peer 锁定 0.84.4，
 本机 Codex CLI 0.153.4，Windows 侧 ChatGPT/Codex 桌面应用 26.901.51231。
 
+本文保留初始设计与历史验证状态；当前迁移流程与验收边界以 §10 及 [后续 Work 本地证据](init-v0.1-verification.md#work-local-evidence-2026-09-08) 为准。
+
 目标闭环：ChatGPT 桌面版提交既有理解 → Core 处理并持久化 → 本地可查看 → Codex CLI 与 Pi 用同一份 canonical memory 回答“我是谁？”。
 
 本文严格区分四类陈述：**[项目事实]** 来自当前 checkout 代码；**[外部事实]** 来自官方文档/源码并注明访问日期；**[设计选择]**；**[未验证]**。
@@ -37,7 +39,7 @@ Node v24.20.0，`@modelcontextprotocol/server` 2.0.0（协议修订 2026-07-28�
 
 **结论（对可行性问题 1）**
 - 工具能否被发现/调用：[外部事实] 桌面应用的 Codex host 可直接启动本地 STDIO 服务，无需隧道；[未验证] 本机未实际在桌面 GUI 内运行（WSL 无法驱动 Windows GUI），需用户按 §7 步骤执行。
-- 调用时能否访问既有理解：取决于运行模式。[外部事实] 本地 Codex/Work-local 使用 **本地 Codex memories**（MEMORY.md/摘要）而不是 ChatGPT 云端 Memory；Chat 模式使用云端 Memory 但不读本地 MCP 配置。因此 **“把 ChatGPT 云端 Memory 直接导入本地”在同一会话内无法同时满足“本地 STDIO + 云端 Memory”**，除非走远程 HTTPS 连接器（需隧道/公网端点，见 §2.4）。[未验证] Work-local 模式是否同时能引用云端 Memory，官方文档未明确；需用户实测并记录。
+- 调用时能否访问既有理解：按实际可见材料记录。[外部事实，2026-09-08 复核] 官方区分 ChatGPT Memory 与 Codex 本地记忆，并称 Work 不使用 Codex 本地记忆；[本地实测] 用户确认的 Work 本地会话实际注入、读取了 Codex 本地记忆并完成 Init，见后续证据。二者存在差异，不以模式名称推断全部来源或覆盖范围。[未验证] 该会话是否还获得额外云端记忆、其他账号/版本的行为和遗漏量。远程 MCP 只改变传输，不证明源 Agent 可取得更多理解。
 - 内容能否送达本地：STDIO 路径天然在本地；本项目 MCP 服务已存在且经协议测试。
 
 ### 2.2 Codex CLI
@@ -68,9 +70,9 @@ Node v24.20.0，`@modelcontextprotocol/server` 2.0.0（协议修订 2026-07-28�
 
 ## 3. 可行性判断（提示词第四节）
 
-1. **ChatGPT 桌面版**：工具接通可行（本地 STDIO，官方支持）；“既有理解”的来源取决于模式（本地 Codex memories vs 云端 Memory）。不把“生成一段总结”当作导出全部内部记忆；Init 记录 `basis` 与 `gaps` 让来源可见。真实桌面 E2E 本会话不可执行 → 标为未验证，提供步骤。
+1. **ChatGPT 桌面版**：工具接通可行（本地 STDIO，官方支持）；“既有理解”的来源按本次实际读取材料记录，不按模式名称推断。不把“生成一段总结”当作导出全部内部记忆；Init 记录 `basis` 与 `gaps` 让来源可见。真实桌面 E2E 本会话不可执行 → 标为未验证，提供步骤。
 2. **能力边界**：同一 Codex host 共享 `config.toml`，因此**不能靠宿主区分客户端**。设计为：每个 MCP 进程在启动参数上固定能力（`--capability init|read|relay`），服务端只注册对应工具；宿主侧再叠加 `enabled_tools`（Codex）与审批模式；Codex CLI 用 profile/`-c` 关闭 init 服务。任何工具参数（如客户端自报名称）都不作为身份或授权。
-3. **部署要求**：STDIO 路径不新增网络端点、隧道或常驻服务。若用户坚持 Chat 模式（云端 Memory）→ 需要远程 HTTPS 连接器 + 隧道，这是新增数据外发与暴露面，**列为需要用户决定的事项**，本版不实现。
+3. **部署要求**：STDIO 路径不新增网络端点、隧道或常驻服务。Chat 端实际可见材料可由用户保存为 Markdown，走现有文件导入入口；不需要为此新增远程服务器，也不承诺完整导出。
 
 ## 4. 设计
 
@@ -86,8 +88,8 @@ Node v24.20.0，`@modelcontextprotocol/server` 2.0.0（协议修订 2026-07-28�
 - `contextId`：启动时冻结的允许上下文之一（`global` 或 `project:<id>`）。
 - `sourceLabel`：Agent 自述标签（如 `chatgpt-desktop`），**仅作记录，不是身份**。
 - `basis`：`saved_memories | chat_history | current_conversation | project_context | mixed | unknown`。
-- `understanding`：Agent 用自己的话写的当前理解（≤32 KiB）。
-- `gaps`：Agent 无法访问/不确定的部分。
+- `understanding`：Agent 实际可见、选定的已有材料，可直接引用或忠实概括（≤32 KiB）；保留原时间、历史目标、条件、项目范围与暂定性质，排除本次迁移执行状态及无依据新增断言。引用仍是 Agent 报告，不获得用户原话权限。
+- `gaps`：Agent 无法访问/不确定的部分，以及具体材料来源和覆盖范围（也可在 `understanding` 中说明）；不把 Agent 不知道转换成用户的否定事实。现有 `basis` 枚举不变，产品名称不是来源证明。
 
 整个 payload 以 JSON 作为一条观察写入现有队列，`source = 'agent_import'`。不提供“用户原话”字段：Agent 声称的逐字引用无法核验；需要逐字用户表达的可信本地中继仍走既有 `memory_submit_user_turn`。不接收文档（Markdown 导入见 §6）。
 
@@ -158,7 +160,7 @@ Node v24.20.0，`@modelcontextprotocol/server` 2.0.0（协议修订 2026-07-28�
 
 - [未验证] ChatGPT 桌面版实际调用 `memory_init` 及其可用的“既有理解”来源；Work-local 是否能引用云端 Memory。
 - [未验证] 真实维护模型对 agent_import 的语义处理质量（与仓库既有立场一致，需显式凭据）。
-- [决定] 是否接受“通过远程 HTTPS 连接器 + 隧道”让 Chat 模式（云端 Memory）直接调用 Init：新增公网暴露与数据外发，本版不做。
+- [范围] 云端可见材料走用户选定 Markdown；远程 HTTPS 连接器、隧道及完整聊天解析器不在本版范围内。
 - [决定] 真实 Writer 联调需要 OpenAI 兼容 API key（本机无）。
 
 ## 9. 收尾增量（2026-09-07 下午，基线 `3c70c9b`）
@@ -219,3 +221,14 @@ Node v24.20.0，`@modelcontextprotocol/server` 2.0.0（协议修订 2026-07-28�
 - [未验证] ChatGPT 桌面端实际调用 `memory_init`（GUI 在 Windows，WSL 不能驱动；`wsl.exe` 启动 init 进程的握手已实测）。
 - [被阻塞] Codex CLI / Pi 真实模型回合：账户用量上限（见验收记录）。
 - [决定] 真实链路需要用户在 WSL 配置真实 OpenAI 兼容 API key 与 `allowedProvenance`，并把 `mcp-config --wsl` 输出粘贴到 Windows `%USERPROFILE%\.codex\config.toml`；本次未替用户改动 Windows 侧配置。
+
+
+## 10. 可核对的已有理解迁移（2026-09-08）
+
+[设计选择] 一次性迁移本次可取得并选定的材料。先保存账号实际可见的 Memory Summary／旧版 Saved Memories 原文和可用日期、出处；针对遗漏主题向源端提问时保留可核对出处，无依据猜测留在导入之外的待核对材料中。[Memory FAQ](https://help.openai.com/en/articles/8590148) 明确 Summary 和回答来源列表都不保证完整；[Memories 官方说明](https://learn.chatgpt.com/docs/customization/memories) 区分产品体系。这些描述不能代替本地调用证据，也不能量化遗漏。
+
+用户选定 Markdown 走 `common-memory import`（`document_import`），Agent 提交实际可见材料走 `memory_init`（`agent_import`）。分别通过 `document_import`、`agent_observation` provenance 授权；批准迁移不等于逐条确认真实性。推荐独立临时配置和独立 `dataRoot` 试导入，核对后仍通过既有入口正式导入，以正式库 `common-memory show` 为最终核对对象。具体操作见 [README](../README.md#migrate-selected-checkable-material)。隔离试导入不保证正式运行相同结果。
+
+[项目事实] 本次只更新 Init server instructions、工具描述及配置输出注释与文档。参数、数据库、Writer、`memory_maintenance_v2`、队列/flush/重试/读取生命周期保持不变。这些指导是 **soft semantic defense（软性语义防御）**：无法证明来源正确、阻止所有无依据新事实或语义冲突，也不能代替结果核对。结构守卫保护用户 Section，不提供语义真实性保证。
+
+v0.1 不引入 migration lifecycle：没有迁移状态机、消费者暂停/恢复接口或 Core 审批队列；不新增服务器、完整聊天解析器、画像生成器或 schema。验收目标是忠实迁移本次选定的已有理解，明确来源、条件、不确定性与遗漏，不承诺完整导出或自动消除语义错误。
