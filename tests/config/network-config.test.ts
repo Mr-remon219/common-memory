@@ -1,7 +1,6 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -56,12 +55,13 @@ it('legacy factory preserves Node env-dispatcher routing after old private NO_PR
   const home=root();writeFileSync(join(home,'.env'),'NO_PROXY=127.0.0.1\nCM_LEGACY_KEY=synthetic\nCOMMON_MEMORY_PROXY_URL=http://secret:password@p\n');
   const endpoint=`http://127.0.0.1:${(origin.address() as {port:number}).port}`;
   const source=new URL('../../src/config/runtime.ts',import.meta.url).href;
-  const loader=fileURLToPath(new URL('../mcp/fixtures/source-loader.mjs',import.meta.url));
+  // --import expects a module URL; a Windows drive path is parsed as an unsupported scheme.
+  const loader=new URL('../mcp/fixtures/source-loader.mjs',import.meta.url).href;
   const code=`import {createConfiguredMemoryModel} from ${JSON.stringify(source)}; import {defaultConfig} from ${JSON.stringify(new URL('../../src/config/config.ts',import.meta.url).href)}; const config=defaultConfig(); config.remote.model='fake';config.remote.apiKeyEnv='CM_LEGACY_KEY';delete config.remote.proxy;config.remote.baseUrl=${JSON.stringify(endpoint)}; const model=createConfiguredMemoryModel(config); console.log(JSON.stringify({body:await (await fetch(config.remote.baseUrl)).text(),reserved:process.env.COMMON_MEMORY_PROXY_URL===undefined})); await model.close();`;
   try {
     const result=await new Promise<string>((resolve,reject)=>{
       const child=spawn(process.execPath,['--use-env-proxy','--import',loader,'--input-type=module','-e',code],{env:{COMMON_MEMORY_HOME:home,HTTP_PROXY:`http://127.0.0.1:${(proxy.address() as {port:number}).port}`},stdio:['ignore','pipe','pipe']});
-      let output='';child.stdout.on('data',b=>output+=b);child.stderr.resume();child.on('error',reject);child.on('exit',status=>status===0?resolve(output):reject(new Error(`legacy child exit ${status}`)));
+      let output='',stderr='';child.stdout.on('data',b=>output+=b);child.stderr.on('data',b=>stderr+=b);child.on('error',reject);child.on('close',(status,signal)=>status===0?resolve(output):reject(new Error(`legacy child exit ${status}, signal ${signal ?? 'none'}\n${stderr}`)));
     });
     expect(JSON.parse(result)).toEqual({body:'direct',reserved:true});
   } finally { origin.closeAllConnections();proxy.closeAllConnections();await Promise.all([new Promise<void>(resolve=>origin.close(()=>resolve())),new Promise<void>(resolve=>proxy.close(()=>resolve()))]); }
