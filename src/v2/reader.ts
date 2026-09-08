@@ -1,5 +1,4 @@
-import { existsSync, lstatSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { readRegular, targetInfo } from './canonical.js';
 
 export interface MemoryDocumentView { target: string; content: string; bytes: number; empty: boolean }
@@ -22,9 +21,7 @@ export function readAuthorizedMemory(options: { dataRoot: string; contexts: read
   const targets = [...new Set(contexts.flatMap(contextTargets))];
   const documents = targets.map(target => {
     const path = join(resolve(options.dataRoot), targetInfo(target).relative);
-    const directory = dirname(path);
-    let content = '';
-    if (existsSync(directory) && lstatSync(directory).isDirectory()) content = readRegular(path) ?? '';
+    const content = readRegular(path, { createParents: false }) ?? '';
     return { target, content, bytes: Buffer.byteLength(content), empty: !hasSectionContent(content) };
   });
   return { contexts, documents, empty: documents.every(doc => doc.empty) };

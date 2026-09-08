@@ -1,14 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { realpathSync, statSync } from 'node:fs';
 import { join, relative, isAbsolute, resolve, sep } from 'node:path';
-import { atomicWrite, readRegular, safeDirectory } from './canonical.js';
+import { atomicWrite, readRegular } from './canonical.js';
 
 export interface ProjectRegistration { id: string; name: string; root: string }
 export class ProjectRegistry {
   readonly #path: string;
-  constructor(dataRoot: string) { safeDirectory(join(dataRoot, 'runtime')); this.#path = join(resolve(dataRoot), 'runtime/projects.json'); }
+  constructor(dataRoot: string) { this.#path = join(resolve(dataRoot), 'runtime/projects.json'); }
   list(): ProjectRegistration[] {
-    const source = readRegular(this.#path); if (source === null) return [];
+    const source = readRegular(this.#path, { createParents: false }); if (source === null) return [];
     const values: unknown = JSON.parse(source); if (!Array.isArray(values)) throw new Error('Invalid project registry');
     const ids = new Set<string>(); const roots = new Set<string>();
     for (const value of values) {
