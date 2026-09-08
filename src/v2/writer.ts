@@ -4,7 +4,8 @@ import { CanonicalStore, type DocumentSnapshot } from './canonical.js';
 import { RuntimeStore, type RuntimeJob, type RuntimeOptions, type RuntimeReceipt } from './runtime.js';
 import { ProjectRegistry } from './registry.js';
 import { withRepositoryLock } from './lock.js';
-import { failureCode } from './errors.js';
+import { sanitizeDiagnostic, type FailureDiagnostic, type DiagnosticStage } from '../memory-manager/contracts/diagnostic.js';
+import { failureDiagnostic, failureCode } from './errors.js';
 import { maintenanceSchema, validateDecision, type Decision } from './contract.js';
 import { externalPreflight } from '../core/safety/external-preflight.js';
 import { AGENT_IMPORT_SOURCE, DOCUMENT_IMPORT_SOURCE, decodeAgentImport, isImportSource, provenanceOf, type ProvenanceKind } from './import.js';
@@ -33,10 +34,16 @@ export class Writer {
     this.store = new RuntimeStore(options.dataRoot, options.scheduler);
     try { this.recover(); this.store.pruneProcessed(this.#options.retentionMs); } catch (error) { this.store.close(); throw error; }
   }
-  recover(): void {
-    withRepositoryLock(this.#options.dataRoot, () => this.store.transaction(() => {
+  recover(): void { this.#recover(); }
+  #recover(jobId?: string): 'committed' | 'ignored' | null {
+    return withRepositoryLock(this.#options.dataRoot, () => this.store.transaction(() => {
       this.canonical.recover();
-      for (const receipt of this.canonical.receipts()) this.store.recoverReceipt(receipt as unknown as RuntimeReceipt);
+      const receipts = this.canonical.receipts();
+      for (const receipt of receipts) this.store.recoverReceipt(receipt as unknown as RuntimeReceipt);
+      if (!jobId || !this.store.hasReceipt(jobId)) return null;
+      // File commits have immutable canonical receipts; ignore commits have a durable DB receipt only.
+      // Another lease may have made a different decision from this run's late response.
+      return receipts.some(receipt => receipt.id === jobId) ? 'committed' : 'ignored';
     }));
   }
   async run(options: { force?: boolean; signal?: AbortSignal } = {}): Promise<{outcome:string; reason?:string}> {
@@ -47,11 +54,20 @@ export class Writer {
     if (!claimed) return { outcome: 'idle' };
     let job: RuntimeJob = claimed;
     const controller = new AbortController();
-    const deadline = AbortSignal.timeout(this.#options.deadlineMs ?? 60000);
-    const signal = AbortSignal.any([controller.signal, deadline, ...(options.signal ? [options.signal] : [])]);
-    const timer = setInterval(() => { try { this.store.renew(job!); } catch { controller.abort(); } }, Math.max(1, Math.floor((this.#options.scheduler?.leaseMs ?? 120000) / 3)));
+    // First terminal cause wins, even if the model rejects with its own generic cancellation later.
+    const terminate = (reason: 'TIMEOUT' | 'CANCELLED' | 'LEASE_RENEWAL_FAILED') => { if (!controller.signal.aborted) controller.abort(new Error(reason)); };
+    const cancelled = () => terminate('CANCELLED');
+    options.signal?.addEventListener('abort', cancelled, {once:true});
+    if (options.signal?.aborted) cancelled();
+    const deadlineTimer = setTimeout(() => terminate('TIMEOUT'), this.#options.deadlineMs ?? 60000);
+    deadlineTimer.unref();
+    const signal = controller.signal;
+    let stage: DiagnosticStage = 'core_validation';
+    let remoteContext: FailureDiagnostic | null = null;
+    const timer = setInterval(() => { try { this.store.renew(job!); } catch { terminate('LEASE_RENEWAL_FAILED'); } }, Math.max(1, Math.floor((this.#options.scheduler?.leaseMs ?? 120000) / 3)));
     timer.unref();
     try {
+      signal.throwIfAborted();
       const scope = job.observations[0]!.scope;
       if (!this.#options.allowedScopes.includes(scope)) return this.#quarantine(job, 'UNAUTHORIZED_SOURCE');
       // Disclosure authorization is per provenance class, not per process: an init-only configuration
@@ -79,7 +95,7 @@ export class Writer {
       if (this.#bytes(request) > cap) return this.#quarantine(job, 'OVERSIZED_COMPLETE_TURN');
       externalPreflight(request.projection, {maxExcerptBytes:cap,maxCandidateBytes:cap,maxTotalBytes:cap});
       signal.throwIfAborted();
-      const result = await abortable(this.#options.model.analyze(request, {requestId:job.id,deadlineMs:this.#options.deadlineMs ?? 60000,signal}), signal);
+      const result = await abortable(this.#options.model.analyze(request, {requestId:job.id,deadlineMs:this.#options.deadlineMs ?? 60000,signal,onDiagnosticContext:context => { remoteContext = sanitizeDiagnostic({...context,reason:'timeout',retryable:true}); }}), signal);
       signal.throwIfAborted();
       if (result.kind === 'refusal') throw new Error('MODEL_REFUSAL');
       const evidence = new Map(job.observations.map(o => [`ev_${o.id}`,o.scope]));
@@ -90,6 +106,7 @@ export class Writer {
       for (const op of operations) if (!this.#options.writableScopes!.includes(op.target.startsWith('project:') ? op.target : 'global')) throw new Error('UNAUTHORIZED_WRITE');
       const updates = this.canonical.apply(documents, operations);
       externalPreflight(Object.fromEntries(updates), {maxExcerptBytes:cap,maxCandidateBytes:cap,maxTotalBytes:cap});
+      stage = 'commit';
       withRepositoryLock(this.#options.dataRoot, () => this.store.transaction(() => {
         signal.throwIfAborted(); this.store.assertLease(job);
         if (scope !== 'global' && !new ProjectRegistry(this.#options.dataRoot).list().some(p => `project:${p.id}` === scope)) throw new Error('UNAUTHORIZED_SCOPE');
@@ -109,14 +126,24 @@ export class Writer {
       return { outcome: operations.length ? 'committed' : 'ignored' };
     } catch (error) {
       // A durable receipt wins over transient DB failure; startup reconciles without another model call.
-      try { this.recover(); } catch {
+      let recovered: 'committed' | 'ignored' | null;
+      try { recovered = this.#recover(job.id); } catch {
         try { this.store.fail(job, new Error('RECOVERY_CONFLICT')); } catch { /* Lease may already be fenced. */ }
         return {outcome:'failed',reason:'RECOVERY_CONFLICT'};
       }
-      if (this.store.status().jobs.some(row => row.id === job.id && row.state === 'done')) return {outcome:'committed'};
-      try { this.store.fail(job, error); } catch { /* A recovered receipt or superseded lease owns this batch. */ }
-      return {outcome:signal.aborted ? 'cancelled' : 'failed',reason:signal.aborted ? 'CANCELLED' : failureCode(error)};
-    } finally { clearInterval(timer); }
+      if (recovered) return {outcome:recovered};
+      const cause: unknown = signal.aborted ? signal.reason : error;
+      const diagnostic = failureDiagnostic(cause, stage);
+      // The abort reason remains authoritative; only controlled progress scalars supply missing HTTP context.
+      const context = remoteContext as FailureDiagnostic | null;
+      if (signal.aborted && context && ['TIMEOUT','CANCELLED'].includes(failureCode(cause))) {
+        diagnostic.stage = context.stage;
+        if (context.httpStatus !== undefined) diagnostic.httpStatus = context.httpStatus;
+      }
+      try { this.store.fail(job, cause, diagnostic); } catch { /* A recovered receipt or superseded lease owns this batch. */ }
+      const reason = failureCode(cause);
+      return {outcome:reason === 'CANCELLED' ? 'cancelled' : 'failed',reason};
+    } finally { clearInterval(timer); clearTimeout(deadlineTimer); options.signal?.removeEventListener('abort', cancelled); }
   }
   #quarantine(job: RuntimeJob, issue: string): {outcome:string} { this.store.quarantine(job, job.observations[0]!.id, issue); return {outcome:'quarantined'}; }
   /**
@@ -218,5 +245,5 @@ function describeSource(o: RuntimeJob['observations'][number]): SourceDescriptio
 }
 function digest(value:string):string { return createHash('sha256').update(value).digest('hex'); }
 function abortable<T>(promise:Promise<T>,signal:AbortSignal):Promise<T> {
-  return new Promise((resolve,reject) => { const abort = () => reject(new Error('CANCELLED')); signal.addEventListener('abort',abort,{once:true}); if(signal.aborted) abort(); promise.then(resolve,reject).finally(() => signal.removeEventListener('abort',abort)); });
+  return new Promise((resolve,reject) => { const abort = () => reject(signal.reason); signal.addEventListener('abort',abort,{once:true}); if(signal.aborted) abort(); promise.then(resolve,reject).finally(() => signal.removeEventListener('abort',abort)); });
 }

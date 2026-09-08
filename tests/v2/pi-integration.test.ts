@@ -5,9 +5,9 @@ import {afterEach,expect,it,vi} from 'vitest';
 import {RuntimeStore} from '../../src/v2/runtime.js';
 import {PiCaptureRuntime} from '../../src/pi-extension/extraction-runtime.js';
 import {branchUsers} from '../../src/pi-extension/index.js';
-const cleanup:(()=>void)[]=[];
-afterEach(()=>{for(const fn of cleanup.splice(0))fn();vi.useRealTimers();});
-function fixture(){const root=mkdtempSync(join(tmpdir(),'pi-v2-'));const store=new RuntimeStore(root);const run=vi.fn(async()=>({outcome:'idle'}));const close=vi.fn(()=>store.close());const runtime=new PiCaptureRuntime({store,run,close});cleanup.push(()=>{runtime.shutdown();rmSync(root,{recursive:true,force:true});});return {store,runtime,run,close};}
+const cleanup:(()=>void | Promise<void>)[]=[];
+afterEach(async()=>{for(const fn of cleanup.splice(0))await fn();vi.useRealTimers();});
+function fixture(){const root=mkdtempSync(join(tmpdir(),'pi-v2-'));const store=new RuntimeStore(root);const run=vi.fn(async()=>({outcome:'idle'}));const close=vi.fn(()=>store.close());const runtime=new PiCaptureRuntime({store,run,close});cleanup.push(async()=>{await runtime.shutdown();rmSync(root,{recursive:true,force:true});});return {store,runtime,run,close};}
 it('binds delivered corrections after assistant interruption, not pending inputs',()=>{
   const {store,runtime}=fixture();runtime.input({sessionId:'s',text:'Actually use B',source:'interactive',scope:'global'});
   expect(store.pending()).toHaveLength(0);runtime.delivered('s','Actually use B',1);
@@ -18,8 +18,8 @@ it('binds delivered corrections after assistant interruption, not pending inputs
 it('retains raw whitespace and excludes tool/system/assistant evidence',()=>{
  expect(branchUsers([{type:'message',id:'u',message:{role:'user',content:'  forget it\n',timestamp:2}},{type:'message',id:'a',message:{role:'assistant',content:'done',timestamp:3}},{type:'message',id:'t',message:{role:'toolResult',content:'done',timestamp:4}}])).toEqual([{id:'u',text:'  forget it\n',timestamp:2}]);
 });
-it('shutdown queues flush without waiting for maintenance or starting a model',()=>{
- const {store,runtime,run,close}=fixture();runtime.input({sessionId:'s',text:'remember',source:'rpc',scope:'global'});runtime.delivered('s','remember',4);runtime.bind('s',[{id:'e',text:'remember',timestamp:4}]);runtime.shutdown();expect(run).not.toHaveBeenCalled();expect(close).toHaveBeenCalledOnce();void store;
+it('shutdown queues flush without starting new maintenance and awaits close',async()=>{
+ const {store,runtime,run,close}=fixture();runtime.input({sessionId:'s',text:'remember',source:'rpc',scope:'global'});runtime.delivered('s','remember',4);runtime.bind('s',[{id:'e',text:'remember',timestamp:4}]);await runtime.shutdown();expect(run).not.toHaveBeenCalled();expect(close).toHaveBeenCalledOnce();void store;
 });
 it('starts timer checks only at stable boundaries and stops on shutdown',async()=>{
  vi.useFakeTimers();const {runtime,run}=fixture();runtime.busy();await vi.advanceTimersByTimeAsync(3000);expect(run).not.toHaveBeenCalled();runtime.settled('s',[]);await Promise.resolve();expect(run).toHaveBeenCalledOnce();runtime.shutdown();await vi.advanceTimersByTimeAsync(3000);expect(run).toHaveBeenCalledOnce();
@@ -99,4 +99,16 @@ it('unconfigured Common Memory leaves the system prompt untouched and keeps othe
  createCommonMemoryPiExtension({configFactory:()=>null})(pi);
  expect(handlers.get('before_agent_start')!({systemPrompt:'BASE'},{cwd:'/'})).toBeUndefined();
  for(const name of ['session_start','input','message_end','agent_settled','session_shutdown'])expect(handlers.has(name)).toBe(true);
+});
+
+it('shutdown still aborts and closes if requesting flush fails',async()=>{
+  const root=mkdtempSync(join(tmpdir(),'pi-close-failure-')),store=new RuntimeStore(root);
+  const started=Promise.withResolvers<void>();let aborted=false;
+  const close=vi.fn(async()=>store.close());
+  const runtime=new PiCaptureRuntime({store,close,run:async options=>{started.resolve();await new Promise<void>(resolve=>options!.signal!.addEventListener('abort',()=>{aborted=true;resolve();},{once:true}));}});
+  runtime.start('s',[]);await started.promise;
+  vi.spyOn(store,'requestFlush').mockImplementation(()=>{throw new Error('storage failure');});
+  const closing=runtime.shutdown();expect(runtime.shutdown()).toBe(closing);
+  await expect(closing).rejects.toThrow('shutdown flush failed');expect(aborted).toBe(true);expect(close).toHaveBeenCalledOnce();
+  rmSync(root,{recursive:true,force:true});
 });

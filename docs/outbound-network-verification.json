@@ -1,0 +1,300 @@
+{
+  "date": "2026-09-08",
+  "node": "24.20.0",
+  "undici": "8.10.2",
+  "platformTested": "Linux",
+  "endpoint": "https://api.deepseek.com/responses",
+  "model": "deepseek-v4-flash-vision-exp",
+  "api": "responses",
+  "reasoningEffort": "none",
+  "maxOutputTokens": 4096,
+  "writerDeadlineMs": 60000,
+  "network": {
+    "mode": "env",
+    "no_proxy": "",
+    "NO_PROXY": "",
+    "note": "Explicit isolated child-env bypass override; original host CIDR lists remain unsupported. Proxy URL and API key omitted."
+  },
+  "verify": {
+    "testFiles": 26,
+    "tests": 341,
+    "log": "/tmp/cm-network-verify-final.log"
+  },
+  "consumerLog": "/tmp/cm-network-consumer-final.log",
+  "formalMemoryDigest": "c4e1a57b4617869cc30b69d1c4e93c76bb0112985bedde2b4f9662ba17ac75a7",
+  "preliminaryReport": {
+    "path": "/tmp/cm-deepseek-smoke-oz5Ux7/report.json",
+    "passed": false,
+    "reason": "Init retained; first Markdown attempt HTTP 200 with invalid output JSON. This historical retry queue was not reset."
+  },
+  "runs": [
+    {
+      "reportPath": "/tmp/cm-deepseek-smoke-3MCAyv/report.json",
+      "passed": true,
+      "initJob": "64dcc0ba-a390-46ec-898a-9525bee8c3b3",
+      "initAttempts": 2,
+      "initHistory": [
+        {
+          "state": "pending",
+          "issue": null,
+          "retainedIn": [],
+          "jobId": null,
+          "jobState": null,
+          "attempts": 0,
+          "retryAt": null,
+          "diagnostic": null
+        },
+        {
+          "state": "claimed",
+          "issue": null,
+          "retainedIn": [],
+          "jobId": "64dcc0ba-a390-46ec-898a-9525bee8c3b3",
+          "jobState": "running",
+          "attempts": 1,
+          "retryAt": null,
+          "diagnostic": null
+        },
+        {
+          "state": "claimed",
+          "issue": "INVALID_DECISION",
+          "retainedIn": [],
+          "jobId": "64dcc0ba-a390-46ec-898a-9525bee8c3b3",
+          "jobState": "retry",
+          "attempts": 1,
+          "retryAt": 1788827088285,
+          "diagnostic": {
+            "stage": "core_validation",
+            "reason": "core_rejected",
+            "retryable": false
+          }
+        },
+        {
+          "state": "claimed",
+          "issue": "INVALID_DECISION",
+          "retainedIn": [],
+          "jobId": "64dcc0ba-a390-46ec-898a-9525bee8c3b3",
+          "jobState": "running",
+          "attempts": 2,
+          "retryAt": null,
+          "diagnostic": {
+            "stage": "core_validation",
+            "reason": "core_rejected",
+            "retryable": false
+          }
+        },
+        {
+          "state": "processed",
+          "issue": null,
+          "retainedIn": [
+            "preferences",
+            "profile"
+          ],
+          "jobId": "64dcc0ba-a390-46ec-898a-9525bee8c3b3",
+          "jobState": "done",
+          "attempts": 2,
+          "retryAt": null,
+          "diagnostic": null
+        }
+      ],
+      "markdownJob": "a2946e2b-a57a-4633-b882-c6206c26fbb6",
+      "markdownAttempts": 2,
+      "markdownHistory": [
+        {
+          "exitCode": 1,
+          "job": {
+            "id": "a2946e2b-a57a-4633-b882-c6206c26fbb6",
+            "state": "retry",
+            "attempts": 1,
+            "issue": "INVALID_RESPONSE",
+            "diagnostic": {
+              "stage": "model_output",
+              "reason": "invalid_json",
+              "retryable": false,
+              "httpStatus": 200
+            },
+            "retryAt": 1788827095636
+          }
+        },
+        {
+          "exitCode": 0,
+          "job": {
+            "id": "a2946e2b-a57a-4633-b882-c6206c26fbb6",
+            "state": "done",
+            "attempts": 2,
+            "issue": "INVALID_RESPONSE",
+            "diagnostic": {
+              "stage": "model_output",
+              "reason": "invalid_json",
+              "retryable": false,
+              "httpStatus": 200
+            },
+            "retryAt": null
+          }
+        }
+      ],
+      "durableReceiptIds": [
+        "64dcc0ba-a390-46ec-898a-9525bee8c3b3",
+        "a2946e2b-a57a-4633-b882-c6206c26fbb6"
+      ],
+      "fileReceipts": 2,
+      "restartRead": {
+        "tools": [
+          "memory_read",
+          "memory_status"
+        ],
+        "empty": false,
+        "hasQuillon": true,
+        "hasFedora": true,
+        "hasFish": true,
+        "sha256": "e6724c9470f305ae11976f7e4bb97c667d9ba38db2a0c60f9b78b163e8c7f8e4"
+      },
+      "formalMemoryUnchanged": true
+    },
+    {
+      "reportPath": "/tmp/cm-deepseek-smoke-Zqd7hN/report.json",
+      "passed": true,
+      "initJob": "e4788af8-dcbf-4f19-bd6d-62cf6016c92f",
+      "initAttempts": 1,
+      "initHistory": [
+        {
+          "state": "pending",
+          "issue": null,
+          "retainedIn": [],
+          "jobId": null,
+          "jobState": null,
+          "attempts": 0,
+          "retryAt": null,
+          "diagnostic": null
+        },
+        {
+          "state": "claimed",
+          "issue": null,
+          "retainedIn": [],
+          "jobId": "e4788af8-dcbf-4f19-bd6d-62cf6016c92f",
+          "jobState": "running",
+          "attempts": 1,
+          "retryAt": null,
+          "diagnostic": null
+        },
+        {
+          "state": "processed",
+          "issue": null,
+          "retainedIn": [
+            "preferences",
+            "profile"
+          ],
+          "jobId": "e4788af8-dcbf-4f19-bd6d-62cf6016c92f",
+          "jobState": "done",
+          "attempts": 1,
+          "retryAt": null,
+          "diagnostic": null
+        }
+      ],
+      "markdownJob": "3b18bfc0-2341-4d1d-95da-3920769f19e0",
+      "markdownAttempts": 1,
+      "markdownHistory": [
+        {
+          "exitCode": 0,
+          "job": {
+            "id": "3b18bfc0-2341-4d1d-95da-3920769f19e0",
+            "state": "done",
+            "attempts": 1,
+            "issue": null,
+            "diagnostic": null,
+            "retryAt": null
+          }
+        }
+      ],
+      "durableReceiptIds": [
+        "3b18bfc0-2341-4d1d-95da-3920769f19e0",
+        "e4788af8-dcbf-4f19-bd6d-62cf6016c92f"
+      ],
+      "fileReceipts": 2,
+      "restartRead": {
+        "tools": [
+          "memory_read",
+          "memory_status"
+        ],
+        "empty": false,
+        "hasQuillon": true,
+        "hasFedora": true,
+        "hasFish": true,
+        "sha256": "bb3b530b0b88b0e5911f284a3fb352a0d45691dabc7ebba3e579a84433453810"
+      },
+      "formalMemoryUnchanged": true
+    },
+    {
+      "reportPath": "/tmp/cm-deepseek-smoke-FSvXWo/report.json",
+      "passed": true,
+      "initJob": "1768eb75-4d9e-45bf-87a8-f66eec685afe",
+      "initAttempts": 1,
+      "initHistory": [
+        {
+          "state": "pending",
+          "issue": null,
+          "retainedIn": [],
+          "jobId": null,
+          "jobState": null,
+          "attempts": 0,
+          "retryAt": null,
+          "diagnostic": null
+        },
+        {
+          "state": "claimed",
+          "issue": null,
+          "retainedIn": [],
+          "jobId": "1768eb75-4d9e-45bf-87a8-f66eec685afe",
+          "jobState": "running",
+          "attempts": 1,
+          "retryAt": null,
+          "diagnostic": null
+        },
+        {
+          "state": "processed",
+          "issue": null,
+          "retainedIn": [
+            "preferences",
+            "profile"
+          ],
+          "jobId": "1768eb75-4d9e-45bf-87a8-f66eec685afe",
+          "jobState": "done",
+          "attempts": 1,
+          "retryAt": null,
+          "diagnostic": null
+        }
+      ],
+      "markdownJob": "3f6e1e7c-f9a2-4571-80aa-62d7a1f4bbe1",
+      "markdownAttempts": 1,
+      "markdownHistory": [
+        {
+          "exitCode": 0,
+          "job": {
+            "id": "3f6e1e7c-f9a2-4571-80aa-62d7a1f4bbe1",
+            "state": "done",
+            "attempts": 1,
+            "issue": null,
+            "diagnostic": null,
+            "retryAt": null
+          }
+        }
+      ],
+      "durableReceiptIds": [
+        "1768eb75-4d9e-45bf-87a8-f66eec685afe",
+        "3f6e1e7c-f9a2-4571-80aa-62d7a1f4bbe1"
+      ],
+      "fileReceipts": 2,
+      "restartRead": {
+        "tools": [
+          "memory_read",
+          "memory_status"
+        ],
+        "empty": false,
+        "hasQuillon": true,
+        "hasFedora": true,
+        "hasFish": true,
+        "sha256": "9c9585fd6ac1b277d336b5b0b1a780c23660f5406d6fe86f897caea3cb8c84a7"
+      },
+      "formalMemoryUnchanged": true
+    }
+  ]
+}

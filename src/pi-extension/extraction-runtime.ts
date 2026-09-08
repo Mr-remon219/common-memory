@@ -1,7 +1,7 @@
 import type { RuntimeStore } from "../v2/runtime.js";
 
 export interface SessionUserEntry { id: string; text: string; timestamp: number }
-export interface PiWriter { store: RuntimeStore; run(options?: {force?: boolean; signal?: AbortSignal}): Promise<unknown>; close(): void }
+export interface PiWriter { store: RuntimeStore; run(options?: {force?: boolean; signal?: AbortSignal}): Promise<unknown>; close(): void | Promise<void> }
 /** Host lifecycle adapter. Delivery, rather than successful assistant completion, is evidence. */
 export class PiCaptureRuntime {
   readonly #writer: PiWriter;
@@ -9,6 +9,7 @@ export class PiCaptureRuntime {
   readonly #timer: ReturnType<typeof setInterval>;
   #stable = false;
   #closed = false;
+  #closing: Promise<void> | undefined;
   #running: Promise<unknown> | undefined;
   constructor(writer: PiWriter) {
     this.#writer = writer;
@@ -29,11 +30,16 @@ export class PiCaptureRuntime {
       if (result && typeof result === 'object' && 'outcome' in result && result.outcome === 'failed') process.stderr.write('[common-memory] maintenance failed; inspect common-memory status for the diagnostic code.\n');
     }).catch(() => {
       process.stderr.write("[common-memory] maintenance failed; durable queue retained. Run common-memory status.\n");
-    }).finally(() => { this.#running = undefined; if (this.#closed) this.#writer.close(); });
+    }).finally(() => { this.#running = undefined; });
   }
-  shutdown(): void {
-    if (this.#closed) return;
-    this.#writer.store.requestFlush(); this.#closed = true; clearInterval(this.#timer); this.#abort.abort();
-    if (!this.#running) this.#writer.close();
+  shutdown(): Promise<void> {
+    if (this.#closing) return this.#closing;
+    this.#closed = true; clearInterval(this.#timer); this.#abort.abort();
+    let flushFailed = false;
+    try { this.#writer.store.requestFlush(); } catch { flushFailed = true; }
+    return this.#closing = Promise.resolve(this.#running).then(async () => {
+      try { await this.#writer.close(); }
+      finally { if (flushFailed) throw new Error('Common Memory shutdown flush failed; resources closed'); }
+    });
   }
 }

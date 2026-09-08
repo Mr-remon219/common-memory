@@ -8,13 +8,21 @@ import type { RemoteDisclosurePolicy } from "../memory-manager/contracts/disclos
 import { validateDisclosurePolicy } from "../memory-manager/contracts/disclosure.js";
 import { normalizeOpenAICompatibleBaseUrl } from "../memory-manager/openai/openai-responses-adapter.js";
 
+import { validateRemoteTuning, type RemoteApi, type RemoteTuning } from "../memory-manager/openai/options.js";
+
+import { loadLegacyEnv, privateAssignment } from "./private-env.js";
+import { validateProxyConfig, validateCaEnv, PRIVATE_NETWORK_KEYS, type ProxyConfig } from "../memory-manager/network/route.js";
+
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const PROVENANCE = new Set<ProvenanceType>(["user_explicit", "agent_observation", "document_import"]);
 
 export interface CommonMemoryConfig {
   schemaVersion: 2;
   dataRoot: string;
-  remote: {
+  remote: RemoteTuning & {
+    api?: RemoteApi;
+    proxy?: ProxyConfig;
+    caFileEnv?: string;
     provider: "openai-compatible";
     baseUrl: string;
     model: string;
@@ -46,6 +54,7 @@ export function defaultConfig(env: NodeJS.ProcessEnv = process.env): CommonMemor
       provider: "openai-compatible",
       baseUrl: "https://api.openai.com/v1",
       model: "",
+      proxy: {mode:"env"},
       apiKeyEnv: "OPENAI_API_KEY",
     },
     writableScopes: ["global"],
@@ -87,7 +96,7 @@ export function saveApiKeyToEnvFile(apiKeyEnv: string, apiKey: string, path = en
 }
 
 export function loadLocalEnv(path = envFilePath()): void {
-  if (existsSync(path)) process.loadEnvFile(path);
+  loadLegacyEnv(path);
 }
 
 export function resolveApiKey(config: CommonMemoryConfig, env: NodeJS.ProcessEnv = process.env): string {
@@ -99,7 +108,13 @@ export function resolveApiKey(config: CommonMemoryConfig, env: NodeJS.ProcessEnv
 export function validateConfig(value: unknown): CommonMemoryConfig {
   if (!isRecord(value) || !hasExactKeys(value, ["schemaVersion", "dataRoot", "remote", "disclosure", "writableScopes", "scheduler"]) || value.schemaVersion !== 2) throw new TypeError("Unsupported Common Memory config");
   if (typeof value.dataRoot !== "string" || !isAbsolute(value.dataRoot)) throw new TypeError("dataRoot must be an absolute path");
-  if (!isRecord(value.remote) || !hasExactKeys(value.remote, ["provider", "baseUrl", "model", "apiKeyEnv"]) || value.remote.provider !== "openai-compatible") throw new TypeError("Invalid remote provider config");
+  if (!isRecord(value.remote) || !hasRequiredAndOptionalKeys(value.remote, ["provider", "baseUrl", "model", "apiKeyEnv"], ["api", "maxOutputTokens", "reasoningEffort", "thinking", "enableThinking", "proxy", "caFileEnv"]) || value.remote.provider !== "openai-compatible") throw new TypeError("Invalid remote provider config");
+  const api = value.remote.api === undefined ? "responses" : value.remote.api;
+  if (api !== "responses" && api !== "chat_completions") throw new TypeError("remote.api must be responses or chat_completions");
+  const proxy = value.remote.proxy === undefined ? undefined : validateProxyConfig(value.remote.proxy);
+  const caFileEnv = value.remote.caFileEnv === undefined ? undefined : validateCaEnv(value.remote.caFileEnv);
+  if (caFileEnv !== undefined && proxy === undefined) throw new TypeError("CA configuration requires an explicit network mode");
+  const tuning = validateRemoteTuning(value.remote as RemoteTuning, api);
   const baseUrl = typeof value.remote.baseUrl === "string" ? normalizeOpenAICompatibleBaseUrl(value.remote.baseUrl) : "";
   const model = typeof value.remote.model === "string" ? value.remote.model.trim() : "";
   const apiKeyEnv = typeof value.remote.apiKeyEnv === "string" ? value.remote.apiKeyEnv.trim() : "";
@@ -118,7 +133,7 @@ export function validateConfig(value: unknown): CommonMemoryConfig {
     writableScopes: [...value.writableScopes] as string[],
     scheduler: { ...value.scheduler } as CommonMemoryConfig["scheduler"],
     dataRoot: resolve(value.dataRoot),
-    remote: { provider: "openai-compatible", baseUrl, model, apiKeyEnv },
+    remote: { provider: "openai-compatible", baseUrl, model, apiKeyEnv, ...(value.remote.api === undefined ? {} : {api}), ...tuning, ...(proxy === undefined ? {} : {proxy}), ...(caFileEnv === undefined ? {} : {caFileEnv}) },
     disclosure: {
       enabled: true,
       allowedScopes: [...disclosure.allowedScopes],
@@ -145,4 +160,17 @@ function isRecord(value: unknown): value is Record<string, unknown> { return typ
 function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
   const actual = Object.keys(value).sort(); const wanted = [...expected].sort();
   return actual.length === wanted.length && actual.every((key, index) => key === wanted[index]);
+}
+
+function hasRequiredAndOptionalKeys(value: Record<string, unknown>, required: string[], optional: string[]): boolean { return required.every(key => Object.hasOwn(value, key)) && Object.keys(value).every(key => required.includes(key) || optional.includes(key)); }
+
+/** New network secrets are reserved and local; even a legacy loader will never export them. */
+export function saveNetworkSecret(name: typeof PRIVATE_NETWORK_KEYS[number], value: string, path = envFilePath()): void {
+  if (!PRIVATE_NETWORK_KEYS.some(key => key === name)) throw new TypeError('Invalid private network key');
+  const assignment = privateAssignment(name,value);
+  const lines = existsSync(path) ? readFileSync(path,'utf8').split(/\r?\n/u) : [];
+  const matcher = new RegExp(`^\\s*(?:export\\s+)?${name}\\s*=`, 'u');
+  const kept = lines.filter(line => !matcher.test(line));
+  while (kept.at(-1) === '') kept.pop();
+  writePrivateFile(path, [...kept,assignment,''].join('\n'));
 }

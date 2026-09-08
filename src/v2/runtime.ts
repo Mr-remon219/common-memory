@@ -1,4 +1,5 @@
-import { failureCode } from './errors.js';
+import { sanitizeDiagnostic, type FailureDiagnostic } from '../memory-manager/contracts/diagnostic.js';
+import { failureDiagnostic, failureCode } from './errors.js';
 import { DatabaseSync } from "node:sqlite";
 import { lstatSync } from "node:fs";
 import { join } from "node:path";
@@ -11,6 +12,8 @@ export interface Observation extends Omit<ObservationInput, "text"> { id: number
 export interface RuntimeJob { id: string; token: string; generation: number; observations: Observation[] }
 export interface RuntimeReceipt { documents?: {target:string;after:string}[]; id?: string; token?: string; generation?: number; requestId?: string; jobId: string; observationIds: number[]; associations?: {target: string; sourceIds: number[]}[]; forgetSourceIds?: number[]; removeTargets?: string[] }
 export interface RuntimeOptions { now?: () => number; turnThreshold?: number; byteThreshold?: number; idleMs?: number; maxWaitMs?: number; leaseMs?: number; maxAttempts?: number }
+export interface JobStatus { id: string; state: string; attempts: number; issue: string | null; diagnostic: FailureDiagnostic | null; retryAt: number | null }
+export interface ObservationOutcome { state: string; issue: string | null; retainedIn: string[]; jobId: string | null; jobState: string | null; attempts: number; retryAt: number | null; diagnostic: FailureDiagnostic | null }
 type Row = Record<string, string | number | null>;
 
 /** Durable queue, not a reconstructible index. All mutating operations are synchronous. */
@@ -30,7 +33,7 @@ export class RuntimeStore {
     this.#options = {turnThreshold: options.turnThreshold ?? 6, byteThreshold: options.byteThreshold ?? 16384, idleMs: options.idleMs ?? 120000, maxWaitMs: options.maxWaitMs ?? 600000, leaseMs: options.leaseMs ?? 120000, maxAttempts: options.maxAttempts ?? 5};
     for (const value of Object.values(this.#options)) if (!Number.isSafeInteger(value) || value <= 0) throw new Error("Invalid runtime limit");
     this.db = new DatabaseSync(path);
-    this.db.exec(`PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
+    try { this.db.exec(`PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
       CREATE TABLE IF NOT EXISTS observations(id INTEGER PRIMARY KEY AUTOINCREMENT, sessionId TEXT NOT NULL, entryId TEXT NOT NULL, text TEXT, digest TEXT NOT NULL, scope TEXT NOT NULL, observedAt TEXT NOT NULL, source TEXT NOT NULL, state TEXT NOT NULL, enqueuedAt INTEGER NOT NULL, processedAt INTEGER, jobId TEXT, issue TEXT, UNIQUE(sessionId,entryId));
       CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY, token TEXT NOT NULL, generation INTEGER NOT NULL, state TEXT NOT NULL, expires INTEGER NOT NULL, attempts INTEGER NOT NULL, available INTEGER NOT NULL, issue TEXT);
       CREATE TABLE IF NOT EXISTS document_versions(target TEXT PRIMARY KEY, hash TEXT NOT NULL);
@@ -43,6 +46,11 @@ export class RuntimeStore {
       CREATE INDEX IF NOT EXISTS observations_job_id ON observations(jobId,id) WHERE jobId IS NOT NULL;
       CREATE INDEX IF NOT EXISTS observations_prunable ON observations(processedAt) WHERE state='processed' AND text IS NOT NULL;
       CREATE INDEX IF NOT EXISTS jobs_active ON jobs(state) WHERE state IN ('running','retry');`);
+      // BEGIN IMMEDIATE serializes the introspection and ALTER across old/new concurrent opens.
+      this.transaction(() => {
+        if (!this.db.prepare('PRAGMA table_info(jobs)').all().some(row => row.name === 'diagnostic')) this.db.exec('ALTER TABLE jobs ADD COLUMN diagnostic TEXT');
+      });
+    } catch (error) { this.db.close(); throw error; }
   }
   transaction<T>(fn: () => T): T {
     if (this.#depth > 0) return fn();
@@ -67,11 +75,17 @@ export class RuntimeStore {
     return row ? {state: String(row.state)} : null;
   }
   /** Outcome without bodies: which documents currently link Sections to this observation, plus the diagnostic code. */
-  observationOutcome(sessionId: string, entryId: string): {state: string; issue: string | null; retainedIn: string[]} | null {
-    const row = this.db.prepare("SELECT id,state,issue FROM observations WHERE sessionId=? AND entryId=?").get(sessionId, entryId);
+  observationOutcome(sessionId: string, entryId: string): ObservationOutcome | null {
+    const row = this.db.prepare("SELECT o.id,o.state,o.issue,o.jobId,j.state AS jobState,j.attempts,j.available,j.issue AS jobIssue,j.diagnostic FROM observations o LEFT JOIN jobs j ON j.id=o.jobId WHERE o.sessionId=? AND o.entryId=?").get(sessionId, entryId);
     if (!row) return null;
     const targets = this.db.prepare("SELECT DISTINCT target FROM associations WHERE sourceId=?").all(row.id!).map(link => String(link.target).replace(/:[a-f0-9]{64}$/, ''));
-    return {state: String(row.state), issue: row.issue === null || row.issue === undefined ? null : String(row.issue), retainedIn: [...new Set(targets)].sort()};
+    const processed = row.state === 'processed';
+    return {state:String(row.state), issue:processed ? null : nullableString(row.issue ?? row.jobIssue), retainedIn:[...new Set(targets)].sort(), jobId:nullableString(row.jobId), jobState:nullableString(row.jobState), attempts:Number(row.attempts ?? 0), retryAt:row.jobState === 'retry' && !processed ? Number(row.available) : null, diagnostic:processed ? null : readDiagnostic(row.diagnostic)};
+  }
+  hasReceipt(jobId: string): boolean { return Boolean(this.db.prepare('SELECT 1 FROM receipts WHERE id=?').get(jobId)); }
+  /** Current incomplete work only. Retired jobs and historical quarantine do not block a flush. */
+  hasIncompleteWork(): boolean {
+    return Boolean(this.db.prepare("SELECT 1 FROM observations WHERE state IN ('pending','claimed','dead') LIMIT 1").get());
   }
   hasWork(): boolean { return Boolean(this.db.prepare("SELECT 1 FROM observations WHERE state IN ('pending','claimed') LIMIT 1").get()); }
   pending(): Observation[] { return this.db.prepare("SELECT * FROM observations WHERE state='pending' ORDER BY id").all() as unknown as Observation[]; }
@@ -121,7 +135,7 @@ export class RuntimeStore {
         observations.push(observation);
       }
       const id=randomUUID(),token=randomUUID();
-      this.db.prepare("INSERT INTO jobs VALUES(?,?,1,'running',?,1,0,NULL)").run(id,token,now+this.#options.leaseMs);
+      this.db.prepare("INSERT INTO jobs(id,token,generation,state,expires,attempts,available,issue) VALUES(?,?,1,'running',?,1,0,NULL)").run(id,token,now+this.#options.leaseMs);
       for (const o of observations) this.db.prepare("UPDATE observations SET state='claimed',jobId=? WHERE id=?").run(id,o.id);
       if (!this.db.prepare("SELECT 1 FROM observations WHERE state='pending' LIMIT 1").get()) this.db.prepare("DELETE FROM settings WHERE key='flush'").run();
       return {id,token,generation:1,observations};
@@ -157,7 +171,7 @@ export class RuntimeStore {
   sources(target: string): number[] {return this.db.prepare("SELECT sourceId FROM associations WHERE target=? ORDER BY sourceId").all(target).map(row=>Number(row.sourceId));}
   /** Source kinds of linked observations; bodies may be pruned but provenance stays. */
   sourceKinds(ids: readonly number[]): string[] { return ids.map(id => { const row=this.db.prepare("SELECT source FROM observations WHERE id=?").get(id); return row ? String(row.source) : 'unknown'; }); }
-  fail(job: RuntimeJob, error: unknown): void {this.transaction(()=>{this.assertLease(job);const row=this.db.prepare("SELECT attempts FROM jobs WHERE id=?").get(job.id)!;const dead=Number(row.attempts)>=this.#options.maxAttempts;this.db.prepare("UPDATE jobs SET state=?,available=?,issue=? WHERE id=?").run(dead?"dead":"retry",this.#now()+Math.min(600000,1000*2**(Number(row.attempts)-1)),failureCode(error),job.id);if(dead)this.db.prepare("UPDATE observations SET state='dead' WHERE jobId=?").run(job.id);});}
+  fail(job: RuntimeJob, error: unknown, diagnostic: FailureDiagnostic = failureDiagnostic(error)): void {this.transaction(()=>{this.assertLease(job);const row=this.db.prepare("SELECT attempts FROM jobs WHERE id=?").get(job.id)!;const dead=Number(row.attempts)>=this.#options.maxAttempts;this.db.prepare("UPDATE jobs SET state=?,available=?,issue=?,diagnostic=? WHERE id=?").run(dead?"dead":"retry",this.#now()+Math.min(600000,1000*2**(Number(row.attempts)-1)),failureCode(error),JSON.stringify(sanitizeDiagnostic(diagnostic)),job.id);if(dead)this.db.prepare("UPDATE observations SET state='dead' WHERE jobId=?").run(job.id);});}
   quarantine(job: RuntimeJob, observationId: number, issue: string): void {this.transaction(()=>{this.assertLease(job);if(!job.observations.some(o=>o.id===observationId))throw new Error("Unknown observation");this.db.prepare("UPDATE observations SET state='quarantined',jobId=NULL,issue=? WHERE id=?").run(issue,observationId);this.db.prepare("UPDATE observations SET state='pending',jobId=NULL WHERE jobId=?").run(job.id);this.db.prepare("UPDATE jobs SET state='done' WHERE id=?").run(job.id);});}
   retry(jobId: string): void {this.transaction(()=>{this.db.prepare("UPDATE observations SET state='pending',jobId=NULL WHERE jobId=? AND state='dead'").run(jobId);this.db.prepare("UPDATE jobs SET state='done' WHERE id=? AND state='dead'").run(jobId);});}
   pruneProcessed(retentionMs=7*86400000): void {this.db.prepare("UPDATE observations INDEXED BY observations_prunable SET text=NULL WHERE state='processed' AND text IS NOT NULL AND processedAt<?").run(this.#now()-retentionMs);}
@@ -192,6 +206,9 @@ export class RuntimeStore {
     });
   }
   bind(sessionId:string,entries:readonly {id:string;text:string;timestamp:number}[]): void {this.transaction(()=>{const deliveries=this.db.prepare("SELECT * FROM deliveries WHERE sessionId=? AND state='unbound' ORDER BY id").all(sessionId) as Row[];for(const delivery of deliveries){const matches=entries.filter(e=>e.text===delivery.text && e.timestamp===delivery.timestamp);if(matches.length>1){this.db.prepare("UPDATE deliveries SET state='quarantined' WHERE id=?").run(delivery.id!);continue;}if(matches.length===0)continue;this.enqueue({sessionId,entryId:matches[0]!.id,text:String(delivery.text),scope:String(delivery.scope),source:String(delivery.source),observedAt:new Date(Number(delivery.timestamp)).toISOString()});this.db.prepare("UPDATE deliveries SET state='bound',text='' WHERE id=?").run(delivery.id!);}});}
-  status(): {observations:Row[];jobs:Row[];unbound:number;quarantinedDeliveries:number} {return {observations:this.db.prepare("SELECT state,COUNT(*) AS count FROM observations GROUP BY state").all() as Row[],jobs:this.db.prepare("SELECT id,state,attempts,issue FROM jobs ORDER BY rowid").all() as Row[],quarantinedDeliveries:Number(this.db.prepare("SELECT COUNT(*) AS n FROM deliveries WHERE state='quarantined'").get()!.n),unbound:Number(this.db.prepare("SELECT COUNT(*) AS n FROM deliveries WHERE state='unbound'").get()!.n)};}
+  status(): {observations:Row[];jobs:JobStatus[];unbound:number;quarantinedDeliveries:number} {return {observations:this.db.prepare("SELECT state,COUNT(*) AS count FROM observations GROUP BY state").all() as Row[],jobs:this.db.prepare("SELECT id,state,attempts,issue,diagnostic,available FROM jobs ORDER BY rowid").all().map(row => ({id:String(row.id),state:String(row.state),attempts:Number(row.attempts),issue:nullableString(row.issue),diagnostic:readDiagnostic(row.diagnostic),retryAt:row.state === 'retry' ? Number(row.available) : null})),quarantinedDeliveries:Number(this.db.prepare("SELECT COUNT(*) AS n FROM deliveries WHERE state='quarantined'").get()!.n),unbound:Number(this.db.prepare("SELECT COUNT(*) AS n FROM deliveries WHERE state='unbound'").get()!.n)};}
   close(): void {this.db.close();}
 }
+
+function nullableString(value: unknown): string | null { return value === null || value === undefined ? null : String(value); }
+function readDiagnostic(value: unknown): FailureDiagnostic | null { if (typeof value !== 'string') return null; try { return sanitizeDiagnostic(JSON.parse(value)); } catch { return null; } }

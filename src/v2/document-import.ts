@@ -188,13 +188,13 @@ export function admitDocumentImport(store: RuntimeStore, prepared: PreparedDocum
   });
 }
 
-export interface DocumentImportOutcome { importId: string; contextId: string; complete: boolean; parts: { part: number; state: string; issue: string | null; retainedIn: string[] }[]; retainedIn: string[] }
+export interface DocumentImportOutcome { importId: string; contextId: string; complete: boolean; parts: (import("./runtime.js").ObservationOutcome & {part: number})[]; retainedIn: string[] }
 /** Per-part state without bodies; `complete` only when every part was processed. */
 export function documentImportOutcome(store: RuntimeStore, importId: string, contextId: string, count: number): DocumentImportOutcome {
   const sessionId = documentImportSession(importId, contextId);
   const parts = Array.from({ length: count }, (_, i) => {
     const outcome = store.observationOutcome(sessionId, `part-${i + 1}`);
-    return { part: i + 1, state: outcome?.state ?? 'unknown', issue: outcome?.issue ?? null, retainedIn: outcome?.retainedIn ?? [] };
+    return { part:i + 1, ...(outcome ?? {state:'unknown',issue:null,retainedIn:[],jobId:null,jobState:null,attempts:0,retryAt:null,diagnostic:null}) };
   });
   return { importId, contextId, complete: parts.every(p => p.state === 'processed'), parts, retainedIn: [...new Set(parts.flatMap(p => p.retainedIn))].sort() };
 }

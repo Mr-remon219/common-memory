@@ -20,7 +20,7 @@ const steps = [
   ['typecheck', [tsc, '-p', 'tsconfig.json', '--noEmit']],
   ['boundaries', [join(root, 'scripts/check-boundaries.mjs')]],
   ['tests', [vitest, 'run']],
-  ['build', [tsc, '-p', 'tsconfig.build.json']],
+  ['build', [join(root, 'scripts/build.mjs')]],
 ];
 for (const [name, args] of steps) {
   console.log(`\n[verify] ${name}`);

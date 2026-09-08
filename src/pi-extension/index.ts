@@ -56,7 +56,7 @@ export function createCommonMemoryPiExtension(options: {runtimeFactory?: () => P
     pi.on("session_before_switch", (_event,ctx)=>{bind(ctx);safe(r=>{r.cancelInputs(ctx.sessionManager.getSessionId());r.flush();});});
     pi.on("session_before_compact", (_event,ctx)=>{bind(ctx);safe(r=>r.flush());});
     pi.on("session_before_tree", (_event,ctx)=>{bind(ctx);safe(r=>{r.cancelInputs(ctx.sessionManager.getSessionId());r.flush();});});
-    pi.on("session_shutdown", (_event,ctx)=>{ if(runtime){bind(ctx);runtime.cancelInputs(ctx.sessionManager.getSessionId());runtime.shutdown();runtime=undefined;} });
+    pi.on("session_shutdown", async (_event,ctx)=>{ if(runtime){try { bind(ctx);runtime.cancelInputs(ctx.sessionManager.getSessionId()); } finally { try { await runtime.shutdown(); } finally { runtime=undefined;config=undefined;registry=undefined; } }} });
     pi.registerCommand("memory-flush",{description:"Queue Common Memory maintenance",handler:async (_args,ctx)=>{bind(ctx);safe(r=>r.flush());}});
   };
 }

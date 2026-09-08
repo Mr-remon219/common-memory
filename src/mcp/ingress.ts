@@ -11,7 +11,7 @@ export interface McpOptions { clientId: string; workspaces: string[]; global: bo
 export interface SubmissionIdentity { submissionId: string; conversationId?: string | undefined }
 export interface Submission extends SubmissionIdentity { contextId: string; text: string }
 export interface InitSubmission extends AgentImportPayload { importId: string; contextId: string }
-export interface SubmissionOutcome { state: string; issue: string | null; retainedIn: string[] }
+export type SubmissionOutcome = import("../v2/runtime.js").ObservationOutcome;
 const validId = (id: string) => /^[A-Za-z0-9_-]{1,128}$/.test(id);
 
 /** Local host trust is established at launch, never by a tool argument. */

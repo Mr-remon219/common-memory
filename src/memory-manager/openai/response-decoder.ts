@@ -1,15 +1,20 @@
 import { createHmac } from "node:crypto";
 import type { MemoryModelResult, ModelUsage } from "../contracts/model-port.js";
+import type { DiagnosticReason } from "../contracts/diagnostic.js";
 import { MemoryModelError } from "../contracts/errors.js";
 
 export function decodeResponsesEnvelope(value: unknown, fingerprintKey: string): MemoryModelResult {
   const root = record(value);
+  if (root.status === "incomplete") {
+    const details = root.incomplete_details;
+    invalid(details && typeof details === 'object' && 'reason' in details && details.reason === 'max_output_tokens' ? 'output_truncated' : 'incomplete_output');
+  }
   if (root.status !== "completed" || (root.incomplete_details !== null && root.incomplete_details !== undefined) || (root.error !== null && root.error !== undefined) || !Array.isArray(root.output)) invalid();
   const messages: Record<string, unknown>[] = [];
   for (const item of root.output) {
     const output = record(item);
     if (output.type === "reasoning") continue;
-    if (output.type !== "message") invalid();
+    if (output.type !== "message") invalid(typeof output.type === "string" && /(?:call|tool)/u.test(output.type) ? "tool_call" : "invalid_envelope");
     messages.push(output);
   }
   if (messages.length !== 1) invalid();
@@ -18,7 +23,7 @@ export function decodeResponsesEnvelope(value: unknown, fingerprintKey: string):
   const content = record(message.content[0]); const usage = parseUsage(root.usage);
   if (content.type === "refusal" && typeof content.refusal === "string") return { kind: "refusal", category: "provider_refusal", fingerprint: createHmac("sha256", fingerprintKey).update(content.refusal, "utf8").digest("hex"), usage };
   if (content.type !== "output_text" || typeof content.text !== "string") invalid();
-  let body: unknown; try { body = JSON.parse(content.text); } catch { invalid(); }
+  let body: unknown; try { body = JSON.parse(content.text); } catch { invalid("invalid_json"); }
   return { kind: "output", body, usage };
 }
 function parseUsage(value: unknown): ModelUsage {
@@ -29,4 +34,4 @@ function parseUsage(value: unknown): ModelUsage {
 }
 function finite(value: unknown): value is number { return typeof value === "number" && Number.isFinite(value) && value >= 0; }
 function record(value: unknown): Record<string, unknown> { if (!value || typeof value !== "object" || Array.isArray(value)) invalid(); return value as Record<string, unknown>; }
-function invalid(): never { throw new MemoryModelError("INVALID_RESPONSE", "Provider returned an invalid Responses envelope"); }
+function invalid(reason: DiagnosticReason = "invalid_envelope"): never { throw new MemoryModelError("INVALID_RESPONSE", "Provider returned an invalid Responses envelope", false, {stage:reason === "invalid_json" ? "model_output" : "response_envelope",reason,retryable:false}); }

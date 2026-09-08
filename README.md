@@ -23,9 +23,31 @@ Memory runs inside WSL and the ChatGPT/Codex desktop app reaches it through `wsl
 Requires Node.js 24. `npm ci && npm run build`, then `node dist/cli/main.js config`.
 The local wizard writes `~/.common-memory/config.json` and a private `.env` file
 (`COMMON_MEMORY_HOME` overrides this location). Configure an OpenAI-compatible
-Responses endpoint with Structured Outputs. Keys are never stored in canonical memory.
-V2 requires configuration `schemaVersion: 2`; old configuration/data is not migrated
-or automatically deleted.
+API root and choose a request mode in `remote.api` (omitted means `responses`).
+Responses uses strict Structured Outputs; `chat_completions` uses JSON object mode
+with the complete maintenance schema in the system message. Both use the same Core
+validation and commit path. Keys are never stored in canonical memory.
+V2 requires configuration `schemaVersion: 2`; pre-V2 configuration/data is not migrated
+or automatically deleted. Existing V2 configurations remain valid; the V2 jobs table
+receives an idempotent, transactional nullable diagnostic column when opened.
+
+Optional fields in `remote` (edit `config.json`; the API key wizard and private `.env`
+storage are unchanged):
+
+| Field | Accepted values / effect |
+| --- | --- |
+| `api` | `responses` (default) or `chat_completions`; explicit selection, no fallback |
+| `maxOutputTokens` | Integer 1–16384; default 4096; `max_output_tokens` for Responses, `max_tokens` for Chat |
+| `reasoningEffort` | Responses only: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; sent as `reasoning.effort` |
+| `thinking` | Chat only: `{ "type": "enabled" }` or `{ "type": "disabled" }` |
+| `enableThinking` | Chat only: boolean, sent as `enable_thinking`; mutually exclusive with `thinking` |
+
+Unconfigured thinking/effort fields are omitted. The endpoint and model must support
+the selected fields; there is no brand detection, automatic parameter translation or
+arbitrary body-field forwarding. The default Writer deadline remains 60 seconds.
+Current provider evidence and the reusable verification procedure are recorded in
+[Provider verification](docs/provider-verification.md); earlier experiments remain in
+[Init v0.1 closeout verification](docs/init-v0.1-closeout.md).
 
 Register the built package as a Pi extension using the package's `pi.extensions`
 entry. It records input origins, durably records actual user `message_end` deliveries,
@@ -43,11 +65,80 @@ is stored. Reading needs no model, API key or Writer; a plain "who am I?" in a n
 session therefore answers from canonical memory without any tool name. Reading does
 not change capture, thresholds or Writer behaviour.
 
+## Model network configuration
+
+Common Memory owns one outbound client per configured model, shared by the CLI, MCP
+and Pi paths. Run `common-memory config --network` to select a route. This changes
+model calls only; it does not configure the host's other network clients.
+
+| Mode | Request route |
+| --- | --- |
+| `direct` | Independent direct Agent; ignores HTTP/ALL proxy variables and the host global dispatcher |
+| `env` | HTTPS: HTTPS_PROXY → HTTP_PROXY → ALL_PROXY; HTTP: HTTP_PROXY → ALL_PROXY; honors the supported NO_PROXY rules |
+| `custom` | Explicit HTTP/HTTPS proxy; optional own bypass list, independent of host NO_PROXY; SOCKS5 is experimental |
+| Old config without `remote.proxy` | Legacy host route, whose actual behavior is unknown to Common Memory; preserved until network settings are explicitly saved |
+
+New installations default to `remote.proxy: {"mode":"env"}`. Existing schemaVersion 2
+files retain field absence on load/save and ordinary API configuration, so upgrading
+alone does not change their route. Legacy borrows the fetch captured at client creation
+and preserves historic private environment loading, except for newly reserved network
+secret names. It is a compatibility exception to network isolation.
+
+In the new modes, proxy variables and API keys are read locally with **process env
+before Common Memory's private `.env`**. For each standard proxy variable group, the
+process source wins before checking lowercase/uppercase spelling; lowercase wins
+within that source. A present empty value clears that group. No new-mode loading
+changes `process.env`, global fetch, global dispatchers or global certificate trust.
+The route and connections are fixed for the client's lifetime, including retries;
+restart active MCP/Pi clients after changing configuration.
+
+The wizard saves a custom proxy URL only as private `COMMON_MEMORY_PROXY_URL`, with
+`remote.proxy: {"mode":"custom","urlEnv":"COMMON_MEMORY_PROXY_URL"}` in JSON. URL
+credentials are supported. Optional extra CA certificates are referenced through
+`remote.caFileEnv: "COMMON_MEMORY_CA_FILE"`; the private value is a PEM file path.
+The CA file is limited to 1 MiB and is added to Node's default trust only for this
+client. Certificate and hostname verification stay enabled. Other custom `urlEnv`
+or `caFileEnv` names are read from external process env only. Reserved private network
+keys are never exported by the legacy loader either.
+
+NO_PROXY (or custom `noProxy`) accepts comma/whitespace-separated hostnames,
+`example.com`, `.example.com` and `*.example.com` (apex plus subdomains), exact IPv4/
+IPv6, optional ports and standalone `*` anywhere in the list. IPv6 ports require
+brackets. Matching normalizes case, IDNA, trailing dots and IP spelling; it compares
+effective ports, so HTTPS with omitted port matches `:443`. It performs no DNS lookup:
+`localhost` does not imply `127.0.0.1` or `::1`. **CIDR ranges, URL/path entries and other
+wildcards are rejected** with `no_proxy_invalid`; they are not silently ignored.
+An environment containing CIDR entries needs an explicit supported bypass list or a
+custom route. A failing selected proxy never falls back to direct.
+
+Windows/macOS GUI processes can inherit different environment variables from terminals;
+configure the private settings when that is the desired common source. WSL uses its
+own visible environment and reachable proxy address; Common Memory does not guess a
+Windows host address or copy Windows proxy settings. OS VPN/TUN routing still applies
+in every mode. PAC/WPAD, SOCKS4 and NTLM/Kerberos are unsupported.
+
+`status` describes configuration, selection/bypass reason and actual storage paths;
+it does not open network connections. `network-test` explicitly sends a small synthetic
+model API request without opening SQLite or writing memory. Its success does not prove
+Writer commits. Proxy authentication (`PROXY_AUTHENTICATION`, `proxyStatus:407`) is
+separate from provider API key authentication (`AUTHENTICATION`, `httpStatus:401/403`).
+Errors expose controlled stages/reasons, not proxy credentials or provider bodies.
+
+Configured model clients and configured Writers expose async `close()` and own their
+connections. CLI/MCP/Pi await shutdown. Integrators creating them directly must also
+`await close()`; a plain `Writer` still borrows its `MemoryModelPort` and does not close
+caller-owned resources. The port itself remains analysis-only.
+
+Research, explicit environment limits and acceptance evidence:
+[network design and review](docs/outbound-network-design.md).
+
 ## Commands
 
 ```sh
 common-memory config
+common-memory config --network
 common-memory status
+common-memory network-test
 common-memory show [--workspace /absolute/project/path]
 common-memory import <file.md> [--workspace /absolute/project/path] [--author user|agent|third_party|mixed|unknown] [--label <text>] [--no-wait]
 common-memory flush
@@ -113,6 +204,12 @@ ancestor, frozen at capture time. Registration alone grants no permission: separ
 add `project:<id>` to `disclosure.allowedScopes` and `writableScopes` in config.
 Removing a registration leaves its Markdown intact. `status` reports pending,
 quarantined, dead jobs and unbound deliveries without printing raw conversations.
+It also shows the config path and resolved storage paths (including symlink targets);
+absent storage is displayed without creating it. `flush` exits 1 if this invocation
+fails, is cancelled, quarantines an observation, or ends with pending/claimed/dead
+observations. An idle scheduler waiting for backoff or an active lease is incomplete.
+Historical quarantine and retired jobs do not block an otherwise empty queue; flush
+does not bypass backoff or take another process's lease.
 Pi also provides `/memory-flush`. Shutdown queues a flush and cancels in-flight work;
 it does not wait for a remote model. Restart resumes durable work.
 
@@ -178,7 +275,13 @@ not instructions.
 - `memory_status { submissionId, conversationId? }` / `memory_status { importId }`:
   that item's `state` (`pending`, `claimed`, `processed`, `quarantined`, `dead`), the
   documents it is currently retained in (`retainedIn`, derived from Section source
-  links, never titles or bodies) and a diagnostic `issue` code. `processed` with an
+  links, never titles or bodies), the existing `issue` code, and `diagnostic`
+  (`stage`, local `reason`, optional `httpStatus`, `retryable`). It also returns
+  `jobId`, `jobState`, `attempts` and `retryAt` (Unix milliseconds, null unless
+  waiting for a job retry). Diagnostics follow the current linked job and survive
+  restart; processed observations hide earlier failures, while local job history
+  retains them. Provider messages/bodies are never persisted as diagnostics.
+  `retryable` describes the adapter's advice and does not change Runtime scheduling. `processed` with an
   empty `retainedIn` means the Core kept nothing (ignored or reorganized only).
 
 ### What Init means
@@ -444,7 +547,16 @@ npm run test:consumer
 npm pack --dry-run
 # 隔离数据目录 + 合成维护模型：Init 与 Markdown 导入 → 本地文件 → 读取 演示（不证明真实模型语义）：
 npm run build && node scripts/demo-init-synthetic.mjs [--home <new-or-empty-dir>] [--markdown notes.md]
+# 构建后验证 smoke 自身的 Responses / Chat 流程（本地 fake Provider，无需 Key）：
+npm run test:provider-smoke
+# 真实 Provider：使用现有格式的配置副本，仅复制 remote；Key 来自进程环境：
+node scripts/smoke-provider.mjs --config /path/to/provider-config.json --live
 ```
+
+The provider smoke requires an explicit `remote.proxy` mode, uses fresh temporary
+storage, and checks source-linked durable receipts plus restarted reads. A processed
+`ignore` does not pass retention. See [the procedure and evidence levels](docs/provider-verification.md)
+for network conditions, reports, and the retained DeepSeek entry point.
 
 The demo only writes into a fresh directory (a new temp directory by default); it refuses
 a non-empty `--home` and never deletes or overwrites an existing configuration, `.env` or

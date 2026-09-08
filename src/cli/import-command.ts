@@ -43,13 +43,15 @@ export async function runImport(config: CommonMemoryConfig, args: string[], log:
   const prepared = prepareDocumentImport(options.file, { label: options.label, author: options.author, maxTotalBytes: config.disclosure.maxTotalBytes });
   log(`file: ${prepared.fileName} (${prepared.bytes} bytes, ${prepared.chunks.length} part${prepared.chunks.length === 1 ? "" : "s"}); label: ${prepared.sourceLabel}; declared author: ${prepared.declaredAuthor}; context: ${contextId}`);
   if (!config.writableScopes.includes(contextId)) log(`note: ${contextId} is not in writableScopes; the Writer can only commit to writable targets`);
-  const writer = createConfiguredWriter(config);
+  const writer = createConfiguredWriter(config), controller = new AbortController();
+  const cancel = () => controller.abort();
+  process.once('SIGINT',cancel);process.once('SIGTERM',cancel);
   try {
     const admitted = admitDocumentImport(writer.store, prepared, contextId);
     log(admitted.duplicate ? `duplicate: this exact content was already imported as ${admitted.importId}; no new material was queued` : `accepted: queued as ${admitted.importId} (${admitted.parts} part${admitted.parts === 1 ? "" : "s"}); accepted means durably queued, not remembered`);
     if (options.wait) {
       for (;;) {
-        const result = await writer.run({ force: true });
+        const result = await writer.run({ force: true, signal:controller.signal });
         log(`maintenance: ${JSON.stringify(result)}`);
         if (!["committed", "noop", "ignored", "quarantined"].includes(result.outcome)) break;
       }
@@ -60,5 +62,5 @@ export async function runImport(config: CommonMemoryConfig, args: string[], log:
     else if (!options.wait) log("queued: run common-memory flush, or import the same file again, to process and report");
     else log("incomplete: some parts were not processed. dead jobs: common-memory retry <job-id>; pending/retry: import the same file again or common-memory flush; quarantined parts are final for this content (see their issue above) and need a changed file to be imported again");
     return { exitCode: options.wait && !outcome.complete ? 1 : 0, outcome };
-  } finally { writer.close(); }
+  } finally { process.off('SIGINT',cancel);process.off('SIGTERM',cancel);await writer.close(); }
 }

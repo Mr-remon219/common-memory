@@ -14,6 +14,7 @@ let realModel;
 if(real){const config=loadConfig();if(!config)throw new Error('Missing configuration');realModel=createConfiguredMemoryModel(config);}
 const report={mode:real?'real-opt-in':'scripted-executor',semanticQualityVerified:real,trajectories:limit,results:[]};
 let totalCalls=0;
+try {
 for(const policy of policies){
  const metrics={policy,cases:0,correctFinalState:0,scopeErrors:0,calls:0,inputBytes:0,inputTokens:0,outputTokens:0,tokensMeasured:real,retries:0,failureCodes:{},maxLatencyMs:0,meanLatencyMs:0,outcomes:{}};let latencyTotal=0,consumed=0;
  for(const fixture of fixtures.slice(0,limit)){
@@ -53,3 +54,5 @@ for(const policy of policies){
  metrics.meanLatencyMs=consumed?Math.round(latencyTotal/consumed):0;report.results.push(metrics);
 }
 console.log(JSON.stringify(report,null,2));
+
+} finally { await realModel?.close(); }

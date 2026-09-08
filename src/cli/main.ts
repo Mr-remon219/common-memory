@@ -1,15 +1,16 @@
 #!/usr/bin/env node
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { loadConfig } from "../config/config.js";
-import { createConfiguredWriter } from "../config/runtime.js";
+import { runFlush } from "./flush-command.js";
 import { ProjectRegistry } from "../v2/registry.js";
 import { withRepositoryLock } from "../v2/lock.js";
 import { RuntimeStore } from "../v2/runtime.js";
-import { printStatus, runSetupWizard, runTui, UserCancelled } from "./tui.js";
+import { printStatus, runSetupWizard, runNetworkWizard, runTui, UserCancelled } from "./tui.js";
 
 async function main(): Promise<void> {
   const [command,...args]=process.argv.slice(2);
-  if(command==="--help" || command==="-h") {console.log("Common Memory V2\n\ncommon-memory [config|status|flush]\ncommon-memory show [--workspace <absolute-path>]\ncommon-memory import <file.md> [--workspace <absolute-path>] [--author user|agent|third_party|mixed|unknown] [--label <text>] [--no-wait]\ncommon-memory project register <root> <name>\ncommon-memory project list\ncommon-memory project remove <id>\ncommon-memory retry <job-id>\ncommon-memory mcp --client-id <id> [--capability relay|init|read]... [--workspace <absolute-path>]... [--global] [--accept-client-reported-user-turns]\ncommon-memory mcp-config [--wsl] [--distro <name>] [--user <name>] [--workspace <absolute-path>]...");return;}
+  if(command==="--help" || command==="-h") {console.log("Common Memory V2\n\ncommon-memory [config|status|flush]\ncommon-memory config --network\ncommon-memory network-test\ncommon-memory show [--workspace <absolute-path>]\ncommon-memory import <file.md> [--workspace <absolute-path>] [--author user|agent|third_party|mixed|unknown] [--label <text>] [--no-wait]\ncommon-memory project register <root> <name>\ncommon-memory project list\ncommon-memory project remove <id>\ncommon-memory retry <job-id>\ncommon-memory mcp --client-id <id> [--capability relay|init|read]... [--workspace <absolute-path>]... [--global] [--accept-client-reported-user-turns]\ncommon-memory mcp-config [--wsl] [--distro <name>] [--user <name>] [--workspace <absolute-path>]...");return;}
   if(command==="mcp") {await (await import('../mcp/stdio.js')).runMcp(args);return;}
   if(command==="import") {
     const config=loadConfig();if(!config)throw new Error("Run common-memory config first");
@@ -33,11 +34,13 @@ async function main(): Promise<void> {
     console.log(renderMemoryView(view));
     return;
   }
+  if(command==="network-test" && !args.length) { const config=loadConfig();if(!config)throw new Error("Run common-memory config first");process.exitCode=await (await import("./network-test.js")).runNetworkTest(config);return; }
+  if(command==="config" && args.length===1 && args[0]==="--network") {await runNetworkWizard();return;}
   if(command===undefined) {await runTui();return;}
   if(command==="config" && !args.length) {await runSetupWizard();return;}
-  if(command==="status" && !args.length) {printStatus(); const config=loadConfig();if(config){const store=new RuntimeStore(config.dataRoot);try{console.log(JSON.stringify(store.status(),null,2));}finally{store.close();}}return;}
+  if(command==="status" && !args.length) {printStatus(); const config=loadConfig();if(config && existsSync(join(config.dataRoot,"runtime.sqlite"))){const store=new RuntimeStore(config.dataRoot);try{console.log(JSON.stringify(store.status(),null,2));}finally{store.close();}}return;}
   const config=loadConfig();if(!config)throw new Error("Run common-memory config first");
-  if(command==="flush" && !args.length) {const writer=createConfiguredWriter(config);try{writer.store.requestFlush();for(;;){const result=await writer.run({force:true});console.log(JSON.stringify(result));if(!["committed","noop","ignored","quarantined"].includes(result.outcome))break;}}finally{writer.close();}return;}
+  if(command==="flush" && !args.length) {process.exitCode=await runFlush(config);return;}
   if(command==="retry" && args.length===1){const store=new RuntimeStore(config.dataRoot);try{store.retry(args[0]!);store.requestFlush();}finally{store.close();}return;}
   if(command==="project") {
     const registry=new ProjectRegistry(config.dataRoot);const [action,...rest]=args;

@@ -1,5 +1,7 @@
 # Init v0.1 验收记录 — 2026-09-07
 
+后续收尾改动、真实 DeepSeek 结果与当前阻碍见 [Init v0.1 收尾验收](init-v0.1-closeout.md)。本文保留此前实验的历史记录。
+
 分支 `init-v0.1`（worktree，基线 `a9fc436`）。所有数据均为合成事实与隔离目录（`/tmp/common-memory-demo`、`/tmp/cm-codex-home`、`/tmp/cm-pi-home`），未使用真实个人资料。真实账户使用仅限本机已登录的 Codex CLI / Pi（ChatGPT OAuth），且实际被用量上限阻断（见 §3）。
 
 合成测试事实（不在仓库源码、文档或常识中出现）：生态学学生；养一只三条腿的救助龟 Quillon；周末学 Rust；希望中文回答、英文术语加括号、不要敬称。

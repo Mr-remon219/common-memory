@@ -70,7 +70,7 @@ it('feeds the unchanged Writer through a real synthetic Responses server', async
   const { env, config } = fixture(`http://127.0.0.1:${port}/v1`, 1);
   const { client } = await connect(env, 'a');
   await client.callTool({ name: 'memory_submit_user_turn', arguments: submission });
-  await expect.poll(async () => (await client.callTool({ name: 'memory_status', arguments: { submissionId: 'one', conversationId: 'chat' } })).structuredContent, { timeout: 8000 }).toEqual({ submission: { state: 'processed', issue: null, retainedIn: ['preferences'] } });
+  await expect.poll(async () => (await client.callTool({ name: 'memory_status', arguments: { submissionId: 'one', conversationId: 'chat' } })).structuredContent, { timeout: 8000 }).toMatchObject({ submission: { state: 'processed', issue: null, retainedIn: ['preferences'] } });
   expect(calls).toBe(1);
   expect(readFileSync(join(config.dataRoot, 'memory/preferences.md'), 'utf8')).toContain('Prefer concise replies.');
 });
@@ -112,7 +112,7 @@ it('init launch imports agent-reported understanding through the unchanged Write
   const args = { importId: 'imp-1', contextId: 'global', sourceLabel: 'chatgpt-desktop', basis: 'saved_memories', understanding: 'The user studies ecology and keeps a rescued tortoise named Basalt.', gaps: 'No access to older chats.' };
   expect((await client.callTool({ name: 'memory_init', arguments: args })).structuredContent).toMatchObject({ accepted: true, duplicate: false, state: 'pending' });
   // Below the 6-turn threshold, only the requested flush makes this process promptly.
-  await expect.poll(async () => (await client.callTool({ name: 'memory_status', arguments: { importId: 'imp-1' } })).structuredContent, { timeout: 8000 }).toEqual({ import: { state: 'processed', issue: null, retainedIn: ['profile'] } });
+  await expect.poll(async () => (await client.callTool({ name: 'memory_status', arguments: { importId: 'imp-1' } })).structuredContent, { timeout: 8000 }).toMatchObject({ import: { state: 'processed', issue: null, retainedIn: ['profile'] } });
   expect(seen).toHaveLength(1);
   expect(seen[0]).toEqual([expect.objectContaining({ source_kind: 'agent_import', text: args.understanding, import: { source_label: 'chatgpt-desktop', basis: 'saved_memories', gaps: 'No access to older chats.' } })]);
   const profile = readFileSync(join(config.dataRoot, 'memory/profile.md'), 'utf8');

@@ -31,7 +31,7 @@
     ]
   },
   "scripts": {
-    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.build.json && node scripts/build-assets.mjs",
+    "build": "node scripts/build.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "npm run typecheck && node scripts/check-boundaries.mjs",
     "test": "vitest run",
@@ -43,12 +43,14 @@
     "verify": "node scripts/verify.mjs",
     "evaluate:v2": "npm run build && node scripts/evaluate-v2.mjs",
     "ablate:v2": "npm run build && node scripts/ablate-v2.mjs --output=docs/v2-ablation-results.json",
-    "benchmark:v2": "npm run build && node scripts/benchmark-v2.mjs"
+    "benchmark:v2": "npm run build && node scripts/benchmark-v2.mjs",
+    "test:provider-smoke": "node --test tests/scripts/provider-smoke.integration.mjs"
   },
   "dependencies": {
     "@clack/prompts": "^1.7.0",
     "@modelcontextprotocol/server": "2.0.0",
     "ajv": "^8.17.1",
+    "undici": "8.10.2",
     "zod": "4.3.6"
   },
   "peerDependencies": {

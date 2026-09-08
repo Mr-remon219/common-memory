@@ -36,7 +36,7 @@ export async function runMcp(args: string[]): Promise<void> {
   const writer = readOnly ? null : createConfiguredWriter(config);
   let ingress: McpIngress;
   try { ingress = new McpIngress(writer?.store ?? null, config, options); }
-  catch { writer?.close(); throw new Error('MCP context configuration is invalid'); }
+  catch { await writer?.close(); throw new Error('MCP context configuration is invalid'); }
   const abort = new AbortController();
   let running: Promise<void> | undefined;
   let closing: Promise<void> | undefined;
@@ -60,7 +60,7 @@ export async function runMcp(args: string[]): Promise<void> {
       try { writer?.store.requestFlush(); } catch { report(); }
       try { await handle.close(); await running; }
       finally {
-        writer?.close();
+        await writer?.close();
         process.stdin.off('end', shutdown); process.stdin.off('error', shutdown);
         process.stdout.off('error', shutdown);
         process.off('SIGINT', shutdown); process.off('SIGTERM', shutdown);

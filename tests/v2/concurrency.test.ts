@@ -8,7 +8,7 @@ import { RuntimeStore } from '../../src/v2/runtime.js';
 const roots:string[]=[];
 afterEach(()=>{for(const path of roots.splice(0))rmSync(path,{recursive:true,force:true});});
 function moduleUrl(file:string):string {
- const text=readFileSync(file,'utf8').replace(/from ['"](\.\/[^'"]+)['"]/g,(_all,relative:string)=>`from ${JSON.stringify(moduleUrl(resolve(file,'..',relative.replace(/\.js$/,'.ts'))))}`);
+ const text=readFileSync(file,'utf8').replace(/from ['"](\.\.?\/[^'"]+)['"]/g,(_all,relative:string)=>`from ${JSON.stringify(moduleUrl(resolve(file,'..',relative.replace(/\.js$/,'.ts'))))}`);
  return 'data:text/javascript;base64,'+Buffer.from(ts.transpileModule(text,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText).toString('base64');
 }
 it('two real processes cannot claim the same dataRoot maintenance lease',async()=>{
@@ -19,4 +19,15 @@ it('two real processes cannot claim the same dataRoot maintenance lease',async()
  writeFileSync(script,`import {RuntimeStore} from ${JSON.stringify(url)};const s=new RuntimeStore(${JSON.stringify(path)});const j=s.claim({force:true});console.log(j?'claimed':'idle');s.close();`);
  const run=()=>new Promise<string>((ok,fail)=>{const child=spawn(process.execPath,[script]);let output='',error='';child.stdout.on('data',b=>output+=b);child.stderr.on('data',b=>error+=b);child.on('error',fail);child.on('exit',code=>code===0?ok(output.trim()):fail(new Error(error)));});
  expect((await Promise.all([run(),run()])).sort()).toEqual(['claimed','idle']);
+});
+
+it('two real processes migrate an old jobs table exactly once',async()=>{
+ const {DatabaseSync}=await import('node:sqlite');
+ const path=mkdtempSync(join(tmpdir(),'cm-migrate-'));roots.push(path);
+ const db=new DatabaseSync(join(path,'runtime.sqlite'));
+ db.exec("CREATE TABLE jobs(id TEXT PRIMARY KEY,token TEXT NOT NULL,generation INTEGER NOT NULL,state TEXT NOT NULL,expires INTEGER NOT NULL,attempts INTEGER NOT NULL,available INTEGER NOT NULL,issue TEXT); INSERT INTO jobs VALUES('old','token',1,'done',0,1,0,'TIMEOUT')");db.close();
+ const script=join(path,'open.mjs');writeFileSync(script,`import {RuntimeStore} from ${JSON.stringify(moduleUrl(resolve('src/v2/runtime.ts')))};const s=new RuntimeStore(${JSON.stringify(path)});console.log(JSON.stringify(s.status().jobs));s.close();`);
+ const run=()=>new Promise<string>((ok,fail)=>{const child=spawn(process.execPath,[script]);let output='',error='';child.stdout.on('data',b=>output+=b);child.stderr.on('data',b=>error+=b);child.on('error',fail);child.on('exit',code=>code===0?ok(output.trim()):fail(new Error(error)));});
+ const results=await Promise.all([run(),run()]);for(const result of results)expect(JSON.parse(result)).toMatchObject([{id:'old',issue:'TIMEOUT',diagnostic:null}]);
+ const check=new RuntimeStore(path);try{expect(check.db.prepare('PRAGMA table_info(jobs)').all().filter(r=>r.name==='diagnostic')).toHaveLength(1);}finally{check.close();}
 });

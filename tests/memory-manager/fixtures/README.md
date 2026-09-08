@@ -1,0 +1,1 @@
+Synthetic self-signed certificate and private key for local network contract tests only. Public test material, never a production credential. SANs: cm-network.test, localhost, 127.0.0.1. Tests pass its CA explicitly to one client and verify rejection without it; they never disable TLS verification.

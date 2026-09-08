@@ -37,7 +37,7 @@ it('deduplicates, rejects conflicting payloads and never exposes bodies', () => 
   expect(a.submit(input).duplicate).toBe(false);
   expect(a.submit(input).duplicate).toBe(true);
   expect(() => a.submit({ ...input, text: 'different' })).toThrow('SUBMISSION_CONFLICT');
-  expect(a.status(input)).toEqual({ state: 'pending', issue: null, retainedIn: [] });
+  expect(a.status(input)).toMatchObject({ state: 'pending', issue: null, retainedIn: [] });
 });
 it('requires local opt-in and validates context and cancellation before enqueue', () => {
   const { store, ingress } = fixture();
@@ -121,8 +121,8 @@ it('status distinguishes processed-and-retained from processed-without-retention
   const job = store.claim()!; expect(job.observations).toHaveLength(2);
   const [kept, dropped] = job.observations;
   store.finish(job, { jobId: job.id, observationIds: job.observations.map(o => o.id), associations: [{ target: `profile:${'a'.repeat(64)}`, sourceIds: [kept!.id] }, { target: `preferences:${'b'.repeat(64)}`, sourceIds: [kept!.id] }] });
-  expect(init.initStatus('imp-1')).toEqual({ state: 'processed', issue: null, retainedIn: ['preferences', 'profile'] });
-  expect(init.initStatus('imp-2')).toEqual({ state: 'processed', issue: null, retainedIn: [] });
+  expect(init.initStatus('imp-1')).toMatchObject({ state: 'processed', issue: null, retainedIn: ['preferences', 'profile'] });
+  expect(init.initStatus('imp-2')).toMatchObject({ state: 'processed', issue: null, retainedIn: [] });
   void dropped;
 });
 

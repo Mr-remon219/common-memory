@@ -1,14 +1,14 @@
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultConfig, loadConfig, saveApiKeyToEnvFile, saveConfig } from "../../src/config/config.js";
 import { createConfiguredWriter } from "../../src/config/runtime.js";
 import { createCommonMemoryPiExtension } from "../../src/pi-extension/index.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const temporary: string[] = [];
-afterEach(() => { for (const path of temporary.splice(0)) rmSync(path, { recursive: true, force: true }); });
+afterEach(() => { vi.unstubAllEnvs(); for (const path of temporary.splice(0)) rmSync(path, { recursive: true, force: true }); });
 
 describe("local configuration", () => {
   it("stores provider settings separately from the private .env API key", () => {
@@ -30,12 +30,13 @@ describe("local configuration", () => {
     expect(readFileSync(envPath, "utf8")).toBe('# local\nOTHER=value\nOPENAI_API_KEY="new-secret"\n');
   });
 
-  it("an init-only or import-only configuration creates a Writer; Pi capture alone still needs user_explicit", () => {
+  it("an init-only or import-only configuration creates a Writer; Pi capture alone still needs user_explicit", async () => {
     const root = mkdtempSync(join(tmpdir(), "common-memory-prov-")); temporary.push(root);
     const config = defaultConfig({ COMMON_MEMORY_HOME: root }); config.remote.model = "m"; config.remote.apiKeyEnv = "CM_PROV_TEST_KEY";
     config.disclosure.allowedProvenance = ["agent_observation", "document_import"];
+    vi.stubEnv("COMMON_MEMORY_HOME",root); config.remote.proxy={mode:"direct"};
     process.env.CM_PROV_TEST_KEY = "synthetic-key";
-    try { const writer = createConfiguredWriter(config); writer.close(); } // previously threw: Delivered user evidence is not authorized for disclosure
+    try { const writer = createConfiguredWriter(config); await writer.close(); } // previously threw: Delivered user evidence is not authorized for disclosure
     finally { delete process.env.CM_PROV_TEST_KEY; }
     // The Pi extension refuses to start capture, so no user turn is even staged, and reading is unaffected.
     const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
@@ -48,4 +49,20 @@ describe("local configuration", () => {
     expect(errors.join("")).toContain("capture unavailable");
     expect(handlers.get("before_agent_start")!({ systemPrompt: "BASE" }, { cwd: root })).toMatchObject({ systemPrompt: expect.stringContaining("## Common Memory") });
   });
+});
+
+it('roundtrips old configurations and routes the explicit API through the model port', async () => {
+  const {validateConfig} = await import('../../src/config/config.js');
+  const {createConfiguredMemoryModel} = await import('../../src/config/runtime.js');
+  const {OpenAIResponsesMemoryModel} = await import('../../src/memory-manager/openai/openai-responses-adapter.js');
+  const {OpenAIChatMemoryModel} = await import('../../src/memory-manager/openai/openai-chat-adapter.js');
+  const config=defaultConfig();config.remote.model='fake';
+  expect(validateConfig(config).remote).toEqual(config.remote);
+  const responses = createConfiguredMemoryModel(config,{OPENAI_API_KEY:'test'}); expect(responses).toBeInstanceOf(OpenAIResponsesMemoryModel); await responses.close();
+  config.remote={...config.remote,api:'chat_completions',maxOutputTokens:16384,thinking:{type:'disabled'}};
+  expect(validateConfig(config).remote).toEqual(config.remote);
+  const chat = createConfiguredMemoryModel(config,{OPENAI_API_KEY:'test'}); expect(chat).toBeInstanceOf(OpenAIChatMemoryModel); await chat.close();
+  for (const extra of [{api:'auto'},{api:'responses',thinking:{type:'disabled'}},{api:'chat_completions',reasoningEffort:'none'},{api:'chat_completions',thinking:{type:'disabled'},enableThinking:false},{maxOutputTokens:16385},{maxOutputTokens:0},{maxOutputTokens:1.5},{thinking:{type:'disabled',budget:50}},{enableThinking:'false'},{arbitraryBody:{}},{api:null}]) {
+    expect(()=>validateConfig({...config,remote:{provider:'openai-compatible',baseUrl:'https://provider.test/v1',model:'m',apiKeyEnv:'KEY',...extra}})).toThrow();
+  }
 });

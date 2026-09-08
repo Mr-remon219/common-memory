@@ -42,7 +42,7 @@ describe('V2 writer',()=>{
  });
  it('detects human edits even for ignore; times out a model ignoring abort',async()=>{
   const path=root();const w=new Writer({dataRoot:path,allowedScopes:['global'],model:model(r=>{writeFileSync(join(path,'memory/profile.md'),'# Profile\n\n## Manual\nHuman\n');return body(r,'ignore');})});enqueue(w);expect((await w.run({force:true})).outcome).toBe('failed');expect(w.store.status().observations[0]!.state).not.toBe('processed');w.close();
-  const timeout=new Writer({dataRoot:root(),allowedScopes:['global'],deadlineMs:20,model:{analyze:()=>new Promise(()=>{})}});enqueue(timeout);expect((await timeout.run({force:true})).outcome).toBe('cancelled');timeout.close();
+  const timeout=new Writer({dataRoot:root(),allowedScopes:['global'],deadlineMs:20,model:{analyze:()=>new Promise(()=>{})}});enqueue(timeout);expect(await timeout.run({force:true})).toEqual({outcome:'failed',reason:'TIMEOUT'});timeout.close();
  });
 });
 
@@ -353,4 +353,61 @@ it('an import cannot rewrite a Section the user edited by hand, even if that Sec
  phase=1;w.store.enqueue({sessionId:'import:x',entryId:'part-1',scope:'global',source:'document_import',observedAt:new Date().toISOString(),text:encodeDocumentChunk({importId:'md-1',sourceLabel:'notes.md',declaredAuthor:'unknown',fileName:'notes.md',contentDigest:'1',part:{index:1,count:1},headingPath:[],text:'# N\n\nx\n'})});
  expect(await w.run({force:true})).toEqual({outcome:'failed',reason:'UNAUTHORIZED_IMPORT_OVERWRITE'});
  expect(readFileSync(join(path,'memory/profile.md'),'utf8')).toContain('Corrected by the user.');w.close();
+});
+
+it.each(['timeout-first','cancel-first','lease-first'] as const)('preserves %s and fences late responses even if the model ignores cancellation',async variant=>{
+ const {vi}=await import('vitest');let resolveModel!:(value:Awaited<ReturnType<MemoryModelPort['analyze']>>)=>void;let request:ApprovedModelRequest|undefined;
+ const caller=new AbortController();const path=root();
+ const w=new Writer({dataRoot:path,allowedScopes:['global'],deadlineMs:variant==='timeout-first'?15:2000,scheduler:{leaseMs:variant==='lease-first'?30:120000},model:{analyze:r=>{request=r;return new Promise(resolve=>{resolveModel=resolve;});}}});
+ if(variant==='lease-first')vi.spyOn(w.store,'renew').mockImplementation(()=>{throw new Error('private lease failure');});
+ enqueue(w);const pending=w.run({force:true,signal:caller.signal});
+ if(variant==='cancel-first')caller.abort();
+ const reason=variant==='timeout-first'?'TIMEOUT':variant==='cancel-first'?'CANCELLED':'LEASE_RENEWAL_FAILED';
+ expect(await pending).toEqual({outcome:variant==='cancel-first'?'cancelled':'failed',reason});
+ caller.abort();resolveModel({kind:'output',body:body(request!),usage:{}});await new Promise(resolve=>setTimeout(resolve,5));
+ expect(w.store.status().jobs[0]).toMatchObject({issue:reason});expect(w.store.hasReceipt(w.store.status().jobs[0]!.id)).toBe(false);
+ expect(readdirSync(join(path,'runtime/receipts'))).toEqual([]);expect(w.canonical.snapshot([]).every(d=>!d.content.includes('Chinese'))).toBe(true);w.close();
+});
+it('a competing quarantine retires a job without a receipt and must not produce committed',async()=>{
+ let release!:()=>void;let started!:()=>void;const entered=new Promise<void>(resolve=>{started=resolve;});const delayed=new Promise<void>(resolve=>{release=resolve;});let now=0;
+ const path=root();const w=new Writer({dataRoot:path,allowedScopes:['global'],scheduler:{now:()=>now,leaseMs:10000},model:{analyze:async r=>{started();await delayed;return {kind:'output',body:body(r),usage:{}};}}});enqueue(w);
+ const pending=w.run({force:true});await entered;
+ const {RuntimeStore}=await import('../../src/v2/runtime.js');now=10001;const other=new RuntimeStore(path,{now:()=>now});
+ try{const claimed=other.claim({force:true})!;other.quarantine(claimed,claimed.observations[0]!.id,'SENSITIVE_INPUT');release();expect(await pending).toEqual({outcome:'failed',reason:'STALE_LEASE'});expect(w.store.status().jobs[0]!.state).toBe('done');expect(w.store.hasReceipt(claimed.id)).toBe(false);}finally{other.close();w.close();}
+});
+it('a rolled-back ignore has no receipt and must not report success',async()=>{
+ const w=new Writer({dataRoot:root(),allowedScopes:['global'],model:model(r=>body(r,'ignore'))});enqueue(w);
+ const original=w.store.finish.bind(w.store);w.store.finish=(...args)=>{original(...args);throw new Error('after durable finish');};
+ // The surrounding transaction rolls back this error, so there is no committed receipt to recover.
+ expect(await w.run({force:true})).toEqual({outcome:'failed',reason:'VALIDATION_OR_STORAGE_FAILURE'});
+ expect(w.store.hasReceipt(w.store.status().jobs[0]!.id)).toBe(false);w.close();
+});
+
+it.each(['committed','ignored'] as const)('reports the winning lease receipt (%s) rather than the stale lease decision',async winner=>{
+ let now=100,release!:(value:Awaited<ReturnType<MemoryModelPort['analyze']>>)=>void,reject!:(error:Error)=>void,request!:ApprovedModelRequest;
+ const path=root(),scheduler={now:()=>now,leaseMs:300000};
+ const a=new Writer({dataRoot:path,allowedScopes:['global'],scheduler,model:{analyze:r=>{request=r;return new Promise((ok,fail)=>{release=ok;reject=fail;});}}});
+ enqueue(a);const pending=a.run({force:true});now=300101;
+ const b=new Writer({dataRoot:path,allowedScopes:['global'],scheduler,model:model(r=>body(r,winner==='ignored'?'ignore':'retain'))});
+ try{
+   expect((await b.run({force:true})).outcome).toBe(winner);
+   if(winner==='ignored')reject(new Error('UNAVAILABLE'));else release({kind:'output',body:body(request,'ignore'),usage:{}});
+   expect((await pending).outcome).toBe(winner);
+   expect(a.store.hasReceipt(a.store.status().jobs[0]!.id)).toBe(true);
+   expect(readdirSync(join(path,'runtime/receipts'))).toHaveLength(winner==='committed'?1:0);
+ }finally{b.close();a.close();}
+});
+
+it.each([200,503])('retains HTTP %s context when the Writer deadline fences a stalled provider body',async status=>{
+ const {OpenAIResponsesMemoryModel}=await import('../../src/memory-manager/openai/openai-responses-adapter.js');
+ const model=new OpenAIResponsesMemoryModel({apiKey:'test',model:'fake',disclosurePolicy:{enabled:true,allowedScopes:['global'],allowedProvenance:['user_explicit'],maxExcerptBytes:131072,maxCandidateBytes:131072,maxTotalBytes:131072},retry:{maxRetries:0},fetch:async()=>new Response(new ReadableStream({pull:()=>new Promise(()=>{}),cancel:()=>new Promise(()=>{})}),{status})});
+ const w=new Writer({dataRoot:root(),allowedScopes:['global'],deadlineMs:30,model});enqueue(w);
+ try{expect(await w.run({force:true})).toEqual({outcome:'failed',reason:'TIMEOUT'});expect(w.store.status().jobs[0]).toMatchObject({diagnostic:{stage:status===200?'response_body':'http',httpStatus:status,reason:'timeout',retryable:true}});}finally{w.close();}
+});
+
+it('clears a previous HTTP attempt context before a retry stalls in fetch',async()=>{
+ const {OpenAIResponsesMemoryModel}=await import('../../src/memory-manager/openai/openai-responses-adapter.js');let calls=0;
+ const model=new OpenAIResponsesMemoryModel({apiKey:'test',model:'fake',disclosurePolicy:{enabled:true,allowedScopes:['global'],allowedProvenance:['user_explicit'],maxExcerptBytes:131072,maxCandidateBytes:131072,maxTotalBytes:131072},sleeper:async()=>{},fetch:async()=>{if(++calls===1)return new Response('{}',{status:429,headers:{'retry-after':'0'}});return new Promise(()=>{});}});
+ const w=new Writer({dataRoot:root(),allowedScopes:['global'],deadlineMs:40,model});enqueue(w);
+ try{expect(await w.run({force:true})).toEqual({outcome:'failed',reason:'TIMEOUT'});expect(calls).toBe(2);expect(w.store.status().jobs[0]!.diagnostic).toEqual({stage:'request',reason:'timeout',retryable:true});}finally{w.close();}
 });
