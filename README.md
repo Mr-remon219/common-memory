@@ -11,7 +11,7 @@ they are; there is no retrieval ranking.
 Init v0.1 (`docs/init-v0.1-design.md`, `docs/init-v0.1-verification.md`) adds the
 cross-agent loop: another agent (ChatGPT desktop) imports its existing understanding
 through `memory_init`, the user imports local Markdown files with `common-memory import`,
-the unchanged Writer decides what to keep from either, and Codex CLI (MCP `memory_read`)
+the unchanged Writer decides what to keep from either, and Codex CLI (native read-only hooks or MCP `memory_read`)
 and Pi (system-prompt injection) read the same canonical files. On Windows, Common
 Memory runs inside WSL and the ChatGPT/Codex desktop app reaches it through `wsl.exe`
 (`common-memory mcp-config --wsl`).
@@ -246,10 +246,10 @@ promotion: the existing Writer still decides applicability. Reading follows the 
 contexts: a process launched for workspace A never returns project B's document, and
 a process without `--global` never returns Profile/Preferences.
 
-The server publishes MCP `instructions` describing when to use its tools; Codex hosts
-read them, so a plain "我是谁？" is expected to trigger `memory_read` without the user
-naming a tool. Memory content is delivered as user data with an explicit note that it is
-not instructions.
+The server publishes MCP `instructions` describing when to use its tools. Tool discovery
+and proactive calls depend on the host and model; configuring MCP alone does not
+guarantee a read before an answer. Native Codex hooks below inject memory independently
+of tool calls. Memory content is data, never agent instructions.
 
 ### Tools
 
@@ -388,6 +388,78 @@ selected Markdown workflow above for this version. A remote HTTPS connector
 is outside this version and would not guarantee access to more source material.
 
 ### Codex CLI (read only)
+
+For automatic injection, build Common Memory and run `common-memory codex-config`
+(or `node dist/cli/main.js codex-config`). Save its stdout as
+`common-memory.config.toml` under the **actual Codex CLI `CODEX_HOME`**
+(default `~/.codex`). Inspect and merge any existing file with that name; do not
+blindly overwrite it. The generator only prints configuration: it does not edit
+base configuration, profiles or the hook trust store.
+
+Launch `codex --profile common-memory`, then use Codex's official `/hooks` interface
+to review and trust the generated commands. No trust bypass is generated.
+The commands pin the current Node binary, built CLI entry and Common Memory
+configuration directory as absolute, POSIX shell-quoted paths. Regenerate after
+moving the installation or changing Node or `COMMON_MEMORY_HOME`.
+Codex CLI and Common Memory must run in the same POSIX environment, including WSL;
+native Windows hooks and cross-system hook path conversion are not supported.
+
+The generated synchronous command hooks call
+`common-memory codex-hook --home <absolute-path>` on `UserPromptSubmit` and on
+`SessionStart` matching `^compact$`. They reload configuration, project registration
+and canonical Markdown on every invocation, using the event's `cwd` to select
+Global and the registered current project, intersected with `disclosure.allowedScopes`.
+They share the Core reader/renderer with MCP and Pi. Unregistered workspaces receive
+only authorized Global memory. The hooks never open SQLite, create storage, construct
+a Writer, call a model, save prompts, inspect transcripts or maintain session state.
+Provenance authorization remains in the import/Writer path; reading preserves the
+canonical source labels, uncertainty and time qualifications without promoting
+imported agent understanding into user-confirmed facts.
+
+Each hook returns `hookSpecificOutput.additionalContext`, limited to **64 KiB**
+including the snapshot rules. Input JSON is limited to **1 MiB**. The handler timeout
+is **5 seconds** and `additionalContextLimit = 0` lets the bounded snapshot through
+without Codex's default large-output preview. Empty memory explicitly means unknown.
+Read failures and oversized snapshots return an unavailable snapshot plus a controlled
+warning and continue the session; no partial snapshot or cached fallback is returned.
+Malformed protocol input exits nonzero so Codex can report the hook failure. A host
+timeout or disabled/untrusted hook cannot deliver a replacement snapshot.
+
+Current snapshots instruct the model to supersede earlier Common Memory snapshots,
+never fill deleted/missing fields from old snapshots, and never infer biography from
+usernames, paths or historical commands. This is an answering rule; it does **not**
+remove older snapshots from conversation history. Every turn, even with unchanged
+memory, adds another full snapshot. Accept the resulting context/token growth;
+short synthetic acceptance runs do not establish reliability in long conversations.
+
+Protocol basis: [official Codex hooks](https://learn.chatgpt.com/docs/hooks), tested
+with Codex CLI 0.153.4. The retained smoke script uses isolated synthetic fixtures and
+the built product command:
+
+```sh
+python3 scripts/smoke-codex-hooks.py --output /tmp/common-memory-wire.json
+python3 scripts/smoke-codex-hooks.py --live --output /tmp/common-memory-live.json
+```
+
+The script requires Python 3.11+. The default run uses a loopback fake provider and
+checks first/continuous requests, resume, explicit compaction, disabled/untrusted/
+timed-out hooks and full long-text injection. Mid-turn automatic compaction is not
+covered by this smoke.
+The optional live run uses the current Codex authentication and gpt-6-astra for A→B→B
+answers with deletion, source qualification, unknown identity, misleading historical
+paths and token usage, both with hooks alone and alongside read-only MCP. The scripts
+use a trust bypass only in disposable test threads, never in generated user configuration.
+They delete isolated credentials and state, retaining JSON reports. They do not exercise
+the interactive `/hooks` trust UI. Windows-native, desktop and IDE clients require
+separate real-client verification.
+
+MCP-only users can keep the existing setup below. Hooks require no MCP connection,
+and both can coexist; hooks do not add automatic writing or new MCP tools. The current
+hook inputs do not supply the complete input types and delivery receipts required
+for automatic capture. To prevent exposing an existing desktop init server in the
+native profile, merge `mcp_servers.common_memory_init.enabled = false` at the correct
+TOML table location (or launch with `-c mcp_servers.common_memory_init.enabled=false`).
+
 
 ```toml
 [mcp_servers.common_memory]

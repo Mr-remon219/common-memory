@@ -16,6 +16,22 @@ export interface JobStatus { id: string; state: string; attempts: number; issue:
 export interface ObservationOutcome { state: string; issue: string | null; retainedIn: string[]; jobId: string | null; jobState: string | null; attempts: number; retryAt: number | null; diagnostic: FailureDiagnostic | null }
 type Row = Record<string, string | number | null>;
 
+function enableWal(db: DatabaseSync): void {
+  // A concurrent journal-mode upgrade can return SQLITE_BUSY without invoking
+  // SQLite's busy handler. Retry only that idempotent startup step, stopping
+  // retries after 5 s; each SQLite call also retains its existing 5 s busy limit.
+  const deadline = performance.now() + 5000;
+  const sleeper = new Int32Array(new SharedArrayBuffer(4));
+  for (;;) {
+    try { db.exec('PRAGMA journal_mode=WAL'); return; }
+    catch (error) {
+      const remaining = deadline - performance.now();
+      if ((error as {errcode?:number}).errcode !== 5 || remaining <= 0) throw error;
+      Atomics.wait(sleeper, 0, 0, Math.min(10, remaining));
+    }
+  }
+}
+
 /** Durable queue, not a reconstructible index. All mutating operations are synchronous. */
 export class RuntimeStore {
   readonly db: DatabaseSync;
@@ -32,8 +48,8 @@ export class RuntimeStore {
     this.#now = options.now ?? Date.now;
     this.#options = {turnThreshold: options.turnThreshold ?? 6, byteThreshold: options.byteThreshold ?? 16384, idleMs: options.idleMs ?? 120000, maxWaitMs: options.maxWaitMs ?? 600000, leaseMs: options.leaseMs ?? 120000, maxAttempts: options.maxAttempts ?? 5};
     for (const value of Object.values(this.#options)) if (!Number.isSafeInteger(value) || value <= 0) throw new Error("Invalid runtime limit");
-    this.db = new DatabaseSync(path);
-    try { this.db.exec(`PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
+    this.db = new DatabaseSync(path, {timeout:5000});
+    try { enableWal(this.db); this.db.exec(`PRAGMA synchronous=FULL;
       CREATE TABLE IF NOT EXISTS observations(id INTEGER PRIMARY KEY AUTOINCREMENT, sessionId TEXT NOT NULL, entryId TEXT NOT NULL, text TEXT, digest TEXT NOT NULL, scope TEXT NOT NULL, observedAt TEXT NOT NULL, source TEXT NOT NULL, state TEXT NOT NULL, enqueuedAt INTEGER NOT NULL, processedAt INTEGER, jobId TEXT, issue TEXT, UNIQUE(sessionId,entryId));
       CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY, token TEXT NOT NULL, generation INTEGER NOT NULL, state TEXT NOT NULL, expires INTEGER NOT NULL, attempts INTEGER NOT NULL, available INTEGER NOT NULL, issue TEXT);
       CREATE TABLE IF NOT EXISTS document_versions(target TEXT PRIMARY KEY, hash TEXT NOT NULL);

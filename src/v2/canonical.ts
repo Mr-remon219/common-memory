@@ -16,8 +16,19 @@ export function safeDirectory(path: string): void {
   if (!existsSync(absolute)) { try { mkdirSync(absolute, { mode: 0o700 }); syncDirectory(parent); } catch (error) { if (!existsSync(absolute)) throw error; } }
   const stat = lstatSync(absolute); if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error('Unsafe directory');
 }
-export function readRegular(path: string): string | null {
-  safeDirectory(dirname(path));
+/** Validate existing ancestors without creating storage on consumer read paths. */
+function existingDirectory(path: string): boolean {
+  const absolute = resolve(path); const parent = dirname(absolute);
+  if (parent !== absolute && !existingDirectory(parent)) return false;
+  try {
+    const stat = lstatSync(absolute);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error('Unsafe directory');
+    return true;
+  } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error; }
+}
+export function readRegular(path: string, options: { createParents?: boolean } = {}): string | null {
+  if (options.createParents === false) { if (!existingDirectory(dirname(path))) return null; }
+  else safeDirectory(dirname(path));
   try { const stat = lstatSync(path); if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 1024 * 1024) throw new Error('Unsafe file'); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; }
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW); try { const stat = fstatSync(fd); if (!stat.isFile() || stat.nlink !== 1 || stat.size > 1024 * 1024) throw new Error('Unsafe file'); return readFileSync(fd, 'utf8'); } finally { closeSync(fd); }
