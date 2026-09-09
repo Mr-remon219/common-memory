@@ -3,13 +3,13 @@ import type { RuntimeStore, Observation, RuntimeJob } from './runtime.js';
 import { provenanceOf } from './import.js';
 import { externalPreflight } from '../core/safety/external-preflight.js';
 
-export interface SessionIdentity { client: 'pi' | 'codex'; processInstance: string; sessionId: string }
+export interface SessionIdentity { client: 'pi' | 'codex' | 'chatgpt-work'; processInstance: string; sessionId: string }
 export interface SessionCacheOptions { maxSessionBytes?: number; maxTotalBytes?: number; contextTailTurns?: number }
 export const SESSION_CACHE_DEFAULTS = {maxSessionBytes:8*1024*1024,maxTotalBytes:64*1024*1024,contextTailTurns:2};
 export interface SessionMessage { sequence?:number; id:string; turnId:string; role:'user'|'assistant'|'tool'; text:string; scope:string; source:string; observedAt:string }
 export type SessionTurnState = 'settled' | 'interrupted' | 'incomplete';
 export function sessionKey(identity:SessionIdentity):string {
-  if (!['pi','codex'].includes(identity.client) || !identity.processInstance || !identity.sessionId) throw new Error('INVALID_SESSION_IDENTITY');
+  if (!['pi','codex','chatgpt-work'].includes(identity.client) || !identity.processInstance || !identity.sessionId) throw new Error('INVALID_SESSION_IDENTITY');
   return 'session-'+createHash('sha256').update(JSON.stringify([identity.client,identity.processInstance,identity.sessionId])).digest('hex');
 }
 export function initializeSessions(store:RuntimeStore):void {
@@ -62,8 +62,8 @@ export class SessionIngress {
   reserve(key:string,bytes:number):void {
     const usage=(session:boolean)=>{
       let bytes=Number(this.store.db.prepare(`SELECT COALESCE(SUM(length(CAST(COALESCE(m.text,o.text,'') AS BLOB))),0) AS n FROM session_messages m LEFT JOIN observations o ON o.id=m.observationId ${session?'WHERE m.sessionId=?':''}`).get(...(session?[key]:[]))!.n);
-      for(const [table,column] of [['inputs','text'],['deliveries','text'],['codex_inbox','body'],['codex_candidates','text']] as const){
-        if(table.startsWith('codex_')&&!this.store.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table))continue;
+      for(const [table,column] of [['inputs','text'],['deliveries','text'],['codex_inbox','body'],['codex_candidates','text'],['host_snapshots','body']] as const){
+        if((table.startsWith('codex_')||table==='host_snapshots')&&!this.store.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table))continue;
         bytes+=Number(this.store.db.prepare(`SELECT COALESCE(SUM(length(CAST(${column} AS BLOB))),0) AS n FROM ${table} ${session?'WHERE sessionId=?':''}`).get(...(session?[key]:[]))!.n);
       }
       return bytes;

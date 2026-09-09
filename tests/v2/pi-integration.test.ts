@@ -70,11 +70,12 @@ import {ProjectRegistry} from '../../src/v2/registry.js';
 import type {ExtensionAPI} from '@earendil-works/pi-coding-agent';
 function host(dataRoot:string,allowedScopes:string[]){
  const handlers=new Map<string,(event:unknown,ctx:unknown)=>unknown>();
- const pi={on:(name:string,fn:(event:unknown,ctx:unknown)=>unknown)=>{handlers.set(name,fn);},registerCommand:()=>{},registerTool:()=>{}} as unknown as ExtensionAPI;
+ const commands=new Map<string,{handler:(args:string,ctx:unknown)=>Promise<void>}>();
+ const pi={on:(name:string,fn:(event:unknown,ctx:unknown)=>unknown)=>{handlers.set(name,fn);},registerCommand:(name:string,command:{handler:(args:string,ctx:unknown)=>Promise<void>})=>commands.set(name,command),registerTool:()=>{}} as unknown as ExtensionAPI;
  // Read injection does not open the runtime database; keeping SQLite closed lets Windows delete the fixture.
  createCommonMemoryPiExtension({configFactory:()=>({...defaultConfig(),dataRoot,disclosure:{...defaultConfig().disclosure,allowedScopes}})})(pi);
  const ctx=(cwd:string)=>({cwd,sessionManager:{getSessionId:()=>'s',getBranch:()=>[],getLeafId:()=>null},hasPendingMessages:()=>false});
- return {before:(cwd:string)=>handlers.get('before_agent_start')!({systemPrompt:'BASE',prompt:'我是谁？'},ctx(cwd)) as {systemPrompt?:string}|undefined,handlers};
+ return {before:(cwd:string)=>handlers.get('before_agent_start')!({systemPrompt:'BASE',prompt:'我是谁？'},ctx(cwd)) as {systemPrompt?:string}|undefined,handlers,refresh:(cwd:string)=>commands.get('memory-refresh')!.handler('',ctx(cwd))};
 }
 it('Pi freezes only its appended block and keeps the current host system prompt across turns and reload',()=>{
  const root=mkdtempSync(join(tmpdir(),'pi-read-'));cleanup.push(()=>rmSync(root,{recursive:true,force:true}));
@@ -87,7 +88,8 @@ it('Pi freezes only its appended block and keeps the current host system prompt 
 });
 it('unconfigured Common Memory leaves the system prompt untouched and keeps other handlers registered',()=>{
  const handlers=new Map<string,(event:unknown,ctx:unknown)=>unknown>();
- const pi={on:(name:string,fn:(event:unknown,ctx:unknown)=>unknown)=>{handlers.set(name,fn);},registerCommand:()=>{},registerTool:()=>{}} as unknown as ExtensionAPI;
+ const commands=new Map<string,{handler:(args:string,ctx:unknown)=>Promise<void>}>();
+ const pi={on:(name:string,fn:(event:unknown,ctx:unknown)=>unknown)=>{handlers.set(name,fn);},registerCommand:(name:string,command:{handler:(args:string,ctx:unknown)=>Promise<void>})=>commands.set(name,command),registerTool:()=>{}} as unknown as ExtensionAPI;
  createCommonMemoryPiExtension({configFactory:()=>null})(pi);
  expect(handlers.get('before_agent_start')!({systemPrompt:'BASE'},{cwd:'/'})).toBeUndefined();
  for(const name of ['session_start','input','message_end','agent_settled','session_shutdown'])expect(handlers.has(name)).toBe(true);
@@ -114,4 +116,12 @@ it('native memory_read remains callable with current scoped memory and shared pr
  mkdirSync(join(data,'memory'),{recursive:true});writeFileSync(join(data,'memory/profile.md'),'# Profile\n\n## Background\nSynthetic fresh background\n');
  expect(JSON.stringify(await tool.execute('two',{contextId:'global'},undefined,undefined,ctx))).toContain('Synthetic fresh background');
  await expect(tool.execute('three',{contextId:'project:unauthorized'},undefined,undefined,ctx)).rejects.toThrow('CONTEXT_UNAVAILABLE');
+});
+
+it('Pi explicit refresh replaces the frozen block and subsequent canonical edits remain frozen',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'pi-refresh-'));cleanup.push(()=>rmSync(root,{recursive:true,force:true}));
+ mkdirSync(join(root,'memory'),{recursive:true});const path=join(root,'memory/profile.md');
+ writeFileSync(path,'# Profile\n\n## Synthetic\nSNAPSHOT_A');const h=host(root,['global']);expect(h.before(root)?.systemPrompt).toContain('SNAPSHOT_A');
+ writeFileSync(path,'# Profile\n\n## Synthetic\nSNAPSHOT_B');await h.refresh(root);writeFileSync(path,'# Profile\n\n## Synthetic\nSNAPSHOT_C');expect(h.before(root)?.systemPrompt).toContain('SNAPSHOT_B');expect(h.before(root)?.systemPrompt).not.toContain('SNAPSHOT_C');
+ rmSync(path);mkdirSync(path);await expect(h.refresh(root)).rejects.toThrow();expect(h.before(root)?.systemPrompt).toContain('SNAPSHOT_B');
 });

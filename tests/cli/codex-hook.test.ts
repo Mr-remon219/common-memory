@@ -23,7 +23,7 @@ const context=(r:ReturnType<typeof codexHook>)=>r.hookSpecificOutput?.additional
 it('reads once for each process/session startup, never on compact, reload or subsequent prompt',async()=>{
  const f=fixture();expect(context(f.read())).toContain('no stored content');expect(f.read('UserPromptSubmit')).toEqual({});
  mkdirSync(join(f.config.dataRoot,'memory'),{recursive:true});writeFileSync(join(f.config.dataRoot,'memory/profile.md'),'# Profile\n\n## Note\nNew background\n');
- expect(f.read('SessionStart','compact')).toEqual({});expect(f.read()).toEqual({});expect(f.read('SessionStart','resume')).toEqual({});
+ expect(context(f.read('SessionStart','compact'))).toContain('no stored content');expect(f.read()).toEqual({});expect(f.read('SessionStart','resume')).toEqual({});
  expect(context(f.read('SessionStart','resume','s','second-process'))).toContain('New background');
  expect(f.read('SessionStart','compact','new-identity')).toEqual({});expect(f.read('SessionStart','startup','new-identity')).toEqual({});
  await consumeCodexInbox(f.config);
@@ -54,7 +54,7 @@ it.skipIf(process.platform==='win32')('generated hooks cover lifecycle with thre
  const result=spawnSync(process.execPath,['--import',loader,resolve('src/cli/main.ts'),'codex-config'],{env:{...process.env,COMMON_MEMORY_HOME:f.home},encoding:'utf8'});
  expect(result.status,result.stderr).toBe(0);for(const event of ['SessionStart','UserPromptSubmit','Stop','Interrupt','SessionEnd'])expect(result.stdout).toContain(`[[hooks.${event}]]`);
  expect(result.stdout).toContain('timeout = 3');expect(result.stdout).not.toContain('matcher = "^compact$"');expect(result.stdout).not.toContain('bypass_hook_trust');
- const commands=[...result.stdout.matchAll(/^command = (.+)$/gm)].map(m=>JSON.parse(m[1]!));expect(commands).toHaveLength(5);expect(commands[0]).toContain("'\"'\"'");
+ const commands=[...result.stdout.matchAll(/^command = (.+)$/gm)].map(m=>JSON.parse(m[1]!));expect(commands).toHaveLength(7);expect(commands[0]).toContain("'\"'\"'");
 });
 it('requires an independently captured input candidate and never advances over unconfirmed delivery',async()=>{
  const f=fixture();f.read();f.append({type:'task_started',turn_id:'t'});f.append({type:'user_message',message:'No candidate'});f.read('SessionEnd');await expect(consumeCodexInbox(f.config)).rejects.toThrow('CODEX_UNCONFIRMED_DELIVERY');

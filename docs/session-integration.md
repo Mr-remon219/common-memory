@@ -7,7 +7,7 @@
 ## 持久状态与处理链
 
 `src/v2/session.ts` 提供 SessionIngress：open、capture、settle、seal、end、status。
-身份是 client＋processInstance＋真实 session ID 的摘要，cwd 只用于范围选择。
+身份是 client（pi/codex/chatgpt-work）＋processInstance＋真实 session ID 的摘要；真实结束后再启动附加独立 activation 标识，cwd 只用于范围选择。
 SQLite 增加 sessions、session_turns、session_messages、session_batches；旧 observations、
 leases、jobs、receipts、associations 继续承担队列与恢复职责。迁移幂等且事务化。
 用户正文存在 observations 一处，session_messages 只存其引用；assistant/tool 正文
@@ -36,7 +36,7 @@ import 不混批，模型输出仍是 memory_maintenance_v2。
 
 可选 sessionCache 默认 maxSessionBytes=8 MiB、maxTotalBytes=64 MiB、contextTailTurns=2。
 数字是保守工程默认，没有容量实证或远距离指代充分性保证。正文容量包含候选输入、
-交付缓存、session 正文和待交接 Codex inbox。超限事务回滚，保留已有数据及位置，
+交付缓存、session 正文、待交接 Codex/Work inbox 和唯一 host_snapshots 正文。超限事务回滚，保留已有数据及位置，
 终止信封无需新增正文空间。摘要、状态、receipt 等元数据不计入正文容量。
 
 ## 宿主适配
@@ -49,17 +49,16 @@ reload/new/resume/fork 的 extension shutdown 只关闭本地资源。进程随�
 及 promptSnippet/promptGuidelines 按当前授权主动读取。Pi 直接写公共 ingress。
 
 Codex 0.153.4：`src/cli/codex/transcript-0.153.4.ts` 独立解析 rollout。只认该版本
-session_meta 与已知顶层记录。user_message 是交付来源；response_item 中环境、hook
+session_meta 与已知顶层记录。user_message 与 item_completed/UserMessage 是交付来源；world_state、token_usage_record 为非证据记录；response_item 中环境、hook
 和 compact 重放的 user 消息不成为证据。task_started 分组，task_complete 或
 turn_aborted 确认终态；Stop/Interrupt 只登记核对，不假定其时 transcript 已写终态。
 UserPromptSubmit 候选按 session/turn/digest 独立保存并冻结输入时的 scope，user_message 必须精确匹配；
 匹配成功在同一事务清空候选正文并转存交付，保留摘要用于重试。候选不当作已交付证据，
 也不作为自动记忆返回正文。无法匹配时保留 inbox，明确报告未确认交付。
 
-`src/cli/codex-session.ts` 将尾部 JSONL 正文和信封放进同一 runtime.sqlite 的 durable
+`src/cli/host-session.ts` 是 Codex/Work 共享 adapter（codex-session 保留兼容导出），将尾部 JSONL 正文和信封放进同一 runtime.sqlite 的 durable
 inbox，SQLite WAL＋synchronous=FULL 提供原子、fsync 持久性。Hook 使用 150ms SQLite
-busy timeout，生成器给三秒宿主期限；不在 hook 内运行模型。只有首次合格 startup/resume
-返回有界快照，其他事件返回空对象。进程身份取 Linux/WSL boot ID＋Codex 祖先进程 PID＋
+busy timeout，生成器给三秒宿主期限；不在 hook 内运行模型。首次合格 startup/resume 读取有界快照；普通轮次不重复追加。compact/clear/reload 只重挂缓存。显式刷新由 PostToolUse 或下一 UserPromptSubmit 交付。进程身份取 Linux/WSL boot ID＋Codex 祖先进程 PID＋
 启动时间；PID 复用和不同工作目录不会错误共享 session。未知版本、路径替换、未确认交付、
 尾部不完整或容量不足均显式失败，不前移消费位置。SessionEnd 快照不依赖退出后文件存在。
 
@@ -88,17 +87,48 @@ busy timeout，生成器给三秒宿主期限；不在 hook 内运行模型。�
   独立消费者仍提交 canonical Markdown、receipt 与完成状态；强杀消费者后显式重启恢复。
   这不是只验证 Node 子进程能存活，而是执行实际 configured Writer 与 Core 提交。
 
-此轮没有调用真实提供者或使用个人资料。真实 Codex/Pi 交互、Hook 信任 UI、真实模型
-是否主动调用 memory_read、真实客户端版本的全部事件组合尚未联调。Linux 自动测试
-不证明 Windows CI、macOS 或 Windows 原生接入。Codex capture 仅支持 Linux/WSL；
-MCP read 保持原有跨平台边界且绝不打开 Runtime。来源依据是 Pi 已安装 0.84.4 类型/源码、
-[Codex 官方 Hook 协议](https://learn.chatgpt.com/docs/hooks) 与
-[0.153.4 protocol.rs](https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/protocol/src/protocol.rs)。
+## Work、activation 与刷新
+
+host_activations 在同一 Runtime 保存 client、原生宿主实例、真实 thread、cwd 和 active
+状态；host_snapshots 只有每个 activation 的唯一正文 slot 与 pending 标志。真实
+SessionEnd 入队时关闭 activation 并删除 snapshot，不提前关闭待消费 session 或删除
+尾批。再次合格 startup/resume 创建独立 session key。unsubscribe 不映射 SessionEnd。
+刷新依赖宿主祖先进程身份及 CODEX_THREAD_ID，无法唯一定位就失败；读取和替换在同一
+事务中，容量失败也回滚。普通 memory_read 不接触该 slot，read MCP 不打开 Runtime。
+同进程 resume 不重读；compact/clear/reload 重挂已有块；新进程首次 resume 自动读取。
+
+`work-config --mode posix|windows-wsl --output <absolute-directory>` 生成可检查配置、
+显式 memory-refresh Skill 和必要的 PowerShell bridge。无法从环境确定 agent 模式时
+要求选择，不用终端类型或 WSL_DISTRO_NAME 代替。`codex-config` 同样支持 bundle 参数，
+无参数继续打印 profile。共用 host-launch 固定 Node、CLI、home 与 WSL distro/user。
+Work 的 read 和 init 分进程；init 保留 chatgpt-desktop identity，Codex profile 禁用 init。
+所有 Hook 均保留宿主信任机制，不写信任 store、不生成绕过选项。
+
+Windows bridge 从原生祖先进程读取 PID/CreationDate，转换 cwd/transcript 路径，使用
+UTF-8 STDIO 并保留退出码；生成 ps1 含 UTF-8 BOM，兼容 Windows PowerShell 5.1。
+启动器宜安装到 Windows 本地路径：UNC 脚本可能被本机签名策略拒绝，生成器不改策略。
+macOS 直接使用绝对 POSIX 启动参数，身份取 ps 的 PID/启动时间。WSL 内的 agent 使用
+直接 POSIX 模式。Linux 检查不代表 Desktop 在 Linux 上的产品支持。
+
+新增 `tests/cli/work-session.test.ts` 验证 A→B 刷新后 canonical C 不渗入、空 prompt
+显式 Skill 路径、重复刷新、失败/容量回滚、客户端/线程/进程/重新启动隔离、十轮
+item_completed 交付及旧格式去重、未确认内容保留 inbox、配置与 Skill invocation policy。
+`node scripts/smoke-work-bridge.mjs` 是构建后的 Windows→WSL 合成宿主实测入口，使用
+本地假提供者执行 configured Writer/Core；无真实模型调用或个人资料。
+
+协议依据：[官方 Hooks](https://learn.chatgpt.com/docs/hooks)、
+[官方 MCP](https://learn.chatgpt.com/docs/extend/mcp)、
+[Windows agent 环境](https://learn.chatgpt.com/docs/windows/windows-app)。
 rollout 不是稳定公共接口，未来版本需要新适配与新验收。
 
-最终验证：Node 24.20.0 下 `node scripts/verify.mjs` 通过 typecheck、54 源文件边界检查、
-31 测试文件 / 379 项测试及 build。随后追加原生 memory_read 调用测试，Pi 定向套件
-17 项通过，再次 typecheck 通过。构建后 `npm run test:consumer` 通过真实 tarball 的
-typed consumer、prompt asset、Writer、Pi load 与 CLI startup。`git diff --check`
-及当前文档相对链接检查通过。未运行真实模型、个人数据或真实客户端联调。
-上述历史 smoke 脚本及旧验收文件中的重复快照断言已注明被替代。
+真实 Desktop UI 的 Hook 信任、真实模型主动读取与完整真实客户端事件组合尚未验证。
+macOS 本轮只有逻辑与配置生成验证，真机验收留给后续测试者；Linux 测试不证明 Windows CI。
+
+最终验证（Node 24.20.0）：`node scripts/verify.mjs` 通过 typecheck、58 源文件边界
+检查、32 测试文件 / 387 项测试和 build；构建后 `npm run test:consumer` 通过真实
+tarball typed consumer、prompt asset、Writer、Pi load 与 CLI startup。生成的 Work
+和 Codex Skill 均通过 skill-creator quick_validate，invocation policy 另由测试断言。
+Windows PowerShell 5.1 → Ubuntu WSL 的合成宿主测试验证 Unicode STDIO、原生实例
+身份、路径转换、A→B 刷新不被 C 覆盖、退出码，以及父宿主退出后 configured Writer/Core
+提交 canonical Markdown；同脚本还独立验证直接 WSL 祖先进程身份及启动读取。
+此项是合成宿主的真实跨边界执行，不等同于 Desktop UI 验收。

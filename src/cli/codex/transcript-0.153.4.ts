@@ -14,13 +14,23 @@ export function parseTranscript(text:string, state:TranscriptState, scope:string
     if(!row||typeof row!=='object'||typeof row.type!=='string'||!row.payload||typeof row.payload!=='object')throw new Error('CODEX_UNKNOWN_TRANSCRIPT');
     const p=row.payload as Record<string,unknown>;
     if(row.type==='session_meta') {if(p.cli_version!=='0.153.4')throw new Error('CODEX_UNSUPPORTED_VERSION');continue;}
-    if(!['event_msg','response_item','turn_context','compacted'].includes(row.type))throw new Error('CODEX_UNKNOWN_TRANSCRIPT');
+    if(!['event_msg','response_item','turn_context','compacted','world_state','token_usage_record'].includes(row.type))throw new Error('CODEX_UNKNOWN_TRANSCRIPT');
     if(['event_msg','response_item'].includes(row.type)&&typeof p.type!=='string')throw new Error('CODEX_UNKNOWN_TRANSCRIPT');
     if(row.type==='event_msg') {
       if(p.type==='task_started') {if(typeof p.turn_id!=='string')throw new Error('CODEX_UNKNOWN_TRANSCRIPT');if(turnId&&turnId!==p.turn_id)throw new Error('CODEX_UNSETTLED_TURN');turnId=p.turn_id;}
+      if(p.type==='item_completed' && (p.item as Record<string,unknown>)?.type==='UserMessage') {
+        const item=p.item as Record<string,unknown>;
+        if(!turnId||p.turn_id!==turnId||typeof item.id!=='string'||!Array.isArray(item.content)||typeof row.timestamp!=='string')throw new Error('CODEX_UNCONFIRMED_DELIVERY');
+        const parts=item.content as Record<string,unknown>[];
+        const supported=parts.every(c=>c&&c.type==='text'&&typeof c.text==='string');
+        const body=parts.filter(c=>c&&c.type==='text'&&typeof c.text==='string').map(c=>c.text).join('\n');
+        if(supported&&!body)continue; // Structured skill invocation can submit no user expression.
+        actions.push({kind:'message',message:{id:'item-'+item.id,turnId,role:'user',text:body||'[unsupported non-text user content]',scope,source:supported?'codex_user_delivery':'unsupported_content',observedAt:row.timestamp}});
+      }
       if(p.type==='user_message') {
         if(!turnId||typeof p.message!=='string'||typeof row.timestamp!=='string')throw new Error('CODEX_UNCONFIRMED_DELIVERY');
         const unsupported=['images','local_images','audio','local_audio'].some(k=>Array.isArray(p[k])&&(p[k] as unknown[]).length>0);
+        if(!unsupported&&!p.message)continue;
         actions.push({kind:'message',message:{id,turnId,role:'user',text:p.message||'[unsupported non-text user content]',scope,source:unsupported?'unsupported_content':'codex_user_delivery',observedAt:row.timestamp}});
       }
       if(p.type==='task_complete'||p.type==='turn_aborted') {

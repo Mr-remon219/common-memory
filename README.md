@@ -416,6 +416,56 @@ ChatGPT web and the desktop **Chat** mode do not read this configuration; use th
 selected Markdown workflow above for this version. A remote HTTPS connector
 is outside this version and would not guarantee access to more source material.
 
+### ChatGPT Work local sessions and explicit refresh
+
+Build first, then generate a reviewable bundle for the **actual agent environment**:
+
+```sh
+# macOS agent + runtime, or agent + runtime in the same WSL environment:
+common-memory work-config --mode posix --output /absolute/new/bundle
+# Native Windows agent with this runtime inside WSL:
+common-memory work-config --mode windows-wsl --distro Ubuntu --user linux-user \
+  --output /mnt/c/Users/you/common-memory-bundle \
+  --bridge-path 'C:\Users\you\common-memory-bundle\common-memory-bridge.ps1'
+```
+
+Choose the mode from the agent process and its configuration directory. Terminal type
+and `WSL_DISTRO_NAME` alone do not identify where the desktop agent runs. Linux POSIX
+configuration validation does not establish Linux Desktop product support. The bridge
+pins absolute `wsl.exe`, distro, user, Node, CLI and Common Memory home. Store its
+PowerShell launcher on a Windows local path; `--bridge-path` defaults to the Windows
+translation of the output path. UNC locations may require signing under
+the machine's execution policy. The generator does not change that policy.
+
+Inspect `common-memory.config.toml`, then merge it into the actual Work agent's
+configuration, and install `skills/memory-refresh` in that agent's skills directory.
+Use repeatable `--workspace <absolute-runtime-path>` for registered project read access.
+Review and trust Hook commands through `/hooks`. Generated files never overwrite
+existing files. Work gets independent read and init MCP processes. The existing
+`chatgpt-desktop` import identity is preserved for retry receipts; session capture and
+read use `chatgpt-work`. Ordinary Chat is outside this integration.
+
+For Codex, `codex-config --mode posix --output /absolute/new/bundle` generates the
+same explicit Skill and a profile with init disabled. The no-argument form still
+prints configuration. Use `--mode windows-wsl` with the bridge options for a native
+Windows Codex host. Keep Work and Codex profiles separate when sharing a config home.
+
+`/memory-refresh` has `allow_implicit_invocation: false`. Its generated command calls
+`session-refresh --home <absolute-path> --client <client>` using the host process and
+`CODEX_THREAD_ID`. Missing or nonmatching identity fails; cwd alone never selects a
+session. Reading and replacement are transactional: failure leaves the prior snapshot
+and pending delivery intact. `PostToolUse` injects the new block, with the next
+`UserPromptSubmit` as fallback. Refresh does not reset the ten-turn count or import
+anything. Pi provides the same command natively and replaces its frozen system block.
+
+A live activation survives switching away, unsubscribe/resubscribe, same-process
+resume, compact, clear and reload. A real `SessionEnd` closes it and drops its snapshot;
+a subsequent startup/resume creates an independent activation while the old durable
+inbox and tail drain remain recoverable. New-process resume reads once. Historical
+messages may retain old snapshots: the host API appends context, while the adapter
+owns and replaces one active slot. See [session integration](docs/session-integration.md)
+for validation and remaining real-UI limitations.
+
 ### Codex CLI (session hooks and read-only MCP)
 
 For automatic injection, build Common Memory and run `common-memory codex-config`
@@ -431,31 +481,30 @@ The commands pin the current Node binary, built CLI entry and Common Memory
 configuration directory as absolute, POSIX shell-quoted paths. Regenerate after
 moving the installation or changing Node or `COMMON_MEMORY_HOME`.
 Codex CLI and Common Memory must run in the same POSIX environment, including WSL;
-native Windows hooks and cross-system hook path conversion are not supported.
+macOS uses the same direct launch. For a native Windows agent with a WSL runtime, generate the bridge bundle below.
 
 The generated synchronous hooks cover `SessionStart`, `UserPromptSubmit`, `Stop`,
-`Interrupt` and `SessionEnd`, with a three-second timeout. They use the local SQLite
+`PostToolUse`, `Interrupt` and `SessionEnd`, with a three-second timeout. They use the local SQLite
 FULL-synchronous durable inbox, then launch `session-drain` detached with independent
 stdio. The inbox contains the transcript tail itself, so normal exit does not depend
 on the transcript surviving. Consumers delete that copy only in the transaction that
 admits it into the session cache. No model runs in the hook process.
 
 Only the first qualifying `SessionStart` (`startup` or `resume`) for the process and
-session returns memory. Other hooks return no memory or conversation text. Startup
+activation reads memory. Compact/clear/reload reattach the cached block without reading canonical files; ordinary turns do not repeat it. Startup
 output remains bounded to 64 KiB and hook input to 1 MiB. Automatic snapshots are
-frozen; call MCP `memory_read` for current content when needed. Read failure returns
+frozen; call MCP `memory_read` for an independent current read, or explicitly invoke `/memory-refresh` to replace the frozen slot. Read failure returns
 a controlled unavailable block. Ingress/protocol/capacity failures exit nonzero.
 
 The rollout parser is isolated at `src/cli/codex/transcript-0.153.4.ts`; it accepts
-only Codex CLI 0.153.4 metadata. User delivery requires `user_message` events matching the separately recorded
+only Codex CLI 0.153.4 metadata. User delivery requires `user_message` or `item_completed/UserMessage` events matching the separately recorded
 UserPromptSubmit candidate for that turn, never arbitrary `response_item` user content, hook context, environment messages or
 compaction summaries. `task_complete` / `turn_aborted` seal interactions. Stop starts
 completion reconciliation immediately; a delayed final record needs no next prompt.
 Unconfirmed completion keeps its durable watch for a later `session-drain` retry;
 a reconciliation attempt is bounded to 60 seconds. Unknown formats do not advance
 the cursor. Linux/WSL process identity uses boot ID, host PID and start time; native
-Windows/macOS capture is not supported. Codex and Common Memory must share the Linux
-process namespace and filesystem.
+macOS uses the host PID and process start time. The Windows bridge passes the native host PID and creation time, and converts cwd/transcript paths into the fixed WSL runtime.
 
 Protocol reference: [official Codex hooks](https://learn.chatgpt.com/docs/hooks).
 The earlier `scripts/smoke-codex-hooks.py` repeated-snapshot assertions are historical

@@ -151,7 +151,7 @@ it('mcp-config pins node, CLI entry, configuration directory and dataRoot; --wsl
   const wsl = await cli(['mcp-config', '--wsl', '--user', 'tester'], { ...env, WSL_DISTRO_NAME: 'UbuntuTest' });
   if (process.platform === 'linux') {
     expect(wsl.code, wsl.stderr).toBe(0);
-    expect(wsl.stdout).toContain('command = "wsl.exe"');
+    expect(wsl.stdout).toContain('command = '+JSON.stringify('C:\\Windows\\System32\\wsl.exe'));
     expect(wsl.stdout).toContain(`args = ["-d", "UbuntuTest", "-u", "tester", "-e", "/usr/bin/env", ${JSON.stringify(`COMMON_MEMORY_HOME=${home}`)}, `);
     expect(wsl.stdout).toContain(resolve('src/cli/main.ts')); expect(wsl.stdout).toContain('WSL distribution: UbuntuTest; Linux user: tester');
     expect(wsl.stdout).toContain('Windows-native Pi is not covered');

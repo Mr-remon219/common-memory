@@ -1,3 +1,4 @@
+import { runtimeLaunch } from './host-launch.js';
 import { realpathSync } from "node:fs";
 import { userInfo } from "node:os";
 import { isAbsolute, resolve } from "node:path";
@@ -49,9 +50,8 @@ export function renderMcpConfig(config: CommonMemoryConfig, options: McpConfigOp
   if (options.wsl && !distro) throw new Error("--wsl needs a distribution: run inside WSL or pass --distro <name>");
   const launch = (clientId: string, capability: string, extra: string[]) => {
     const inner = [cli, "mcp", "--client-id", clientId, "--capability", capability, "--global", ...extra];
-    if (!options.wsl) return `command = ${toml(node)}\nargs = ${list(inner)}\nenv = { COMMON_MEMORY_HOME = ${toml(home)} }`;
-    // No login shell runs under `wsl.exe -e`, so PATH and shell profiles are unavailable: absolute paths only.
-    return `command = "wsl.exe"\nargs = ${list(["-d", distro!, "-u", user, "-e", "/usr/bin/env", `COMMON_MEMORY_HOME=${home}`, node, ...inner])}`;
+    const command=runtimeLaunch(options,env).command(inner.slice(1));
+    return `command = ${toml(command.command)}\nargs = ${list(command.args)}${command.env?`\nenv = { COMMON_MEMORY_HOME = ${toml(home)} }`:''}`;
   };
   const lines = [
     `# Common Memory MCP configuration for the Codex host (ChatGPT desktop app, Codex CLI, IDE extension).`,

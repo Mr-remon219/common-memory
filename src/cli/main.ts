@@ -10,11 +10,14 @@ import { printStatus, runSetupWizard, runNetworkWizard, runTui, UserCancelled } 
 
 async function main(): Promise<void> {
   const [command,...args]=process.argv.slice(2);
-  if(command==="--help" || command==="-h") {console.log("Common Memory V2\n\ncommon-memory [config|status|flush|session-drain]\ncommon-memory config --network\ncommon-memory network-test\ncommon-memory show [--workspace <absolute-path>]\ncommon-memory import <file.md> [--workspace <absolute-path>] [--author user|agent|third_party|mixed|unknown] [--label <text>] [--no-wait]\ncommon-memory project register <root> <name>\ncommon-memory project list\ncommon-memory project remove <id>\ncommon-memory retry <job-id>\ncommon-memory mcp --client-id <id> [--capability relay|init|read]... [--workspace <absolute-path>]... [--global] [--accept-client-reported-user-turns]\ncommon-memory codex-hook --home <absolute-path>\ncommon-memory codex-config\ncommon-memory mcp-config [--wsl] [--distro <name>] [--user <name>] [--workspace <absolute-path>]...");return;}
+  if(command==="--help" || command==="-h") {console.log("Common Memory V2\n\ncommon-memory [config|status|flush|session-drain]\ncommon-memory config --network\ncommon-memory network-test\ncommon-memory show [--workspace <absolute-path>]\ncommon-memory import <file.md> [--workspace <absolute-path>] [--author user|agent|third_party|mixed|unknown] [--label <text>] [--no-wait]\ncommon-memory project register <root> <name>\ncommon-memory project list\ncommon-memory project remove <id>\ncommon-memory retry <job-id>\ncommon-memory mcp --client-id <id> [--capability relay|init|read]... [--workspace <absolute-path>]... [--global] [--accept-client-reported-user-turns]\ncommon-memory codex-hook --home <absolute-path>\ncommon-memory codex-config\ncommon-memory work-config --mode posix|windows-wsl --output <absolute-directory> [--distro <name>] [--user <name>] [--bridge-path <Windows-path>]\ncommon-memory session-refresh --home <absolute-path> [--client codex|chatgpt-work]\ncommon-memory mcp-config [--wsl] [--distro <name>] [--user <name>] [--workspace <absolute-path>]...");return;}
+  if(command==='work-config'){(await import('./work-config.js')).runWorkConfig(args);return;}
+  if(command==='work-hook'){await (await import('./codex-hook.js')).runCodexHook(args,'chatgpt-work');return;}
+  if(command==='session-refresh'){(await import('./codex-hook.js')).runSessionRefresh(args);return;}
   if(command==="session-drain") {await (await import("./session-drain.js")).runSessionDrain(args);return;}
   if(command==="codex-hook") {await (await import('./codex-hook.js')).runCodexHook(args);return;}
   if(command==="codex-config") {
-    if(args.length)throw new TypeError("codex-config takes no arguments");
+    if(args.length){(await import('./work-config.js')).runWorkConfig(args,'codex');return;}
     if(!loadConfig())throw new Error("Run common-memory config first");
     process.stdout.write((await import('./codex-config.js')).renderCodexConfig());return;
   }

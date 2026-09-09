@@ -76,7 +76,8 @@ export function createCommonMemoryPiExtension(options: {runtimeFactory?: () => P
     pi.on("session_before_switch", (_event,ctx)=>{bind(ctx);safe(r=>{r.cancelInputs(ctx.sessionManager.getSessionId());});});
     pi.on("session_before_compact", (_event,ctx)=>{bind(ctx);});
     pi.on("session_before_tree", (_event,ctx)=>{bind(ctx);safe(r=>{r.cancelInputs(ctx.sessionManager.getSessionId());});});
-    pi.on("session_shutdown", async (event,ctx)=>{ if(runtime){try { bind(ctx);runtime.context(ctx.sessionManager.getSessionId(),branchContext(ctx.sessionManager.getBranch()));runtime.cancelInputs(ctx.sessionManager.getSessionId());if(event.reason==='quit'){runtime.end(ctx.sessionManager.getSessionId());launchSessionDrain();} } finally { try { await runtime.shutdown(); } finally { runtime=undefined;config=undefined;registry=undefined; } }} });
+    pi.on("session_shutdown", async (event,ctx)=>{ if(event.reason==='quit'){try{snapshots.delete(snapshotKey(ctx));}catch{/* unconfigured */}} if(runtime){try { bind(ctx);runtime.context(ctx.sessionManager.getSessionId(),branchContext(ctx.sessionManager.getBranch()));runtime.cancelInputs(ctx.sessionManager.getSessionId());if(event.reason==='quit'){runtime.end(ctx.sessionManager.getSessionId());launchSessionDrain();} } finally { try { await runtime.shutdown(); } finally { runtime=undefined;config=undefined;registry=undefined; } }} });
+    pi.registerCommand("memory-refresh",{description:"Replace the frozen Common Memory snapshot",handler:async (_args,ctx)=>{config=undefined;registry=undefined;const body=renderMemoryView(read(ctx));snapshots.set(snapshotKey(ctx),body);}});
     pi.registerCommand("memory-flush",{description:"Queue Common Memory maintenance",handler:async (_args,ctx)=>{bind(ctx);safe(r=>r.flush());}});
   };
 }
