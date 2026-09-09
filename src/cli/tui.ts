@@ -15,6 +15,7 @@ import { storagePathLines } from "./storage-paths.js";
 const PROVENANCE_OPTIONS: Array<{ value: ProvenanceType; label: string; hint: string }> = [
   { value: "user_explicit", label: "Delivered user expressions", hint: "Includes corrections and forget requests" },
   { value: "agent_observation", label: "Agent-reported understanding", hint: "Required for Init imports from other agents; stored as attributed, not as user statements" },
+  { value: "conversation_context", label: "Conversation context", hint: "Assistant/tool and prior conversation context; never user evidence" },
   { value: "document_import", label: "Imported Markdown documents", hint: "Required for common-memory import <file.md>; stored as attributed material, never as user statements" },
 ];
 

@@ -40,14 +40,14 @@ describe("local configuration", () => {
     finally { delete process.env.CM_PROV_TEST_KEY; }
     // The Pi extension refuses to start capture, so no user turn is even staged, and reading is unaffected.
     const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
-    const pi = { on: (name: string, fn: (event: unknown, ctx: unknown) => unknown) => { handlers.set(name, fn); }, registerCommand: () => {} } as unknown as ExtensionAPI;
+    const pi = { on: (name: string, fn: (event: unknown, ctx: unknown) => unknown) => { handlers.set(name, fn); }, registerCommand: () => {}, registerTool: () => {} } as unknown as ExtensionAPI;
     createCommonMemoryPiExtension({ configFactory: () => config })(pi);
     const errors: string[] = []; const write = process.stderr.write.bind(process.stderr);
     process.stderr.write = ((chunk: string | Uint8Array) => { errors.push(String(chunk)); return true; }) as typeof process.stderr.write;
     try { handlers.get("input")!({ text: "private user words", source: "interactive" }, { cwd: root, hasPendingMessages: () => false, sessionManager: { getSessionId: () => "s", getLeafId: () => null, getBranch: () => [] } }); }
     finally { process.stderr.write = write; }
     expect(errors.join("")).toContain("capture unavailable");
-    expect(handlers.get("before_agent_start")!({ systemPrompt: "BASE" }, { cwd: root })).toMatchObject({ systemPrompt: expect.stringContaining("## Common Memory") });
+    expect(handlers.get("before_agent_start")!({ systemPrompt: "BASE" }, { cwd: root, sessionManager: {getSessionId:()=>"s"} })).toMatchObject({ systemPrompt: expect.stringContaining("## Common Memory") });
   });
 });
 

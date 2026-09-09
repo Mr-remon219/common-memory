@@ -10,6 +10,9 @@ registerHooks({
       const url = new URL(specifier.slice(0, -3) + '.ts', context.parentURL);
       if (existsSync(url)) return { url: url.href, shortCircuit: true };
     }
+    if (specifier.endsWith('.js')) {
+      try {const url = specifier.startsWith('file:') ? new URL(specifier) : new URL('file://' + specifier);if(url.href.startsWith(sourceRoot)){url.pathname=url.pathname.slice(0,-3)+'.ts';if(existsSync(url))return {url:url.href,shortCircuit:true};}}catch { /* ordinary package specifier */ }
+    }
     return next(specifier, context);
   },
   load(url, context, next) {

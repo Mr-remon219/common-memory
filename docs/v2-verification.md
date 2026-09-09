@@ -1,5 +1,8 @@
 # V2 交付验证 — 2026-09-05
 
+> 历史记录：Pi/Codex 读取频率、捕获、调度和退出行为已由 [会话接入](session-integration.md) 替代。下文旧验收不证明新会话链路。
+
+
 ## 改动范围
 
 - `src/v2/`：Markdown、可恢复文件事务、统一 SQLite、混合调度、协议、Writer、Project Registry、安全错误码和 repository lock。

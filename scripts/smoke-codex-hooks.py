@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# HISTORICAL: repeated-snapshot assertions are superseded by tests/cli/codex-hook.test.ts.
+# Do not use this script as acceptance for the session integration.
+
 """Real Codex protocol smoke against built Common Memory. Python stdlib only.
 Default: isolated synthetic data + loopback fake Responses provider, no credentials.
 --live: synthetic three-turn A/B/B acceptance using the current Codex auth, twice

@@ -16,3 +16,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: node scripts/verify.mjs
+      - name: Verify packed consumer
+        if: runner.os == 'Linux'
+        run: npm run test:consumer

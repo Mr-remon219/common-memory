@@ -13,3 +13,5 @@ export { createConfiguredMemoryModel, createConfiguredWriter, describeConfigured
 export { OpenAIChatMemoryModel, type OpenAIChatMemoryModelOptions } from "./memory-manager/openai/openai-chat-adapter.js";
 export type { FailureDiagnostic, DiagnosticStage, DiagnosticReason } from "./memory-manager/contracts/diagnostic.js";
 export type { ObservationOutcome, JobStatus } from "./v2/runtime.js";
+
+export { SessionIngress, sessionKey, SESSION_CACHE_DEFAULTS, type SessionIdentity, type SessionMessage, type SessionTurnState, type SessionCacheOptions } from './v2/session.js';

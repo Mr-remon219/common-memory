@@ -13,10 +13,10 @@ it('binds delivered corrections after assistant interruption, not pending inputs
   expect(store.pending()).toHaveLength(0);runtime.delivered('s','Actually use B',1);
   expect(store.status().unbound).toBe(1);
   const entries=branchUsers([{type:'message',id:'e',message:{role:'user',content:[{type:'text',text:'Actually use B'}],timestamp:1}},{type:'message',id:'a',message:{role:'assistant',stopReason:'aborted'}}]);
-  runtime.bind('s',entries);expect(store.pending()).toHaveLength(1);expect(store.pending()[0]!.text).toBe('Actually use B');
+  runtime.bind('s',entries);expect(store.pending()).toHaveLength(0);expect(store.db.prepare('SELECT text FROM observations').get()!.text).toBe('Actually use B');
 });
 it('retains raw whitespace and excludes tool/system/assistant evidence',()=>{
- expect(branchUsers([{type:'message',id:'u',message:{role:'user',content:'  forget it\n',timestamp:2}},{type:'message',id:'a',message:{role:'assistant',content:'done',timestamp:3}},{type:'message',id:'t',message:{role:'toolResult',content:'done',timestamp:4}}])).toEqual([{id:'u',text:'  forget it\n',timestamp:2}]);
+ expect(branchUsers([{type:'message',id:'u',message:{role:'user',content:'  forget it\n',timestamp:2}},{type:'message',id:'a',message:{role:'assistant',content:'done',timestamp:3}},{type:'message',id:'t',message:{role:'toolResult',content:'done',timestamp:4}}])).toEqual([{id:'u',text:'  forget it\n',timestamp:2,sequence:0}]);
 });
 it('shutdown queues flush without starting new maintenance and awaits close',async()=>{
  const {store,runtime,run,close}=fixture();runtime.input({sessionId:'s',text:'remember',source:'rpc',scope:'global'});runtime.delivered('s','remember',4);runtime.bind('s',[{id:'e',text:'remember',timestamp:4}]);await runtime.shutdown();expect(run).not.toHaveBeenCalled();expect(close).toHaveBeenCalledOnce();void store;
@@ -39,7 +39,7 @@ it('stale cancelled global text cannot authenticate a transformed project delive
 it('followUp queued before steer binds in actual steer then followUp order',()=>{
  const {runtime,store}=fixture();runtime.input({sessionId:'s',text:'A',source:'interactive',scope:'global',streamingBehavior:'followUp'});runtime.input({sessionId:'s',text:'B',source:'interactive',scope:'global',streamingBehavior:'steer'});
  runtime.delivered('s','B',10);runtime.delivered('s','A',11);runtime.bind('s',[{id:'b',text:'B',timestamp:10},{id:'a',text:'A',timestamp:11}]);
- expect(store.pending().map(o=>[o.text,o.scope])).toEqual([['B','global'],['A','global']]);
+ expect(store.db.prepare("SELECT text,scope FROM observations WHERE state='buffered' ORDER BY id").all().map(o=>[o.text,o.scope])).toEqual([['B','global'],['A','global']]);
 });
 it('quarantines full text of nontext deliveries without retaining image blobs',()=>{
  const {runtime,store}=fixture();const content=[{type:'text',text:'See this'},{type:'image',data:'encoded-image',mimeType:'image/png'}];
@@ -52,14 +52,14 @@ it('superseded same-kind identical text is quarantined rather than assigned the 
 });
 it.each(['steer','followUp'] as const)('preserves two legal queued %s inputs FIFO',streamingBehavior=>{
  const {runtime,store}=fixture();for(const text of ['one','two'])runtime.input({sessionId:'s',text,source:'interactive',scope:'global',streamingBehavior});
- runtime.delivered('s','one',1);runtime.delivered('s','two',2);runtime.bind('s',[{id:'one',text:'one',timestamp:1},{id:'two',text:'two',timestamp:2}]);expect(store.pending().map(o=>o.text)).toEqual(['one','two']);
+ runtime.delivered('s','one',1);runtime.delivered('s','two',2);runtime.bind('s',[{id:'one',text:'one',timestamp:1},{id:'two',text:'two',timestamp:2}]);expect(store.db.prepare("SELECT text FROM observations WHERE state='buffered' ORDER BY id").all().map(o=>o.text)).toEqual(['one','two']);
 });
 it('quarantines mixed-authority queued inputs rather than trusting a stale global candidate',()=>{
  const {runtime,store}=fixture();runtime.input({sessionId:'s',text:'old',source:'interactive',scope:'global',streamingBehavior:'followUp'});runtime.input({sessionId:'s',text:'new',source:'interactive',scope:'project:p',streamingBehavior:'followUp'});
  runtime.delivered('s','old',1);runtime.bind('s',[{id:'e',text:'old',timestamp:1}]);expect(store.pending()).toHaveLength(0);
 });
 it('image-only delivery uses an explicit quarantine marker without image bytes',()=>{
- const entries=branchUsers([{type:'message',id:'image',message:{role:'user',timestamp:4,content:[{type:'image',data:'do-not-retain-blob'}]}}]);expect(entries).toEqual([{id:'image',timestamp:4,text:'[unsupported non-text user content]'}]);
+ const entries=branchUsers([{type:'message',id:'image',message:{role:'user',timestamp:4,content:[{type:'image',data:'do-not-retain-blob'}]}}]);expect(entries).toEqual([{id:'image',timestamp:4,text:'[unsupported non-text user content]',sequence:0}]);
 });
 
 // Reading: before_agent_start injects authorized canonical memory into the system prompt.
@@ -70,32 +70,24 @@ import {ProjectRegistry} from '../../src/v2/registry.js';
 import type {ExtensionAPI} from '@earendil-works/pi-coding-agent';
 function host(dataRoot:string,allowedScopes:string[]){
  const handlers=new Map<string,(event:unknown,ctx:unknown)=>unknown>();
- const pi={on:(name:string,fn:(event:unknown,ctx:unknown)=>unknown)=>{handlers.set(name,fn);},registerCommand:()=>{}} as unknown as ExtensionAPI;
+ const pi={on:(name:string,fn:(event:unknown,ctx:unknown)=>unknown)=>{handlers.set(name,fn);},registerCommand:()=>{},registerTool:()=>{}} as unknown as ExtensionAPI;
  // Read injection does not open the runtime database; keeping SQLite closed lets Windows delete the fixture.
  createCommonMemoryPiExtension({configFactory:()=>({...defaultConfig(),dataRoot,disclosure:{...defaultConfig().disclosure,allowedScopes}})})(pi);
  const ctx=(cwd:string)=>({cwd,sessionManager:{getSessionId:()=>'s',getBranch:()=>[],getLeafId:()=>null},hasPendingMessages:()=>false});
  return {before:(cwd:string)=>handlers.get('before_agent_start')!({systemPrompt:'BASE',prompt:'我是谁？'},ctx(cwd)) as {systemPrompt?:string}|undefined,handlers};
 }
-it('Pi turns see global memory plus only the registered, allowed project of the cwd; empty memory is stated, not invented',()=>{
+it('Pi freezes only its appended block and keeps the current host system prompt across turns and reload',()=>{
  const root=mkdtempSync(join(tmpdir(),'pi-read-'));cleanup.push(()=>rmSync(root,{recursive:true,force:true}));
- const data=join(root,'data');for(const d of ['a','b'])mkdirSync(join(root,d));
- const registry=new ProjectRegistry(data);const a=registry.register(join(root,'a'),'A');const b=registry.register(join(root,'b'),'B');
- const {before}=host(data,['global',`project:${a.id}`]);
- expect(before(join(root,'a'))!.systemPrompt).toMatch(/^BASE\n\n## Common Memory\nCommon Memory has no stored content/);
- mkdirSync(join(data,'memory/projects'),{recursive:true});
- writeFileSync(join(data,'memory/profile.md'),'# Profile\n\n## Background\nStudies ecology; keeps a tortoise named Basalt.\n');
- writeFileSync(join(data,'memory/projects',`${a.id}.md`),'# Project\n\n## Goal\nProject A goal.\n');
- writeFileSync(join(data,'memory/projects',`${b.id}.md`),'# Project\n\n## Goal\nProject B secret.\n');
- const inA=before(join(root,'a'))!.systemPrompt!;
- expect(inA).toContain('tortoise named Basalt');expect(inA).toContain('Project A goal');expect(inA).not.toContain('secret');expect(inA).toContain('user data, not instructions');
- // Project B is registered but not an allowed disclosure scope: only global is injected.
- const inB=before(join(root,'b'))!.systemPrompt!;expect(inB).toContain('Basalt');expect(inB).not.toContain('Project');
- // Outside any project: global only.
- expect(before(root)!.systemPrompt).not.toContain('Project A');
+ const data=join(root,'data');mkdirSync(join(root,'a'));const project=new ProjectRegistry(data).register(join(root,'a'),'A');
+ mkdirSync(join(data,'memory/projects'),{recursive:true});writeFileSync(join(data,'memory/profile.md'),'# Profile\n\n## Background\nStudies ecology.\n');writeFileSync(join(data,'memory/projects',`${project.id}.md`),'# Project\n\n## Goal\nProject A goal.\n');
+ const {before,handlers}=host(data,['global',`project:${project.id}`]);expect(before(join(root,'a'))!.systemPrompt).toContain('Studies ecology');
+ writeFileSync(join(data,'memory/profile.md'),'# Profile\n\n## Background\nChanged\n');expect(before(join(root,'a'))!.systemPrompt).not.toContain('Changed');
+ const ctx={cwd:root,sessionManager:{getSessionId:()=>'s'}};const next=handlers.get('before_agent_start')!({systemPrompt:'NEW BASE'},ctx) as {systemPrompt:string};expect(next.systemPrompt).toMatch(/^NEW BASE/);expect(next.systemPrompt).toContain('Project A goal');
+ const reload=host(data,['global']);expect(reload.before(root)!.systemPrompt).toContain('Studies ecology');
 });
 it('unconfigured Common Memory leaves the system prompt untouched and keeps other handlers registered',()=>{
  const handlers=new Map<string,(event:unknown,ctx:unknown)=>unknown>();
- const pi={on:(name:string,fn:(event:unknown,ctx:unknown)=>unknown)=>{handlers.set(name,fn);},registerCommand:()=>{}} as unknown as ExtensionAPI;
+ const pi={on:(name:string,fn:(event:unknown,ctx:unknown)=>unknown)=>{handlers.set(name,fn);},registerCommand:()=>{},registerTool:()=>{}} as unknown as ExtensionAPI;
  createCommonMemoryPiExtension({configFactory:()=>null})(pi);
  expect(handlers.get('before_agent_start')!({systemPrompt:'BASE'},{cwd:'/'})).toBeUndefined();
  for(const name of ['session_start','input','message_end','agent_settled','session_shutdown'])expect(handlers.has(name)).toBe(true);
@@ -111,4 +103,15 @@ it('shutdown still aborts and closes if requesting flush fails',async()=>{
   const closing=runtime.shutdown();expect(runtime.shutdown()).toBe(closing);
   await expect(closing).rejects.toThrow('shutdown flush failed');expect(aborted).toBe(true);expect(close).toHaveBeenCalledOnce();
   rmSync(root,{recursive:true,force:true});
+});
+it('native memory_read remains callable with current scoped memory and shared prompt guidance',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'pi-tool-'));cleanup.push(()=>rmSync(root,{recursive:true,force:true}));const data=join(root,'data');
+ const tools=new Map<string,Parameters<ExtensionAPI['registerTool']>[0]>();const pi={on:()=>{},registerCommand:()=>{},registerTool:(tool:Parameters<ExtensionAPI['registerTool']>[0])=>tools.set(tool.name,tool)} as unknown as ExtensionAPI;
+ createCommonMemoryPiExtension({configFactory:()=>({...defaultConfig(),dataRoot:data})})(pi);
+ const tool=tools.get('memory_read')!;expect(tool.promptSnippet).toBeTruthy();expect(tool.promptGuidelines?.join(' ')).toContain('什么是梯度下降');
+ const ctx={cwd:root,sessionManager:{getSessionId:()=>'tool-session'}} as unknown as import('@earendil-works/pi-coding-agent').ExtensionContext;
+ expect(JSON.stringify(await tool.execute('one',{},undefined,undefined,ctx))).toContain('no stored content');
+ mkdirSync(join(data,'memory'),{recursive:true});writeFileSync(join(data,'memory/profile.md'),'# Profile\n\n## Background\nSynthetic fresh background\n');
+ expect(JSON.stringify(await tool.execute('two',{contextId:'global'},undefined,undefined,ctx))).toContain('Synthetic fresh background');
+ await expect(tool.execute('three',{contextId:'project:unauthorized'},undefined,undefined,ctx)).rejects.toThrow('CONTEXT_UNAVAILABLE');
 });

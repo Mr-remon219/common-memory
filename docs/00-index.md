@@ -1,5 +1,6 @@
 # Common Memory V2 文档
 
+- [会话接入与验收边界](session-integration.md)
 - [实施规格与架构决定](03-target-architecture.md)
 - [Init v0.1：跨 Agent 记忆迁移与复用 — 研究、设计与计划](init-v0.1-design.md)
 - [Init v0.1：验收记录](init-v0.1-verification.md)

@@ -42,7 +42,7 @@ import { Writer, type WriterOptions } from "../v2/writer.js";
  */
 export function createConfiguredWriter(config: CommonMemoryConfig): ConfiguredWriter {
   const model = createConfiguredMemoryModel(config);
-  try { return new ConfiguredWriter({ modelVersion: config.remote.model, maxRequestBytes: config.disclosure.maxTotalBytes, dataRoot: config.dataRoot, model, allowedScopes: config.disclosure.allowedScopes, writableScopes: config.writableScopes, allowedProvenance: config.disclosure.allowedProvenance, scheduler: config.scheduler }, model); }
+  try { return new ConfiguredWriter({ modelVersion: config.remote.model, maxRequestBytes: config.disclosure.maxTotalBytes, dataRoot: config.dataRoot, model, allowedScopes: config.disclosure.allowedScopes, writableScopes: config.writableScopes, allowedProvenance: config.disclosure.allowedProvenance, scheduler: config.scheduler, ...(config.sessionCache ? {sessionCache:config.sessionCache} : {}) }, model); }
   catch (error) { void model.close().catch(() => {}); throw error; }
 }
 

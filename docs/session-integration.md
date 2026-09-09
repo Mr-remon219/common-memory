@@ -1,0 +1,104 @@
+# 会话接入：当前实现与验收边界
+
+2026-09-09。此文替代历史记录中的 Pi 六条触发、每轮自动读、Codex 只读 Hook
+及退出只排队的描述。Canonical Markdown、Core 写权限和 MCP stdio 固定 capability
+没有改变；没有新增检索、索引、长期记忆 revision、监听同步或一致性协议。
+
+## 持久状态与处理链
+
+`src/v2/session.ts` 提供 SessionIngress：open、capture、settle、seal、end、status。
+身份是 client＋processInstance＋真实 session ID 的摘要，cwd 只用于范围选择。
+SQLite 增加 sessions、session_turns、session_messages、session_batches；旧 observations、
+leases、jobs、receipts、associations 继续承担队列与恢复职责。迁移幂等且事务化。
+用户正文存在 observations 一处，session_messages 只存其引用；assistant/tool 正文
+只作为上下文缓存。每条消息有稳定身份、角色、来源、顺序和摘要；重放相同消息是
+no-op，冲突拒绝。一个交互必须含实际已交付用户表达；候选输入不算轮。
+
+满十次 settled（含终止后的 interrupted）即原子封逻辑批次。未满十轮保持 buffered，
+不受 legacy 六条/字节/idle/flush 触发；退出将 open 标为 incomplete 并封尾。
+关闭屏障由 sessions.closing 与该 session 全部观察的持久状态共同构成。
+complete 要求 closing、全部处理成功且不存在 incomplete 回合；dead/quarantined
+或未完成尾轮保留 incomplete。空尾不制造证据。status 命令列出各 session 汇总，
+不打印正文；显式 retry 后状态可重新计算，不存容易失真的成功标志。
+
+Writer 的 `conversation_turns` 保留整轮消息关系。当前用户表达仍各自获得 ev 引用；
+assistant、工具、前轮上下文都是 context_only，不能单独作为 retain/forget 证据。
+跨批尾上下文通过旧 turn/observation 引用读取，无永久正文副本。forget、人工改文档
+导致来源失效、processed prune 都通过 SQLite trigger 同步清空同轮 assistant/tool
+正文；重放同身份不会复活正文。敏感上下文记录不可用；用户正文仍由既有 Writer
+安全扫描保护。引用、建议不会被预处理提升为用户确认。
+
+`conversation_context` 是单独披露权限，旧配置不会自动获得。未授权时会话请求包含
+不可用原因，legacy 前轮上下文也不再发送，不用 user_explicit 绕过。contextTailTurns 默认 2，最多读取同 session、
+同 scope 的已处理回合。Writer 先舍弃可选历史上下文，再按整轮拆请求；单轮连同
+用户确认与相关上下文仍超限则整轮隔离并保留正文。session、legacy relay 和两类
+import 不混批，模型输出仍是 memory_maintenance_v2。
+
+可选 sessionCache 默认 maxSessionBytes=8 MiB、maxTotalBytes=64 MiB、contextTailTurns=2。
+数字是保守工程默认，没有容量实证或远距离指代充分性保证。正文容量包含候选输入、
+交付缓存、session 正文和待交接 Codex inbox。超限事务回滚，保留已有数据及位置，
+终止信封无需新增正文空间。摘要、状态、receipt 等元数据不计入正文容量。
+
+## 宿主适配
+
+Pi 0.84.4：`src/pi-extension/` 保留来源候选匹配、变换/混合来源隔离、稳定 Entry
+绑定。最终 agent_settled 封口；tool loop、retry、compact 不计数。真实 quit 才 end，
+reload/new/resume/fork 的 extension shutdown 只关闭本地资源。进程随机身份与附加
+记忆块通过 globalThis 保留跨 reload 状态；数据Root＋session 冻结附加块，每轮与
+当时的宿主 systemPrompt 组合。startup 读一次，后续生命周期不补读；原生 memory_read
+及 promptSnippet/promptGuidelines 按当前授权主动读取。Pi 直接写公共 ingress。
+
+Codex 0.153.4：`src/cli/codex/transcript-0.153.4.ts` 独立解析 rollout。只认该版本
+session_meta 与已知顶层记录。user_message 是交付来源；response_item 中环境、hook
+和 compact 重放的 user 消息不成为证据。task_started 分组，task_complete 或
+turn_aborted 确认终态；Stop/Interrupt 只登记核对，不假定其时 transcript 已写终态。
+UserPromptSubmit 候选按 session/turn/digest 独立保存并冻结输入时的 scope，user_message 必须精确匹配；
+匹配成功在同一事务清空候选正文并转存交付，保留摘要用于重试。候选不当作已交付证据，
+也不作为自动记忆返回正文。无法匹配时保留 inbox，明确报告未确认交付。
+
+`src/cli/codex-session.ts` 将尾部 JSONL 正文和信封放进同一 runtime.sqlite 的 durable
+inbox，SQLite WAL＋synchronous=FULL 提供原子、fsync 持久性。Hook 使用 150ms SQLite
+busy timeout，生成器给三秒宿主期限；不在 hook 内运行模型。只有首次合格 startup/resume
+返回有界快照，其他事件返回空对象。进程身份取 Linux/WSL boot ID＋Codex 祖先进程 PID＋
+启动时间；PID 复用和不同工作目录不会错误共享 session。未知版本、路径替换、未确认交付、
+尾部不完整或容量不足均显式失败，不前移消费位置。SessionEnd 快照不依赖退出后文件存在。
+
+`src/cli/session-drain.ts` 使用 detached＋独立 stdio＋unref 启动真正的 configured Writer。
+它先事务性将 inbox 正文转为 session 状态，同事务删除副本；Stop 核对会继续读取后续
+终态记录，不等待下一输入。单次核对最多 60 秒，失败保留 durable watch。消费者使用
+`src/v2/session-drain.ts` 等待正常租约、退避，直到已封工作处理或 dead/quarantined。
+消费者崩溃后可由下一次写端事件或 `common-memory session-drain` 恢复；不会清空数据。
+父宿主与 MCP 退出不会撤销独立消费者。kill、重启、磁盘失败不承诺正常结束保证。
+
+两端共用 `src/v2/read-guidance.ts`。缺少用户背景/偏好/兴趣/目标/工作方式/项目约束时
+主动读，例如个性化最优化课程推荐、按研究方向比较项目；普通梯度下降解释或已具备
+充分个人上下文不机械读。contextId 只选授权范围，空结果不是负面个人事实，缺项未知。
+
+## 验收证据与限制
+
+- `tests/v2/session.test.ts`：A/B 各九轮隔离，第十轮 settled 即可领取；21 轮形成
+  10＋10＋1；steering、重复交付/封口、容量回滚、incomplete 尾轮、混合来源隔离、
+  独立上下文权限、forget 清理后重放不复活、完整回合拆请求和真实退避等待。
+- `tests/cli/codex-hook.test.ts`：一次启动读取、新进程恢复、compact 不补读；Stop 重复
+  且终态延迟写入；排除 response_item 用户环境文本；删除 transcript 后仍交接尾批；
+  未知格式保留 inbox、版本拒绝、部分行拒绝、输入/快照上限、五种事件配置。
+- `tests/v2/pi-integration.test.ts`：保留交付认证、队列来源、图片隔离；冻结附加块与
+  宿主新 systemPrompt 组合、reload 保留快照。
+- `tests/cli/session-drain.test.ts`：实际 Node 宿主退出与 MCP EOF 后才释放本地假提供者，
+  独立消费者仍提交 canonical Markdown、receipt 与完成状态；强杀消费者后显式重启恢复。
+  这不是只验证 Node 子进程能存活，而是执行实际 configured Writer 与 Core 提交。
+
+此轮没有调用真实提供者或使用个人资料。真实 Codex/Pi 交互、Hook 信任 UI、真实模型
+是否主动调用 memory_read、真实客户端版本的全部事件组合尚未联调。Linux 自动测试
+不证明 Windows CI、macOS 或 Windows 原生接入。Codex capture 仅支持 Linux/WSL；
+MCP read 保持原有跨平台边界且绝不打开 Runtime。来源依据是 Pi 已安装 0.84.4 类型/源码、
+[Codex 官方 Hook 协议](https://learn.chatgpt.com/docs/hooks) 与
+[0.153.4 protocol.rs](https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/protocol/src/protocol.rs)。
+rollout 不是稳定公共接口，未来版本需要新适配与新验收。
+
+最终验证：Node 24.20.0 下 `node scripts/verify.mjs` 通过 typecheck、54 源文件边界检查、
+31 测试文件 / 379 项测试及 build。随后追加原生 memory_read 调用测试，Pi 定向套件
+17 项通过，再次 typecheck 通过。构建后 `npm run test:consumer` 通过真实 tarball 的
+typed consumer、prompt asset、Writer、Pi load 与 CLI startup。`git diff --check`
+及当前文档相对链接检查通过。未运行真实模型、个人数据或真实客户端联调。
+上述历史 smoke 脚本及旧验收文件中的重复快照断言已注明被替代。

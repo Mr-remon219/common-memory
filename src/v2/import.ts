@@ -5,14 +5,14 @@ export interface AgentImportPayload { sourceLabel: string; basis: ImportBasis; u
 export const AGENT_IMPORT_SOURCE = 'agent_import';
 /** A local file the user chose to import; one observation per structural chunk (see document-import.ts). */
 export const DOCUMENT_IMPORT_SOURCE = 'document_import';
-export type ProvenanceKind = 'user_explicit' | 'agent_observation' | 'document_import';
+export type ProvenanceKind = 'user_explicit' | 'agent_observation' | 'document_import' | 'conversation_context';
 /**
  * Host-assigned observation source -> disclosure provenance class. This single mapping decides
  * what is admitted as pending, what shares a batch, which import guard applies and which
  * `disclosure.allowedProvenance` entry authorizes sending it to the remote model.
  */
 export function provenanceOf(source: string): ProvenanceKind | null {
-  if (source === 'interactive' || source === 'rpc' || source === 'mcp_user_submission') return 'user_explicit';
+  if (source === 'interactive' || source === 'rpc' || source === 'mcp_user_submission' || source === 'codex_user_delivery') return 'user_explicit';
   if (source === AGENT_IMPORT_SOURCE) return 'agent_observation';
   if (source === DOCUMENT_IMPORT_SOURCE) return 'document_import';
   return null;

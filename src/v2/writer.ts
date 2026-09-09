@@ -1,3 +1,4 @@
+import { sessionGroup, sessionProjection, type SessionCacheOptions } from './session.js';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { CanonicalStore, type DocumentSnapshot } from './canonical.js';
@@ -18,7 +19,7 @@ export interface WriterOptions {
   /** Provenance classes that may be sent to the remote model; a batch outside it is quarantined, never disclosed. Omitted means all. */
   allowedProvenance?: readonly ProvenanceKind[];
   documentSoftBytes?: number; documentHardBytes?: number; retentionMs?: number;
-  scheduler?: RuntimeOptions; deadlineMs?: number; maxRequestBytes?: number; modelVersion?: string;
+  sessionCache?: SessionCacheOptions; scheduler?: RuntimeOptions; deadlineMs?: number; maxRequestBytes?: number; modelVersion?: string;
   checkpoint?: (phase: 'files_committed') => void;
 }
 /** Network runs outside both locks. Canonical commits are fenced inside lock -> DB. */
@@ -83,14 +84,19 @@ export class Writer {
         try { externalPreflight({text:observation.text}, {maxExcerptBytes:cap,maxCandidateBytes:cap,maxTotalBytes:Number.MAX_SAFE_INTEGER}); }
         catch { this.store.quarantine(job, observation.id, 'SENSITIVE_INPUT'); return {outcome:'quarantined'}; }
       }
-      let context = this.store.context(job.observations[0]!);
-      let request = this.#request(job, documents, context);
+      let context = this.#options.allowedProvenance?.includes('conversation_context')===true ? this.store.context(job.observations[0]!) : [];
+      let sessionTail=this.#options.sessionCache?.contextTailTurns ?? 2;
+      let request = this.#request(job, documents, context,sessionTail);
+      if(this.#bytes(request)>cap){sessionTail=0;request=this.#request(job,documents,context,sessionTail);}
       while (this.#bytes(request) > cap && context.length) {
-        context = context.slice(1); request = this.#request(job, documents, context);
+        context = context.slice(1); request = this.#request(job, documents, context,sessionTail);
       }
       while (this.#bytes(request) > cap && job.observations.length > 1) {
-        job = this.store.trim(job, job.observations.length - 1);
-        request = this.#request(job, documents, context);
+        const last=sessionGroup(this.store,job.observations.at(-1)!);
+        const count=last ? job.observations.findIndex(o=>sessionGroup(this.store,o)?.turn===last.turn) : job.observations.length-1;
+        if(count===0) break;
+        job = this.store.trim(job, count);
+        request = this.#request(job, documents, context,sessionTail);
       }
       if (this.#bytes(request) > cap) return this.#quarantine(job, 'OVERSIZED_COMPLETE_TURN');
       externalPreflight(request.projection, {maxExcerptBytes:cap,maxCandidateBytes:cap,maxTotalBytes:cap});
@@ -175,8 +181,9 @@ export class Writer {
       }
     }
   }
-  #request(job: RuntimeJob, documents: DocumentSnapshot[], context: RuntimeJob['observations'] = []): ApprovedModelRequest {
+  #request(job: RuntimeJob, documents: DocumentSnapshot[], context: RuntimeJob['observations'] = [], sessionTail=2): ApprovedModelRequest {
     return {prompt:maintainerPrompt,schema:maintenanceSchema,schemaName:'memory_maintenance_v2',projection:{
+      conversation_turns:sessionProjection(this.store,job,this.#options.allowedProvenance?.includes('conversation_context')===true,sessionTail),
       version:'memory_maintenance_v2',request_id:job.id,now:new Date().toISOString(),
       observations:job.observations.map(o => ({ref:`ev_${o.id}`,...describeSource(o),source_scope:o.scope,observed_at:o.observedAt,context_only:false})),
       documents:documents.map(doc => ({target:doc.target,hash:doc.hash,content:doc.content,sections:doc.sections,soft_budget_bytes:this.#options.documentSoftBytes ?? 8192,hard_budget_bytes:this.canonical.hardLimitBytes,writable:this.#options.writableScopes!.includes(documentScope(doc))})),

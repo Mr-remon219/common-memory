@@ -10,7 +10,8 @@ import { printStatus, runSetupWizard, runNetworkWizard, runTui, UserCancelled } 
 
 async function main(): Promise<void> {
   const [command,...args]=process.argv.slice(2);
-  if(command==="--help" || command==="-h") {console.log("Common Memory V2\n\ncommon-memory [config|status|flush]\ncommon-memory config --network\ncommon-memory network-test\ncommon-memory show [--workspace <absolute-path>]\ncommon-memory import <file.md> [--workspace <absolute-path>] [--author user|agent|third_party|mixed|unknown] [--label <text>] [--no-wait]\ncommon-memory project register <root> <name>\ncommon-memory project list\ncommon-memory project remove <id>\ncommon-memory retry <job-id>\ncommon-memory mcp --client-id <id> [--capability relay|init|read]... [--workspace <absolute-path>]... [--global] [--accept-client-reported-user-turns]\ncommon-memory codex-hook --home <absolute-path>\ncommon-memory codex-config\ncommon-memory mcp-config [--wsl] [--distro <name>] [--user <name>] [--workspace <absolute-path>]...");return;}
+  if(command==="--help" || command==="-h") {console.log("Common Memory V2\n\ncommon-memory [config|status|flush|session-drain]\ncommon-memory config --network\ncommon-memory network-test\ncommon-memory show [--workspace <absolute-path>]\ncommon-memory import <file.md> [--workspace <absolute-path>] [--author user|agent|third_party|mixed|unknown] [--label <text>] [--no-wait]\ncommon-memory project register <root> <name>\ncommon-memory project list\ncommon-memory project remove <id>\ncommon-memory retry <job-id>\ncommon-memory mcp --client-id <id> [--capability relay|init|read]... [--workspace <absolute-path>]... [--global] [--accept-client-reported-user-turns]\ncommon-memory codex-hook --home <absolute-path>\ncommon-memory codex-config\ncommon-memory mcp-config [--wsl] [--distro <name>] [--user <name>] [--workspace <absolute-path>]...");return;}
+  if(command==="session-drain") {await (await import("./session-drain.js")).runSessionDrain(args);return;}
   if(command==="codex-hook") {await (await import('./codex-hook.js')).runCodexHook(args);return;}
   if(command==="codex-config") {
     if(args.length)throw new TypeError("codex-config takes no arguments");
@@ -44,7 +45,7 @@ async function main(): Promise<void> {
   if(command==="config" && args.length===1 && args[0]==="--network") {await runNetworkWizard();return;}
   if(command===undefined) {await runTui();return;}
   if(command==="config" && !args.length) {await runSetupWizard();return;}
-  if(command==="status" && !args.length) {printStatus(); const config=loadConfig();if(config && existsSync(join(config.dataRoot,"runtime.sqlite"))){const store=new RuntimeStore(config.dataRoot);try{console.log(JSON.stringify(store.status(),null,2));}finally{store.close();}}return;}
+  if(command==="status" && !args.length) {printStatus(); const config=loadConfig();if(config && existsSync(join(config.dataRoot,"runtime.sqlite"))){const store=new RuntimeStore(config.dataRoot);try{const {SessionIngress}=await import('../v2/session.js');const ingress=new SessionIngress(store,config.sessionCache);const sessions=store.db.prepare('SELECT id FROM sessions').all().map(row=>({id:row.id,...ingress.status(String(row.id))}));console.log(JSON.stringify({...store.status(),sessions},null,2));}finally{store.close();}}return;}
   const config=loadConfig();if(!config)throw new Error("Run common-memory config first");
   if(command==="flush" && !args.length) {process.exitCode=await runFlush(config);return;}
   if(command==="retry" && args.length===1){const store=new RuntimeStore(config.dataRoot);try{store.retry(args[0]!);store.requestFlush();}finally{store.close();}return;}

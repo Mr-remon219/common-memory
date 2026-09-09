@@ -1,6 +1,6 @@
 # Common Memory development
 
-Current implementation and boundaries are described in `README.md` and enforced by `scripts/check-boundaries.mjs`. `docs/note.md` contains future ideas; distinguish them from current behavior. Writer benchmark work lives in the separate `../memory-benchmark` repository.
+Current implementation and boundaries are described in `README.md` and enforced by `scripts/check-boundaries.mjs`. Current session behavior is described in `docs/session-integration.md`; historical validation records do not establish current behavior. Writer benchmark work lives in the separate `../memory-benchmark` repository.
 
 ## Authority boundaries
 
@@ -21,4 +21,4 @@ Use `test:fixtures`, `test:recovery`, or `test:remote-contract` for a focused ch
 
 Preserve exact failure output and fix its demonstrated cause. Linux checks do not prove Windows CI or real-client behavior; report those gaps separately.
 
-For cross-component implementation/debugging, [common-memory-development](.agents/skills/common-memory-development/SKILL.md) maps source and test entry points.
+For cross-component implementation/debugging, [session integration](docs/session-integration.md) maps the session source and test entry points; [architecture](docs/03-target-architecture.md) describes Core boundaries.

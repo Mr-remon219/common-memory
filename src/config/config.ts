@@ -1,3 +1,4 @@
+import { SESSION_CACHE_DEFAULTS, type SessionCacheOptions } from '../v2/session.js';
 import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -14,9 +15,10 @@ import { loadLegacyEnv, privateAssignment } from "./private-env.js";
 import { validateProxyConfig, validateCaEnv, PRIVATE_NETWORK_KEYS, type ProxyConfig } from "../memory-manager/network/route.js";
 
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/u;
-const PROVENANCE = new Set<ProvenanceType>(["user_explicit", "agent_observation", "document_import"]);
+const PROVENANCE = new Set<ProvenanceType>(["user_explicit", "agent_observation", "document_import", "conversation_context"]);
 
 export interface CommonMemoryConfig {
+  sessionCache?: SessionCacheOptions;
   schemaVersion: 2;
   dataRoot: string;
   remote: RemoteTuning & {
@@ -57,6 +59,7 @@ export function defaultConfig(env: NodeJS.ProcessEnv = process.env): CommonMemor
       proxy: {mode:"env"},
       apiKeyEnv: "OPENAI_API_KEY",
     },
+    sessionCache: {...SESSION_CACHE_DEFAULTS},
     writableScopes: ["global"],
     scheduler: { turnThreshold: 6, byteThreshold: 16384, idleMs: 120000, maxWaitMs: 600000, leaseMs: 120000, maxAttempts: 5 },
     disclosure: {
@@ -106,7 +109,7 @@ export function resolveApiKey(config: CommonMemoryConfig, env: NodeJS.ProcessEnv
 }
 
 export function validateConfig(value: unknown): CommonMemoryConfig {
-  if (!isRecord(value) || !hasExactKeys(value, ["schemaVersion", "dataRoot", "remote", "disclosure", "writableScopes", "scheduler"]) || value.schemaVersion !== 2) throw new TypeError("Unsupported Common Memory config");
+  if (!isRecord(value) || !hasRequiredAndOptionalKeys(value, ["schemaVersion", "dataRoot", "remote", "disclosure", "writableScopes", "scheduler"], ["sessionCache"]) || value.schemaVersion !== 2) throw new TypeError("Unsupported Common Memory config");
   if (typeof value.dataRoot !== "string" || !isAbsolute(value.dataRoot)) throw new TypeError("dataRoot must be an absolute path");
   if (!isRecord(value.remote) || !hasRequiredAndOptionalKeys(value.remote, ["provider", "baseUrl", "model", "apiKeyEnv"], ["api", "maxOutputTokens", "reasoningEffort", "thinking", "enableThinking", "proxy", "caFileEnv"]) || value.remote.provider !== "openai-compatible") throw new TypeError("Invalid remote provider config");
   const api = value.remote.api === undefined ? "responses" : value.remote.api;
@@ -128,7 +131,9 @@ export function validateConfig(value: unknown): CommonMemoryConfig {
   if (!Array.isArray(value.writableScopes) || value.writableScopes.some((scope) => typeof scope !== "string" || !/^(global|project:[A-Za-z0-9_-]+)$/u.test(scope))) throw new TypeError("Invalid writable scopes");
   const schedulerKeys = ["turnThreshold", "byteThreshold", "idleMs", "maxWaitMs", "leaseMs", "maxAttempts"];
   if (!isRecord(value.scheduler) || !hasExactKeys(value.scheduler, schedulerKeys) || Object.values(value.scheduler).some((cap) => !Number.isSafeInteger(cap) || Number(cap) <= 0)) throw new TypeError("Invalid scheduler limits");
+  if(value.sessionCache !== undefined && (!isRecord(value.sessionCache) || Object.entries(value.sessionCache).some(([key,n])=>!Object.hasOwn(SESSION_CACHE_DEFAULTS,key)||!Number.isSafeInteger(n)||Number(n)<(key==='contextTailTurns'?0:1)))) throw new TypeError('Invalid session cache limits');
   return {
+    ...(value.sessionCache === undefined ? {} : {sessionCache:{...value.sessionCache as SessionCacheOptions}}),
     schemaVersion: 2,
     writableScopes: [...value.writableScopes] as string[],
     scheduler: { ...value.scheduler } as CommonMemoryConfig["scheduler"],

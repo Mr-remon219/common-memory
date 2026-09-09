@@ -48,7 +48,7 @@ describe('V2 writer',()=>{
 
 describe('batch, permission and output boundaries',()=>{
  it('shrinks oversized multi-turn requests without splitting turns or losing the FIFO tail',async()=>{
-  const sizes:number[]=[];const w=new Writer({dataRoot:root(),allowedScopes:['global'],maxRequestBytes:18000,model:model(r=>{sizes.push((r.projection.observations as unknown[]).length);return body(r,'ignore');})});
+  const sizes:number[]=[];const w=new Writer({dataRoot:root(),allowedScopes:['global'],maxRequestBytes:20000,model:model(r=>{sizes.push((r.projection.observations as unknown[]).length);return body(r,'ignore');})});
   enqueue(w,'a'.repeat(5000),'a');enqueue(w,'b'.repeat(5000),'b');
   expect((await w.run({force:true})).outcome).toBe('ignored');expect(sizes).toEqual([1]);expect(w.store.pending().map(o=>o.entryId)).toEqual(['b']);expect((await w.run({force:true})).outcome).toBe('ignored');w.close();
  });

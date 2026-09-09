@@ -11,7 +11,7 @@ they are; there is no retrieval ranking.
 Init v0.1 (`docs/init-v0.1-design.md`, `docs/init-v0.1-verification.md`) adds the
 cross-agent loop: another agent (ChatGPT desktop) imports its existing understanding
 through `memory_init`, the user imports local Markdown files with `common-memory import`,
-the unchanged Writer decides what to keep from either, and Codex CLI (native read-only hooks or MCP `memory_read`)
+the unchanged Writer decides what to keep from either, and Codex CLI (native session hooks or MCP `memory_read`)
 and Pi (system-prompt injection) read the same canonical files. On Windows, Common
 Memory runs inside WSL and the ChatGPT/Codex desktop app reaches it through `wsl.exe`
 (`common-memory mcp-config --wsl`).
@@ -56,14 +56,40 @@ discard delivered evidence. Input alone is not evidence. Ambiguous, detectably t
 extension-originated messages are quarantined rather than silently trusted. No
 assistant/tool/system/thinking/compaction text is supplied as new evidence.
 
-The same extension also **reads** memory: on every `before_agent_start` it appends a
-`## Common Memory` block to the system prompt containing the authorized Profile and
-Preferences documents plus the Project document of the registered project that
-contains `cwd` (only when `project:<id>` is in `disclosure.allowedScopes`). The block
-states that memory is user data, not instructions, and says explicitly when nothing
-is stored. Reading needs no model, API key or Writer; a plain "who am I?" in a new Pi
-session therefore answers from canonical memory without any tool name. Reading does
-not change capture, thresholds or Writer behaviour.
+The extension reads authorized memory once when the process first starts the session,
+including startup with resumed history. It freezes only the Common Memory appended
+block, combining that block with the host's current `event.systemPrompt` on each
+`before_agent_start`. Reload, same-process resume, compact, branch navigation, fork
+and `/new` do not trigger a new automatic read. Each session has separate counters.
+The native `memory_read` tool remains available for explicit fresh reads, with the
+same guidance and scope rules as MCP. Personal recommendations need a read when
+relevant personal context is missing; generic explanations do not mechanically read.
+Missing fields are unknown and memory content is data, not instructions.
+
+Pi and Codex now use a durable session cache. One delivered user interaction counts
+once at final settled, including steering and delivered follow-ups. The tenth settled
+interaction immediately seals a session-only batch. A 21-turn session produces
+10 + 10 + a one-turn exit tail. The logical batch may need several Writer requests,
+always split between whole interactions; a single oversized interaction is retained
+locally and quarantined. Assistant and tool text is context only, with separate
+`conversation_context` disclosure permission (not added to existing configurations).
+See [session design and validation](docs/session-integration.md).
+
+Optional `sessionCache` limits (omitted fields use these defaults):
+
+```json
+"sessionCache": {
+  "maxSessionBytes": 8388608,
+  "maxTotalBytes": 67108864,
+  "contextTailTurns": 2
+}
+```
+
+These are conservative engineering defaults, without capacity measurements or a
+claim that two turns resolve every reference. Limits account for cached bodies,
+input candidates, deliveries and Codex inbox bodies. Capacity rejection retains
+existing content and recovery state; terminal metadata can still be persisted.
+Old configurations remain valid and do not acquire `conversation_context` permission.
 
 ## Model network configuration
 
@@ -142,6 +168,7 @@ common-memory network-test
 common-memory show [--workspace /absolute/project/path]
 common-memory import <file.md> [--workspace /absolute/project/path] [--author user|agent|third_party|mixed|unknown] [--label <text>] [--no-wait]
 common-memory flush
+common-memory session-drain [--home <absolute-path>]
 common-memory retry <dead-job-id>
 common-memory project register /absolute/project/path "Display name"
 common-memory project list
@@ -210,8 +237,10 @@ fails, is cancelled, quarantines an observation, or ends with pending/claimed/de
 observations. An idle scheduler waiting for backoff or an active lease is incomplete.
 Historical quarantine and retired jobs do not block an otherwise empty queue; flush
 does not bypass backoff or take another process's lease.
-Pi also provides `/memory-flush`. Shutdown queues a flush and cancels in-flight work;
-it does not wait for a remote model. Restart resumes durable work.
+Pi also provides `/memory-flush` for queued maintenance. It does not seal an unfinished
+session batch. On actual quit, Pi hands off the tail and wakes a detached consumer;
+reload and session switching preserve the open cache. `common-memory session-drain`
+recovers durable handoffs and waits through retry backoff and leases.
 
 ## MCP access (stdio)
 
@@ -387,7 +416,7 @@ ChatGPT web and the desktop **Chat** mode do not read this configuration; use th
 selected Markdown workflow above for this version. A remote HTTPS connector
 is outside this version and would not guarantee access to more source material.
 
-### Codex CLI (read only)
+### Codex CLI (session hooks and read-only MCP)
 
 For automatic injection, build Common Memory and run `common-memory codex-config`
 (or `node dist/cli/main.js codex-config`). Save its stdout as
@@ -404,61 +433,41 @@ moving the installation or changing Node or `COMMON_MEMORY_HOME`.
 Codex CLI and Common Memory must run in the same POSIX environment, including WSL;
 native Windows hooks and cross-system hook path conversion are not supported.
 
-The generated synchronous command hooks call
-`common-memory codex-hook --home <absolute-path>` on `UserPromptSubmit` and on
-`SessionStart` matching `^compact$`. They reload configuration, project registration
-and canonical Markdown on every invocation, using the event's `cwd` to select
-Global and the registered current project, intersected with `disclosure.allowedScopes`.
-They share the Core reader/renderer with MCP and Pi. Unregistered workspaces receive
-only authorized Global memory. The hooks never open SQLite, create storage, construct
-a Writer, call a model, save prompts, inspect transcripts or maintain session state.
-Provenance authorization remains in the import/Writer path; reading preserves the
-canonical source labels, uncertainty and time qualifications without promoting
-imported agent understanding into user-confirmed facts.
+The generated synchronous hooks cover `SessionStart`, `UserPromptSubmit`, `Stop`,
+`Interrupt` and `SessionEnd`, with a three-second timeout. They use the local SQLite
+FULL-synchronous durable inbox, then launch `session-drain` detached with independent
+stdio. The inbox contains the transcript tail itself, so normal exit does not depend
+on the transcript surviving. Consumers delete that copy only in the transaction that
+admits it into the session cache. No model runs in the hook process.
 
-Each hook returns `hookSpecificOutput.additionalContext`, limited to **64 KiB**
-including the snapshot rules. Input JSON is limited to **1 MiB**. The handler timeout
-is **5 seconds** and `additionalContextLimit = 0` lets the bounded snapshot through
-without Codex's default large-output preview. Empty memory explicitly means unknown.
-Read failures and oversized snapshots return an unavailable snapshot plus a controlled
-warning and continue the session; no partial snapshot or cached fallback is returned.
-Malformed protocol input exits nonzero so Codex can report the hook failure. A host
-timeout or disabled/untrusted hook cannot deliver a replacement snapshot.
+Only the first qualifying `SessionStart` (`startup` or `resume`) for the process and
+session returns memory. Other hooks return no memory or conversation text. Startup
+output remains bounded to 64 KiB and hook input to 1 MiB. Automatic snapshots are
+frozen; call MCP `memory_read` for current content when needed. Read failure returns
+a controlled unavailable block. Ingress/protocol/capacity failures exit nonzero.
 
-Current snapshots instruct the model to supersede earlier Common Memory snapshots,
-never fill deleted/missing fields from old snapshots, and never infer biography from
-usernames, paths or historical commands. This is an answering rule; it does **not**
-remove older snapshots from conversation history. Every turn, even with unchanged
-memory, adds another full snapshot. Accept the resulting context/token growth;
-short synthetic acceptance runs do not establish reliability in long conversations.
+The rollout parser is isolated at `src/cli/codex/transcript-0.153.4.ts`; it accepts
+only Codex CLI 0.153.4 metadata. User delivery requires `user_message` events matching the separately recorded
+UserPromptSubmit candidate for that turn, never arbitrary `response_item` user content, hook context, environment messages or
+compaction summaries. `task_complete` / `turn_aborted` seal interactions. Stop starts
+completion reconciliation immediately; a delayed final record needs no next prompt.
+Unconfirmed completion keeps its durable watch for a later `session-drain` retry;
+a reconciliation attempt is bounded to 60 seconds. Unknown formats do not advance
+the cursor. Linux/WSL process identity uses boot ID, host PID and start time; native
+Windows/macOS capture is not supported. Codex and Common Memory must share the Linux
+process namespace and filesystem.
 
-Protocol basis: [official Codex hooks](https://learn.chatgpt.com/docs/hooks), tested
-with Codex CLI 0.153.4. The retained smoke script uses isolated synthetic fixtures and
-the built product command:
+Protocol reference: [official Codex hooks](https://learn.chatgpt.com/docs/hooks).
+The earlier `scripts/smoke-codex-hooks.py` repeated-snapshot assertions are historical
+and superseded by the session tests; they are not validation of this implementation.
+Current synthetic coverage and remaining real-client gaps are recorded in
+[session integration](docs/session-integration.md). No personal data or live model
+calls are needed for the tests.
 
-```sh
-python3 scripts/smoke-codex-hooks.py --output /tmp/common-memory-wire.json
-python3 scripts/smoke-codex-hooks.py --live --output /tmp/common-memory-live.json
-```
-
-The script requires Python 3.11+. The default run uses a loopback fake provider and
-checks first/continuous requests, resume, explicit compaction, disabled/untrusted/
-timed-out hooks and full long-text injection. Mid-turn automatic compaction is not
-covered by this smoke.
-The optional live run uses the current Codex authentication and gpt-6-astra for A→B→B
-answers with deletion, source qualification, unknown identity, misleading historical
-paths and token usage, both with hooks alone and alongside read-only MCP. The scripts
-use a trust bypass only in disposable test threads, never in generated user configuration.
-They delete isolated credentials and state, retaining JSON reports. They do not exercise
-the interactive `/hooks` trust UI. Windows-native, desktop and IDE clients require
-separate real-client verification.
-
-MCP-only users can keep the existing setup below. Hooks require no MCP connection,
-and both can coexist; hooks do not add automatic writing or new MCP tools. The current
-hook inputs do not supply the complete input types and delivery receipts required
-for automatic capture. To prevent exposing an existing desktop init server in the
-native profile, merge `mcp_servers.common_memory_init.enabled = false` at the correct
-TOML table location (or launch with `-c mcp_servers.common_memory_init.enabled=false`).
+MCP-only users can keep the read-only setup below; session hooks and MCP can coexist.
+Hooks do not add MCP capabilities. To keep a desktop init server out of Codex, merge
+`mcp_servers.common_memory_init.enabled = false` at the correct TOML table location
+(or launch with `-c mcp_servers.common_memory_init.enabled=false`).
 
 
 ```toml
@@ -539,10 +548,9 @@ IDs on retry, including after restart. Conflicting payloads are rejected. Withou
 conversation ID, each submission has its own logical session. Two clients may use the
 same IDs without colliding, but sharing a client ID deliberately shares that namespace.
 
-Pi capture, global thresholds, same-scope batching, context selection and Writer
-semantics are unchanged. Different Pi/MCP sessions **can share one batch**. Isolation
-covers input identities, per-call project context and status access, not separate
-model requests or multi-tenant storage. All processes sharing a dataRoot must use the
+Legacy relay sessions can share a same-scope/provenance batch under the existing
+scheduler. Pi/Codex session batches are separate from relay/import and from each
+other. The store is not a multi-tenant authorization boundary. All processes sharing a dataRoot must use the
 same configuration authority and compatible release; stop old processes before upgrade.
 
 Accepted means durably queued, not immediately committed. Background processing uses
@@ -556,7 +564,8 @@ Writer and closes after local cleanup. On Windows, Node's SIGTERM emulation kill
 unconditionally: use stdin EOF for graceful shutdown; forced termination relies on
 lease expiry and restart recovery. Pending work survives for the next Pi/MCP process
 or `common-memory flush`.
-Nothing runs while all processes are stopped. Existing recovery wins over cancellation
+Legacy relay/import shutdown does not launch a consumer. Session hooks/Pi quit do
+launch an independent consumer, which may outlive both the host and MCP. Existing recovery wins over cancellation
 once a durable commit has begun. Logs go to stderr; stdout is reserved for MCP.
 
 Full runtime diagnostics, retry, flush, configuration and project management remain
@@ -634,9 +643,9 @@ Disclosure, writable scopes, current-project registration, authorized target/sec
 handles, path and content safety, complete-snapshot CAS, lease fencing and recovery
 continue to gate writes; cross-project A→B writes remain forbidden.
 
-Default triggers: 6 delivered turns, 16 KiB, 120-second idle debounce, 10-minute
-oldest backlog, lifecycle flush, or explicit flush. Timers run only within the Pi
-process and model work starts at stable boundaries. Empty queues do not call models.
+Legacy relay/import triggers: 6 delivered expressions, 16 KiB, 120-second idle debounce, 10-minute
+oldest backlog, lifecycle flush, or explicit flush. Session caches instead seal after exactly ten
+settled interactions, or an actual exit tail; scheduler settings cannot override ten. Empty queues do not call models.
 Request limit is 128 KiB, document soft budget 8 KiB and hard cap 16 KiB. Full turns
 are never truncated; oversized turns are quarantined. Limits are configurable in
 `scheduler` and disclosure `maxTotalBytes` (Writer also exposes deadline/size options).
@@ -695,8 +704,8 @@ behavior; they do not prove that a real model will classify scope correctly or a
 misusing maintain for state changes. Those semantic judgments remain the model's
 responsibility; the executor does not use text-comparison heuristics to infer them. Real-provider evaluation
 requires explicit credentials and budget and is not run automatically. Transformed
-inputs are conservatively quarantined; assistant context is currently omitted rather
-than disclosed without independent permission. No old user data directory is cleaned.
+inputs are conservatively quarantined; session assistant/tool context requires
+independent `conversation_context` disclosure permission. No old user data directory is cleaned.
 
 ### Capture trust boundary
 
@@ -708,8 +717,9 @@ trusted host components. Transformations after its capture (including built-in p
 templates), mixed queued authorities/scopes and ambiguous candidates are isolated.
 This is conservative host-event provenance, not proof against a malicious extension.
 Mixed/image input is quarantined with complete text and an unsupported-content marker;
-image blobs are not collected. Assistant context is omitted; prior processed user
-context is limited to two same-session/scope turns marked context_only.
+image blobs are not collected. Session assistant/tool and prior-turn context is
+marked context_only and never authorizes a write. The default context tail is two
+same-session/scope turns, resolved by reference; forget/prune clears related context.
 
 Manual edits to a document invalidate its title-based source links. On the next
 committed maintenance, its stale links and associated processed observation bodies

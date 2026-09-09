@@ -24,3 +24,15 @@ Promotion has no automatic Project cleanup. Global retain alone leaves Project u
 Use put_section to create (section:null) or replace a whole section; use remove_section for an existing section. Merge, rename and move via operations in the same batch. Preserve relevant unrelated information in a replaced section; untouched sections are retained by the executor. Section bodies may contain ordinary Markdown, fenced code and lower headings, but no un-fenced H1/H2. Titles are unique per document. Do not repeat operations on one section.
 
 Each document has an 8192-byte soft budget and a 16384-byte hard limit by default. At soft pressure, consolidate without dropping useful current state. Never invent information to fill a document. maintain can reorganize existing state without new evidence; retain and forget require current-batch evidence. Evidence handles must not refer to context_only. Explain decisions briefly; reasons and raw outputs are not retained in permanent receipts.
+
+## Session conversations
+
+`conversation_turns` groups delivered expressions with their related context in message
+order. A turn is a user-initiated interaction finally settled by the host, including
+steering and delivered follow-ups; internal model/tool loops are not separate turns.
+Only current `observations` refs are evidence. Assistant suggestions, tool output and
+prior turns are `context_only`, never user statements or independent evidence for
+retain/forget. A user's explicit confirmation can establish what they accepted; do
+not treat the suggestion itself, a quotation or an unanswered question as acceptance.
+`interrupted` and `incomplete` do not imply a completed assistant reply. Unavailable
+context is unknown; do not reconstruct missing or forgotten content from references.

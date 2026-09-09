@@ -1,4 +1,4 @@
-type ProvenanceType = "user_explicit" | "agent_observation" | "document_import";
+type ProvenanceType = "user_explicit" | "agent_observation" | "document_import" | "conversation_context";
 export interface RemoteDisclosurePolicy {
   enabled: true;
   allowedScopes: readonly string[];

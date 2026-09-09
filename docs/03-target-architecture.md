@@ -2,7 +2,7 @@
 
 ## 产品边界
 
-持久化实际用户投递 → 稳定 Entry 绑定 → 混合触发 → 模型决策 → 有限 Markdown Section 更新 → 可恢复提交。
+持久化实际用户投递 → 稳定消息身份绑定 → session 十轮封批 / legacy 混合触发 → 模型决策 → 有限 Markdown Section 更新 → 可恢复提交。
 Write 及必要当前状态检查。Markdown 是长期内容权威；runtime SQLite 是不可随意重建的队列、租约和来源元数据。删除 Fact/Proposal/Review、Recall/FTS/ranking/context pack、治理/Undo 及兼容层，不迁移、不删除工作区外用户数据。不引入 Temporary Store、向量库或常驻服务。
 
 **Init v0.1 增补（2026-09-07，见 `init-v0.1-design.md`）**：本节最初写的“仅 Write”已放宽为两条受授权约束的接口。(1) Init：`memory_init` 把其他 Agent 的自述理解作为 `agent_import` 观察进入同一队列，由不变的 Writer 决策；投影新增 `source_kind`/`import` 字段，输出协议不变；agent_import 不能单独作为 forget 证据。(1b) Markdown 导入（收尾增补，见 `init-v0.1-design.md` §9）：`common-memory import <file.md>` 经输入预处理（文件校验、结构化分块、信封）成为 `document_import` 观察，走同一队列、同一 Writer、同一导入守卫；来源→provenance 映射（`src/v2/import.ts`）统一决定入队、分批与按 `disclosure.allowedProvenance` 的逐批授权。(2) 只读披露：`src/v2/reader.ts` 按启动上下文 ∩ `disclosure.allowedScopes` 返回当前 Markdown 原文（不建目录、不开 SQLite、不取锁），供 MCP `memory_read`（`--capability read` 进程）、Pi `before_agent_start` 注入与 CLI `show` 共用。仍不引入检索、索引、排序或 Recall 写权限。
@@ -18,21 +18,21 @@ Write 及必要当前状态检查。Markdown 是长期内容权威；runtime SQL
 - Mem0 更新、合并、删除：[论文](https://arxiv.org/abs/2504.19413)。
 - 更新与不写应独立验收：[LongMemEval](https://arxiv.org/abs/2410.10813)。
 
-每 Turn 成本高且片段化；仅结束会丢尾批；固定 N 无时间上界。Hybrid 是本项目设计选择，不宣称参数已优化。宿主事件顺序以锁文件安装的 Pi 源码核验。
+Legacy relay/import 保留混合调度；Pi/Codex 会话以十次 settled 交互与退出尾批封批，详见 [会话接入](session-integration.md)。不宣称参数已优化。宿主事件顺序以锁文件安装的 Pi 源码核验。
 
 ## Capture / 调度
 
 input 只登记来源与冻结 cwd→project。message_end 持久化待绑定，再用稳定 Entry ID 绑定；不依赖助手成功。未投递输入不得成为 evidence。模板变换、扩展来源、无法证明唯一关系和不支持的多模态输入保守隔离，不重标 global。宿主缺少完整投递链 ID 时宁可隔离，不猜来源。
 
-默认 6 Turn / 16 KiB / 120 秒空闲 / 10 分钟最老积压；生命周期和本地 flush 请求处理。稳定边界执行；关闭只排队并取消网络。dataRoot 单任务、领取后不合并新观察、正常 FIFO；隔离/dead-letter 可见且不堵后续正常队列。60 秒 deadline、120 秒续租 lease、指数退避最多 5 次，可本地 retry。
+Legacy 默认 6 条 / 16 KiB / 120 秒空闲 / 10 分钟最老积压；生命周期和本地 flush 请求处理。Pi/Codex 十轮会话批次不混入其他 session 或 import；真正退出封尾并唤醒独立消费者，等待正常租约与退避。dataRoot 单任务、领取后不合并新观察、正常 FIFO；隔离/dead-letter 可见且不堵后续正常队列。60 秒 deadline、120 秒续租 lease、指数退避最多 5 次，可本地 retry。
 
 ## Model / Markdown
 
 profile.md、preferences.md、projects/<宿主 id>.md。固定 H1、唯一 H2、自然 Markdown 正文；put_section/remove_section，合并/移动/改名组合原子操作。受限 ATX、识别 fenced code、拒绝未声明 H1/H2/Setext。软/硬预算初始 8/16 KiB。
 
-完整用户 Turn + 最多前两轮 context_only + 当前授权完整文档 + 时间/版本/宿主句柄。助手上下文当前不披露；工具、系统、thinking、compaction 不进入请求。精确序列化上限 128 KiB，先减 context，再减完整 Turn；单条超限隔离、不截断、不消费。
+完整用户表达 + conversation_turns 的消息角色/顺序/证据引用 + 当前授权完整文档 + 时间/版本/宿主句柄。会话 assistant/tool 与前轮上下文须独立授权 conversation_context；系统、thinking、compaction 不进入请求。精确序列化上限 128 KiB，先减 context，再减完整 Turn；单条超限隔离、不截断、不消费。
 
-memory_maintenance_v2：retain(remember/update/correct, stable/until_changed)、forget、maintain、ignore。引用必须宿主提供；context_only 不是新增 evidence。无效响应失败，不降级 no-op；ignore 原子消费。Project 批次不能写 global，包括空 evidence maintain。
+memory_maintenance_v2：retain(remember/update/correct, stable/until_changed)、forget、maintain、ignore。引用必须宿主提供；context_only 不是新增 evidence。无效响应失败，不降级 no-op；ignore 原子消费。Project 来源批次可按 applicability 与既有授权写 Global；Project maintain 不得跨项目。
 
 维护指令随包发布，模型不能修改。新状态替换旧状态，纠正不是追加矛盾，临时通常 ignore，不从一次行为推出永久偏好，不把助手完成声明当事实，条件不泛化。Project realpath/最长祖先匹配；注册、披露、写授权分离；移除注册不删 Markdown。
 
@@ -46,4 +46,4 @@ memory_maintenance_v2：retain(remember/update/correct, stable/until_changed)、
 
 ## 交付门槛
 
-typecheck/lint/全量测试/build、remote contract（离线适配器协议）、真实 tarball typed consumer/Prompt/Pi/CLI 启动、双独立审查。30 轨迹三策略比较仅证明 scripted executor；真实模型语义质量独立 opt-in，未执行则明确标注缺口。
+typecheck/lint/全量测试/build、remote contract（离线适配器协议）、真实 tarball typed consumer/Prompt/Pi/CLI 启动。30 轨迹三策略比较仅证明 scripted executor；真实模型语义质量独立 opt-in，未执行则明确标注缺口。

@@ -1,5 +1,8 @@
 # Init v0.1：跨 Agent 记忆迁移与复用 — 研究、设计与计划
 
+> 历史记录：Pi/Codex 读取频率、捕获、调度和退出行为已由 [会话接入](session-integration.md) 替代。下文旧验收不证明新会话链路。
+
+
 日期：2026-09-07。分支 `init-v0.1`（worktree），基线 HEAD `a9fc436`（main 同一提交），工作树干净。收尾增量（Markdown 导入、来源授权、WSL 桥接）基于 `3c70c9b`，见 §9。
 Node v24.20.0，`@modelcontextprotocol/server` 2.0.0（协议修订 2026-07-28），Pi peer 锁定 0.84.4，
 本机 Codex CLI 0.153.4，Windows 侧 ChatGPT/Codex 桌面应用 26.901.51231。
