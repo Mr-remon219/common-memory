@@ -12,6 +12,11 @@
 .vscode/
 .DS_Store
 Thumbs.db
+*.swp
+*.swo
+
+# Locally packed release artifacts
+/*.tgz
 
 # Node build and dependency artifacts
 /node_modules/

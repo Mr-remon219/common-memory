@@ -1,0 +1,16 @@
+import {
+  Writer, RuntimeStore, ProjectRegistry, CanonicalStore, defaultConfig,
+  OpenAIResponsesMemoryModel, OpenAIChatMemoryModel,
+  createConfiguredMemoryModel, createConfiguredWriter,
+  type CommonMemoryConfig, type FailureDiagnostic, type MemoryModelPort,
+} from 'common-memory-core';
+
+void Writer; void RuntimeStore; void ProjectRegistry; void CanonicalStore; void defaultConfig;
+void OpenAIResponsesMemoryModel; void OpenAIChatMemoryModel;
+const diagnostic: FailureDiagnostic | null = null; void diagnostic;
+const model: MemoryModelPort | null = null; void model;
+async function ownsConnections(config: CommonMemoryConfig) {
+  const remote = createConfiguredMemoryModel(config); await remote.close();
+  const writer = createConfiguredWriter(config); await writer.close();
+}
+void ownsConnections;

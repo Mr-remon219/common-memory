@@ -2,11 +2,19 @@ name: core-ci
 on:
   push:
   pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   core:
+    timeout-minutes: 15
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -15,7 +23,8 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - run: npm run release:check
       - run: node scripts/verify.mjs
       - name: Verify packed consumer
-        if: runner.os == 'Linux'
+        if: runner.os != 'Windows'
         run: npm run test:consumer

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultConfig, loadConfig, saveApiKeyToEnvFile, saveConfig } from "../../src/config/config.js";
 import { createConfiguredWriter } from "../../src/config/runtime.js";
+import { localApiKey, readPrivateEnv } from "../../src/config/private-env.js";
 import { createCommonMemoryPiExtension } from "../../src/pi-extension/index.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
@@ -28,6 +29,30 @@ describe("local configuration", () => {
     writeFileSync(envPath, "# local\nOTHER=value\nOPENAI_API_KEY=old\n");
     saveApiKeyToEnvFile("OPENAI_API_KEY", "new-secret", envPath);
     expect(readFileSync(envPath, "utf8")).toBe('# local\nOTHER=value\nOPENAI_API_KEY="new-secret"\n');
+  });
+
+  it.each(['key\\tail', 'key"quoted', "key'quoted", 'key#with=punctuation'])('roundtrips credential bytes through the actual dotenv reader: %s', value => {
+    const root = mkdtempSync(join(tmpdir(), 'common-memory-env-')); temporary.push(root);
+    const envPath = join(root, '.env');
+    saveApiKeyToEnvFile('KEY', value, envPath);
+    expect(localApiKey('KEY', {}, readPrivateEnv(envPath))).toBe(value);
+  });
+
+  it('replaces exported and duplicate assignments so an old credential cannot override a rotation', () => {
+    const root = mkdtempSync(join(tmpdir(), 'common-memory-env-')); temporary.push(root);
+    const envPath = join(root, '.env');
+    writeFileSync(envPath, '# keep\nexport KEY=old\nOTHER=untouched\nKEY=older\n export KEY=oldest\n');
+    saveApiKeyToEnvFile('KEY', 'rotated', envPath);
+    expect(readPrivateEnv(envPath)).toEqual({ KEY: 'rotated', OTHER: 'untouched' });
+    expect(readFileSync(envPath, 'utf8')).toBe('# keep\nKEY="rotated"\nOTHER=untouched\n');
+  });
+
+  it('rejects an unrepresentable credential without touching the existing env file or exposing the secret', () => {
+    const root = mkdtempSync(join(tmpdir(), 'common-memory-env-')); temporary.push(root);
+    const envPath = join(root, '.env');
+    writeFileSync(envPath, 'KEY=original\n');
+    expect(() => saveApiKeyToEnvFile('KEY', `secret"and'quotes`, envPath)).toThrow('API key cannot be represented safely');
+    expect(readFileSync(envPath, 'utf8')).toBe('KEY=original\n');
   });
 
   it("an init-only or import-only configuration creates a Writer; Pi capture alone still needs user_explicit", async () => {

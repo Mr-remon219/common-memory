@@ -1,4 +1,5 @@
 import { fileURLToPath } from "node:url";
+import dns from 'node:dns';
 import { createServer as httpServer, type Server } from 'node:http';
 import { createServer as httpsServer } from 'node:https';
 import { createServer as tcpServer, connect, type Socket } from 'node:net';
@@ -129,7 +130,14 @@ it('does not silently fallback after proxy failure; preserves bounded DNS and CO
   const proxy = httpServer();proxy.on('connect',(_q,s)=>s.end('HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n'));
   const port = await listen(proxy), endpoint = `https://127.0.0.1:${origin}`;
   await expect(client(endpoint,`http://127.0.0.1:${port}`).fetch(endpoint)).rejects.toMatchObject({diagnostic:{reason:'proxy_http_error',proxyStatus:502,retryable:true}});expect(directCalls).toBe(0);
-  await expect(client('http://cm-missing.invalid').fetch('http://cm-missing.invalid')).rejects.toMatchObject({diagnostic:{reason:'dns_error'}});
+  // Offline and deterministic even with a VPN/fake-IP resolver that resolves .invalid names.
+  // Node's net.connect uses dns.lookup by default; exercise the real client error path.
+  const lookup = vi.spyOn(dns,'lookup').mockImplementation((...args:unknown[])=>{
+    const callback=args.at(-1) as (error:NodeJS.ErrnoException)=>void;
+    queueMicrotask(()=>callback(Object.assign(new Error('Synthetic DNS failure'),{code:'ENOTFOUND'})));
+  });
+  try { await expect(client('http://cm-missing.invalid').fetch('http://cm-missing.invalid')).rejects.toMatchObject({diagnostic:{reason:'dns_error'}}); }
+  finally { lookup.mockRestore(); }
   expect(networkFailure({cause:{code:'ECONNREFUSED',message:'secret'}},true)).toMatchObject({diagnostic:{reason:'proxy_unavailable'}});
   expect(networkFailure({cause:{code:'ECONNRESET',message:'secret'}},true)).toMatchObject({diagnostic:{reason:'network_error'}});
 });

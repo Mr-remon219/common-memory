@@ -275,8 +275,8 @@ WSL 无法驱动 Windows GUI。已实测：`mcp-config --wsl` 给出的 `wsl.exe
 
 用户确认该会话运行于 Work 本地模式。本次只读复核用户提供的本机日志；不复制个人正文到仓库或测试夹具，也不再次导入个人记忆。
 
-- [提交及来源说明（第 56 行）](/mnt/c/Users/Administrator/.codex/sessions/2026/09/08/rollout-2026-09-08T15-58-54-01a08006-f5d0-7d70-b03e-13bac8fc0743.jsonl:56)：`basis: mixed`，来源标签为 Codex saved memories；材料说明包括本会话 MEMORY_SUMMARY 与已读取的本地 MEMORY.md 条目。第 18、23、32 行记录本地文件读取调用。标签仍是自报信息，不能认证全部来源。
-- 同日志第 74 行曾返回 `INVALID_RESPONSE` / `invalid_json`；[第 88 行处理结果](/mnt/c/Users/Administrator/.codex/sessions/2026/09/08/rollout-2026-09-08T15-58-54-01a08006-f5d0-7d70-b03e-13bac8fc0743.jsonl:88)为 `processed`、`jobState: done`、`attempts: 2`，`retainedIn` 为 preferences、profile。第 90 行调用 `memory_read`，[第 93 行](/mnt/c/Users/Administrator/.codex/sessions/2026/09/08/rollout-2026-09-08T15-58-54-01a08006-f5d0-7d70-b03e-13bac8fc0743.jsonl:93)读回两个文档。这证明该次真实路径可用，不证明全部云端理解被迁移或每次首次成功。
+- 提交及来源说明（本地验收日志第 56 行；日志不随仓库公开）：`basis: mixed`，来源标签为 Codex saved memories；材料说明包括本会话 MEMORY_SUMMARY 与已读取的本地 MEMORY.md 条目。第 18、23、32 行记录本地文件读取调用。标签仍是自报信息，不能认证全部来源。
+- 同日志第 74 行曾返回 `INVALID_RESPONSE` / `invalid_json`；第 88 行处理结果为 `processed`、`jobState: done`、`attempts: 2`，`retainedIn` 为 preferences、profile。第 90 行调用 `memory_read`，第 93 行读回两个文档。这证明该次真实路径可用，不证明全部云端理解被迁移或每次首次成功。
 
 这些是仅在该机器可访问的审计链接，不是可移植夹具。官方 [Memories](https://learn.chatgpt.com/docs/customization/memories) 对 Work 与本地记忆的体系描述和该会话观察存在差异；按实际材料记录来源，不推断其他账号、版本或额外云端记忆可见性。[Memory FAQ](https://help.openai.com/en/articles/8590148) 也不承诺 Summary 或回答来源列表完整（两页均于 2026-09-08 复核）。
 

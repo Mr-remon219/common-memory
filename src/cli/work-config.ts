@@ -1,8 +1,8 @@
 import { execFileSync } from 'node:child_process';
-import { loadConfig, configDirectory } from '../config/config.js';
+import { loadConfig, configDirectory, type CommonMemoryConfig } from '../config/config.js';
 import { ProjectRegistry } from '../v2/registry.js';
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { isAbsolute, join, win32 } from 'node:path';
+import { lstatSync, mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, isAbsolute, join, win32 } from 'node:path';
 import { runtimeLaunch, shellQuote, type LaunchOptions } from './host-launch.js';
 import type { HostClient } from './codex-session.js';
 const psQuote=(s:string)=>"'"+s.replaceAll("'","''")+"'";
@@ -65,7 +65,7 @@ export function renderHostConfig(client:HostClient,options:LaunchOptions,env:Nod
   }
   return {config:lines.join('\n'),skill:`---\nname: memory-refresh\ndescription: Explicitly replace this activation's frozen Common Memory snapshot with currently authorized memory.\n---\n\nRun this exact local command when the user invokes /memory-refresh:\n\n\`\`\`sh\n${command('session-refresh')}\n\`\`\`\n\nReport a command failure. Success queues the new snapshot for PostToolUse or the next UserPromptSubmit. Do not call memory_init or reset session state.\n`,policy:'policy:\n  allow_implicit_invocation: false\n',...(options.wsl?{bridge:renderWindowsBridge(options,env)}:{})};
 }
-export function runWorkConfig(args:string[],client:HostClient='chatgpt-work'):void {
+export function prepareHostBundle(config:CommonMemoryConfig,args:string[],client:HostClient='chatgpt-work') {
   let output:string|undefined,mode:string|undefined,bridgePath:string|undefined;
   const options:LaunchOptions={wsl:false};
   for(let i=0;i<args.length;i++){
@@ -74,12 +74,30 @@ export function runWorkConfig(args:string[],client:HostClient='chatgpt-work'):vo
   }
   if(!['posix','windows-wsl'].includes(mode??''))throw new Error('Select --mode posix (agent and runtime in the same environment) or --mode windows-wsl (native Windows agent); terminal and WSL_DISTRO_NAME do not identify the agent');
   if(!output||!isAbsolute(output))throw new Error('--output <absolute-directory> is required');
-  const config=loadConfig(join(configDirectory(),'config.json'));if(!config)throw new Error('Run common-memory config first');
   for(const workspace of options.workspaces??[])if(!new ProjectRegistry(config.dataRoot).resolve(workspace))throw new Error(`UNREGISTERED_WORKSPACE: ${workspace}`);
   options.wsl=mode==='windows-wsl';
   if(options.wsl&&!bridgePath)bridgePath=execFileSync('/usr/bin/wslpath',['-w',join(output,'common-memory-bridge.ps1')],{encoding:'utf8'}).trim();
   const bundle=renderHostConfig(client,options,process.env,bridgePath);
-  mkdirSync(join(output,'skills/memory-refresh/agents'),{recursive:true});
-  for(const [path,body] of [['common-memory.config.toml',bundle.config],['skills/memory-refresh/SKILL.md',bundle.skill],['skills/memory-refresh/agents/openai.yaml',bundle.policy],...(bundle.bridge?[['common-memory-bridge.ps1',bundle.bridge]]:[])])writeFileSync(join(output,path!),path!.endsWith('.ps1')?'\ufeff'+body!:body!,{flag:'wx'});
+  return {output,bundle};
+}
+
+/** Preflight the entire bundle before writing. Existing directories remain supported by the CLI. */
+export function writeHostBundle(output:string,bundle:ReturnType<typeof renderHostConfig>):void {
+  if(!isAbsolute(output))throw new Error('Bundle output must be absolute');
+  const files:[string,string][]=[['common-memory.config.toml',bundle.config],['skills/memory-refresh/SKILL.md',bundle.skill],['skills/memory-refresh/agents/openai.yaml',bundle.policy],...(bundle.bridge?[[ 'common-memory-bridge.ps1',bundle.bridge] as [string,string]]:[])];
+  const stat=(path:string)=>{try{return lstatSync(path);}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return null;throw error;}};
+  for(const directory of [output,join(output,'skills'),join(output,'skills/memory-refresh'),join(output,'skills/memory-refresh/agents')]){
+    const existing=stat(directory);if(existing&&(!existing.isDirectory()||existing.isSymbolicLink()))throw new Error(`Unsafe bundle directory: ${directory}`);
+  }
+  for(const [path] of files)if(stat(join(output,path)))throw new Error(`Bundle file already exists: ${join(output,path)}`);
+  mkdirSync(dirname(output),{recursive:true,mode:0o700});
+  mkdirSync(join(output,'skills/memory-refresh/agents'),{recursive:true,mode:0o700});
+  for(const [path,body] of files)writeFileSync(join(output,path),path.endsWith('.ps1')?'\ufeff'+body:body,{flag:'wx',mode:0o600});
+}
+
+export function runWorkConfig(args:string[],client:HostClient='chatgpt-work'):void {
+  const config=loadConfig(join(configDirectory(),'config.json'));if(!config)throw new Error('Run common-memory config first');
+  const {output,bundle}=prepareHostBundle(config,args,client);
+  writeHostBundle(output,bundle);
   process.stdout.write(`Generated configuration and explicit refresh skill in ${output}. Review before installing in the agent configuration directory.\n`);
 }

@@ -91,7 +91,11 @@ export function saveApiKeyToEnvFile(apiKeyEnv: string, apiKey: string, path = en
   if (!ENV_NAME.test(name)) throw new TypeError("apiKeyEnv must be an environment variable name");
   if (!value || /[\r\n\0]/u.test(value)) throw new TypeError("API key must be a non-empty single line");
   const lines = existsSync(path) ? readFileSync(path, "utf8").split(/\r?\n/u) : [];
-  const assignment = `${name}=${JSON.stringify(value)}`; const matcher = new RegExp(`^\\s*${escapeRegExp(name)}\\s*=`, "u");
+  // dotenv is not JSON: JSON escaping changes backslashes and quoted credentials.
+  let assignment: string;
+  try { assignment = privateAssignment(name, value); }
+  catch { throw new TypeError('API key cannot be represented safely in a private .env; use an external environment variable instead'); }
+  const matcher = new RegExp(`^\\s*(?:export\\s+)?${escapeRegExp(name)}\\s*=`, "u");
   let replaced = false;
   const next = lines.filter((line, index) => index < lines.length - 1 || line !== "").map((line) => { if (!matcher.test(line)) return line; if (replaced) return null; replaced = true; return assignment; }).filter((line): line is string => line !== null);
   if (!replaced) next.push(assignment);

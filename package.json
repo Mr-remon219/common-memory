@@ -1,7 +1,21 @@
 {
   "name": "common-memory-core",
   "version": "0.2.0",
-  "private": true,
+  "license": "MIT",
+  "description": "User-owned Markdown memory with durable maintenance, Pi integration and local stdio MCP access.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Mr-remon219/common-memory.git"
+  },
+  "homepage": "https://github.com/Mr-remon219/common-memory#readme",
+  "bugs": {
+    "url": "https://github.com/Mr-remon219/common-memory/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "latest",
+    "registry": "https://registry.npmjs.org/"
+  },
   "type": "module",
   "keywords": [
     "pi-package",
@@ -23,7 +37,11 @@
   "files": [
     "dist",
     ".env.sample",
-    "README.md"
+    "README.md",
+    "docs",
+    "CHANGELOG.md",
+    "SECURITY.md",
+    "LICENSE"
   ],
   "pi": {
     "extensions": [
@@ -38,8 +56,11 @@
     "test:fixtures": "vitest run tests/v2",
     "test:recovery": "vitest run tests/v2",
     "test:consumer": "node scripts/consumer-smoke.mjs",
+    "test:published": "node scripts/consumer-smoke.mjs --registry-version 0.2.0",
     "test:remote-contract": "vitest run tests/memory-manager",
-    "prepublishOnly": "npm run verify",
+    "prepack": "npm run build",
+    "release:check": "node scripts/check-release.mjs",
+    "prepublishOnly": "npm run release:check && npm run verify && npm run test:consumer",
     "verify": "node scripts/verify.mjs",
     "evaluate:v2": "npm run build && node scripts/evaluate-v2.mjs",
     "ablate:v2": "npm run build && node scripts/ablate-v2.mjs --output=docs/v2-ablation-results.json",

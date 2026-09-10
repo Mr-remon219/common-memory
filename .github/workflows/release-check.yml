@@ -1,0 +1,60 @@
+name: published-package
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact npm version to verify (for example 0.2.0)
+        required: true
+        default: '0.2.0'
+permissions:
+  contents: read
+jobs:
+  installed:
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      REQUESTED_VERSION: ${{ github.event.release.tag_name || inputs.version }}
+      COMMON_MEMORY_HOME: ${{ runner.temp }}/common-memory-release-home
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - name: Validate exact release version
+        id: version
+        shell: bash
+        run: |
+          version="${REQUESTED_VERSION#v}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Expected an exact x.y.z version'; exit 1; }
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+      - run: npm ci
+      - name: Verify documented one-line installation
+        env:
+          PACKAGE_VERSION: ${{ steps.version.outputs.value }}
+        shell: bash
+        run: |
+          npm install -g "common-memory-core@$PACKAGE_VERSION"
+          test "$(common-memory --version)" = "$PACKAGE_VERSION"
+          common-memory --help
+      - name: Verify registry tarball, writes and read-only MCP
+        env:
+          PACKAGE_VERSION: ${{ steps.version.outputs.value }}
+        shell: bash
+        run: |
+          node scripts/consumer-smoke.mjs --registry-version "$PACKAGE_VERSION"
+      - name: Record result
+        if: always()
+        env:
+          PACKAGE_VERSION: ${{ steps.version.outputs.value }}
+          RESULT: ${{ job.status }}
+        shell: bash
+        run: |
+          printf '## Published package verification\n\nVersion: `%s`\n\nPlatform: `%s`\n\nResult: `%s`\n' "$PACKAGE_VERSION" '${{ runner.os }}' "$RESULT" >> "$GITHUB_STEP_SUMMARY"

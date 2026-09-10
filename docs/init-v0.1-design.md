@@ -230,7 +230,7 @@ Node v24.20.0，`@modelcontextprotocol/server` 2.0.0（协议修订 2026-07-28�
 
 [设计选择] 一次性迁移本次可取得并选定的材料。先保存账号实际可见的 Memory Summary／旧版 Saved Memories 原文和可用日期、出处；针对遗漏主题向源端提问时保留可核对出处，无依据猜测留在导入之外的待核对材料中。[Memory FAQ](https://help.openai.com/en/articles/8590148) 明确 Summary 和回答来源列表都不保证完整；[Memories 官方说明](https://learn.chatgpt.com/docs/customization/memories) 区分产品体系。这些描述不能代替本地调用证据，也不能量化遗漏。
 
-用户选定 Markdown 走 `common-memory import`（`document_import`），Agent 提交实际可见材料走 `memory_init`（`agent_import`）。分别通过 `document_import`、`agent_observation` provenance 授权；批准迁移不等于逐条确认真实性。推荐独立临时配置和独立 `dataRoot` 试导入，核对后仍通过既有入口正式导入，以正式库 `common-memory show` 为最终核对对象。具体操作见 [README](../README.md#migrate-selected-checkable-material)。隔离试导入不保证正式运行相同结果。
+用户选定 Markdown 走 `common-memory import`（`document_import`），Agent 提交实际可见材料走 `memory_init`（`agent_import`）。分别通过 `document_import`、`agent_observation` provenance 授权；批准迁移不等于逐条确认真实性。推荐独立临时配置和独立 `dataRoot` 试导入，核对后仍通过既有入口正式导入，以正式库 `common-memory show` 为最终核对对象。具体操作见 [使用指南](usage.md#migrate-selected-checkable-material)。隔离试导入不保证正式运行相同结果。
 
 [项目事实] 本次只更新 Init server instructions、工具描述及配置输出注释与文档。参数、数据库、Writer、`memory_maintenance_v2`、队列/flush/重试/读取生命周期保持不变。这些指导是 **soft semantic defense（软性语义防御）**：无法证明来源正确、阻止所有无依据新事实或语义冲突，也不能代替结果核对。结构守卫保护用户 Section，不提供语义真实性保证。
 
