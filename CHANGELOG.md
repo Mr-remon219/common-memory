@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.2.1 — 2026-09-10
+
+### Usability
+
+- Replace module-oriented TUI navigation with a Chinese task menu: read memory,
+  import Markdown, connect assistants, manage permissions, and recover work.
+- Shorten first-time setup and offer optional connection, permission and test steps
+  after saving. Remember the last home action and keep cancellation local.
+- Rotate API keys independently of model setup. Replace advanced JSON editing with
+  validated, single-setting menus and numeric inputs that preserve unrelated values.
+- Offer an explicit permission flow before Markdown import; retain source attribution
+  and distinguish queued material from processed or retained memory.
+- Make Codex/Work technical previews optional, show an export summary before writing,
+  and provide installation steps without claiming the assistant is already connected.
+- Use readable empty states, progress and session summaries; retain raw job diagnostics
+  for troubleshooting. Fix false configuration-conflict detection from key ordering.
+
+### Boundaries
+
+- No storage schema, model protocol, host trust or memory authorization changes.
+- Generated bundles still require activation in the actual assistant. No automatic
+  permission grant, data migration, or real-model/desktop validation is added.
+
 ## 0.2.0 — 2026-09-10
 
 Initial public v0.2 release under the MIT license. Requires Node 24.x; Linux, macOS

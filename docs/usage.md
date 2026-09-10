@@ -165,16 +165,23 @@ Research, explicit environment limits and acceptance evidence:
 
 ## Interactive workbench
 
-Run **`common-memory`** in a terminal. Home leads to:
+Run **`common-memory`** in a terminal. The Chinese task menu leads to:
 
-| Area | Tasks |
+| Menu | Tasks |
 | --- | --- |
-| Overview | Configuration, actual storage paths, network selection and queue health; refresh locally |
-| Memory | Browse authorized consumer documents with pagination; import local Markdown with explicit confirmation |
-| Projects & permissions | Register/view/remove projects; independently manage disclosure, write scopes and provenance |
-| Integrations | Local readiness; Pi's official package/resource manager; Codex/Work bundle preview/export; MCP configuration preview/export |
-| Maintenance | Job diagnostics and dead-job retry; session summaries without bodies; flush and durable handoff recovery |
-| Settings | Model/API/credentials, network/CA, explicit synthetic connection test, advanced tuning/limits/storage |
+| 查看记忆 | Browse authorized documents with pagination; locate the Markdown files |
+| 导入 Markdown | Import local Markdown; offer an explicit permission form if needed, never auto-grant |
+| 连接 / 管理 AI 助手 | Pi's own manager; Codex/Work export summary and optional technical previews; MCP preview/export |
+| 项目与权限 | Register/view/remove projects; independently manage reads, writes and material types |
+| 模型与设置 | Model/API, independent key rotation, network/CA, synthetic connection test, individual advanced settings |
+| 处理未完成任务 | Job diagnostics and retry; readable session summaries; queue processing and handoff recovery |
+| 查看运行状态 | Local queue health; optional configuration and actual storage-path details |
+
+First-time setup asks for the API address, model, API type and optional key, then offers
+connection, permission and test steps that can be skipped. Advanced settings use menus
+and numeric fields rather than JSON editing; each confirmed edit preserves unrelated
+settings. The home menu remembers the last action. Saving a step is not undone by
+cancelling a later step.
 
 Use arrows and Enter, Space for multi-select, and Back to return. Esc/Ctrl+C cancels a
 form; cancellation at Home exits. Pending work remains durable. No model call is made

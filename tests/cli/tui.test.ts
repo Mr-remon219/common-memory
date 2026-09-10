@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as clack from '@clack/prompts';
 import { defaultConfig, envFilePath, loadConfig, saveConfig } from '../../src/config/config.js';
 import { runTui } from '../../src/cli/tui.js';
-import { runNetworkWizard, runPermissionsWizard, runSetupWizard, saveSettings } from '../../src/cli/tui-settings.js';
+import { runAdvancedWizard, runCredentialsWizard, runNetworkWizard, runPermissionsWizard, runSetupWizard, saveSettings } from '../../src/cli/tui-settings.js';
 import { terminalText, UserCancelled, viewText } from '../../src/cli/tui-prompts.js';
 import { listProjects, registerProject, runtimeStatus } from '../../src/cli/operations.js';
 import { runImport } from '../../src/cli/import-command.js';
@@ -74,22 +74,24 @@ it('offers first-time setup without forcing it; cancellation returns home and cr
 
 it('navigates all areas and back, reads the same store without initializing it or making model calls', async () => {
   const config = fixture();
-  const done = choices('overview', 'refresh', 'back', 'memory', 'back', 'projects', 'back', 'integrations', 'readiness', 'back', 'maintenance', 'back', 'settings', 'back', 'exit');
+  const done = choices('overview', 'refresh', 'details', 'back', 'back', 'browse', 'back', 'projects', 'back', 'integrations', 'readiness', 'back', 'maintenance', 'back', 'settings', 'back', 'exit');
   await runTui(); done();
   expect(notes()).toContain(config.dataRoot);
-  expect(notes()).toContain('Runtime: not created');
-  expect(notes()).toContain('NOT VERIFIED');
+  expect(notes()).toContain('还没有处理记录');
+  expect(notes()).toContain('不代表助手已安装');
   expect(existsSync(config.dataRoot)).toBe(false);
   expect(runImport).not.toHaveBeenCalled();
   expect(runFlush).not.toHaveBeenCalled();
   expect(runNetworkTest).not.toHaveBeenCalled();
 });
 
-it('keeps errors and form cancellation in the current area and exits on home cancellation', async () => {
-  fixture();
-  const done = choices('memory', 'import', 'browse', Symbol('cancel'), 'back', Symbol('cancel'));
+it('offers authorization for disabled imports without granting it, and cancels back to home', async () => {
+  const config = fixture();
+  const done = choices('import', 'browse', Symbol('cancel'), Symbol('cancel'));
+  vi.mocked(clack.confirm).mockResolvedValue(false);
   await runTui(); done();
-  expect(clack.log.error).toHaveBeenCalledWith(expect.stringContaining('IMPORT_DISABLED'));
+  expect(loadConfig()).toEqual(config);
+  expect(clack.multiselect).not.toHaveBeenCalled();
   expect(runImport).not.toHaveBeenCalled();
   expect(clack.outro).toHaveBeenCalled();
 });
@@ -99,7 +101,7 @@ it('browses only authorized consumer documents and escapes terminal commands wit
   mkdirSync(join(config.dataRoot, 'memory'), { recursive: true });
   const content = '# Profile\n\n## Test\nSynthetic \x1b]52;c;attack\x07\n';
   writeFileSync(join(config.dataRoot, 'memory/profile.md'), content);
-  const done = choices('memory', 'browse', 'global', 'profile', 'back', 'back', 'back', 'exit');
+  const done = choices('browse', 'global', 'profile', 'back', 'back', 'exit');
   await runTui(); done();
   expect(notes()).toContain('\\u001b]52;c;attack\\u0007');
   expect(notes()).not.toContain('\x1b]52');
@@ -150,18 +152,18 @@ it('collects explicit scope/provenance grants independently of writable scopes',
 
 it('routes confirmed imports through the existing import command and reports queued rather than remembered', async () => {
   const config = fixture(); config.disclosure.allowedProvenance = ['document_import']; saveConfig(config);
-  const done = choices('memory', 'import', 'global', 'agent', 'queue', 'back', 'exit');
+  const done = choices('import', 'global', 'agent', 'queue', 'exit');
   texts(join(home, 'source.md'), 'Visible material');
   vi.mocked(clack.confirm).mockResolvedValue(true);
   vi.mocked(runImport).mockResolvedValue({ exitCode: 0, outcome: null });
   await runTui(); done();
   expect(runImport).toHaveBeenCalledWith(config, [join(home, 'source.md'), '--author', 'agent', '--label', 'Visible material', '--no-wait'], expect.any(Function));
-  expect(clack.log.info).toHaveBeenCalledWith('Queued, not yet processed.');
+  expect(clack.log.info).toHaveBeenCalledWith(expect.stringContaining('已排队，尚未整理'));
 });
 
 it('never imports after rejecting the final confirmation', async () => {
   const config = fixture(); config.disclosure.allowedProvenance = ['document_import']; saveConfig(config);
-  choices('memory', 'import', 'global', 'unknown', 'wait', 'back', 'exit');
+  choices('import', 'global', 'unknown', 'wait', 'exit');
   texts(join(home, 'source.md'), '');
   vi.mocked(clack.confirm).mockResolvedValue(false);
   await runTui();
@@ -178,7 +180,7 @@ it('uses shared flush/probe operations and does not turn failure into success or
   await runTui();
   expect(runFlush).toHaveBeenCalledTimes(1);
   expect(runNetworkTest).toHaveBeenCalledTimes(1);
-  expect(clack.log.warn).toHaveBeenCalledWith(expect.stringContaining('Incomplete'));
+  expect(clack.log.warn).toHaveBeenCalledWith(expect.stringContaining('还未完成或已取消'));
   expect(process.exitCode).toBe(prior);
 });
 
@@ -189,7 +191,7 @@ it('recovery uses the same machine entry with a pinned home, without broadening 
   vi.mocked(runInteractiveProcess).mockResolvedValue(1);
   await runTui();
   expect(runInteractiveProcess).toHaveBeenCalledWith(process.execPath, [expect.stringContaining('main.js'), 'session-drain', '--home', home]);
-  expect(clack.log.warn).toHaveBeenCalledWith(expect.stringContaining('incomplete or cancelled'));
+  expect(clack.log.warn).toHaveBeenCalledWith(expect.stringContaining('恢复未完成或已取消'));
 });
 
 it('Pi management hands off argument arrays to the official host without shell interpolation', async () => {
@@ -199,7 +201,7 @@ it('Pi management hands off argument arrays to the official host without shell i
   vi.mocked(runInteractiveProcess).mockResolvedValue(0);
   await runTui();
   expect(runInteractiveProcess).toHaveBeenCalledWith('pi', ['list'], expect.objectContaining({ COMMON_MEMORY_HOME: home }));
-  expect(notes()).toContain('trust remain owned by Pi');
+  expect(notes()).toContain('启停与信任交给 Pi 自己管理');
   expect(integrationReadiness(loadConfig()!)).not.toContain('connected: true');
 });
 
@@ -207,12 +209,12 @@ it.skipIf(process.platform === 'win32')('Codex integration previews before expor
   const config = fixture();
   writeFileSync(envFilePath(), 'CM_TUI_TEST_KEY="PRIVATE_EXPORT_SECRET"\n');
   const output = join(home, 'codex-bundle');
-  const done = choices('integrations', 'codex', 'posix', 'back', 'back', 'back', 'exit');
+  const done = choices('integrations', 'codex', 'posix', 'config', 'back', 'skill', 'back', 'save', 'back', 'exit');
   texts(output);
   vi.mocked(clack.confirm).mockImplementation(async () => {
     expect(existsSync(output)).toBe(false);
-    expect(notes()).toContain('configuration preview');
-    expect(notes()).toContain('Explicit refresh skill preview');
+    expect(notes()).toContain('连接配置预览');
+    expect(notes()).toContain('刷新记忆 Skill 预览');
     return true;
   });
   await runTui(); done();
@@ -222,12 +224,12 @@ it.skipIf(process.platform === 'win32')('Codex integration previews before expor
   expect(body).not.toContain('PRIVATE_EXPORT_SECRET');
   expect(notes()).not.toContain('PRIVATE_EXPORT_SECRET');
   expect(loadConfig()).toEqual(config);
-  expect(notes()).toContain('host activation still required');
+  expect(notes()).toContain('还需在助手中启用');
 });
 
 it.skipIf(process.platform === 'win32')('cancelling a Work bundle preview does not create files or change the configuration', async () => {
   const config = fixture(), output = join(home, 'work-bundle');
-  const done = choices('integrations', 'work', 'posix', Symbol('cancel'), 'back', 'exit');
+  const done = choices('integrations', 'work', 'posix', 'config', Symbol('cancel'), 'back', 'exit');
   texts(output);
   await runTui(); done();
   expect(existsSync(output)).toBe(false);
@@ -245,8 +247,173 @@ it.skipIf(process.platform === 'win32')('MCP export uses exclusive creation and 
   expect(clack.log.error).toHaveBeenCalledWith(expect.stringContaining('EEXIST'));
 });
 
+it('finishes minimal onboarding without asking for an env name or storage path, then offers optional next steps', async () => {
+  const done = choices('setup', 'responses', 'back', 'exit');
+  texts('https://example.test/v1', 'synthetic');
+  vi.mocked(clack.confirm).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+  await runTui(); done();
+  expect(clack.text).toHaveBeenCalledTimes(2);
+  expect(loadConfig()!.remote.apiKeyEnv).toBe('OPENAI_API_KEY');
+  expect(loadConfig()!.dataRoot).toBe(join(home, 'data'));
+  expect(loadConfig()!.disclosure.allowedProvenance).toEqual(['user_explicit']);
+  expect(runNetworkTest).not.toHaveBeenCalled();
+  expect(existsSync(join(home, 'data'))).toBe(false);
+});
+
+it('returns focus to the last home action without opening storage or probing the network', async () => {
+  const config = fixture();
+  const done = choices('settings', 'back', 'exit');
+  await runTui(); done();
+  const lastMenu = vi.mocked(clack.select).mock.calls.at(-1)![0];
+  expect(lastMenu.initialValue).toBe('settings');
+  expect(lastMenu.options.map(o => o.value)).toContain('browse');
+  expect(lastMenu.options.map(o => o.value)).toContain('import');
+  expect(existsSync(config.dataRoot)).toBe(false);
+  expect(runNetworkTest).not.toHaveBeenCalled();
+});
+
+it('resumes import after an explicit grant and reloads the saved authorization', async () => {
+  const config = fixture();
+  const done = choices('import', 'global', 'third_party', 'queue', 'exit');
+  vi.mocked(clack.multiselect).mockResolvedValueOnce(['global']).mockResolvedValueOnce(['global']).mockResolvedValueOnce(['user_explicit', 'document_import']);
+  vi.mocked(clack.confirm).mockResolvedValue(true);
+  texts(join(home, 'notes.md'), '');
+  vi.mocked(runImport).mockResolvedValue({ exitCode: 0, outcome: null });
+  await runTui(); done();
+  expect(runImport).toHaveBeenCalledWith(loadConfig(), [join(home, 'notes.md'), '--author', 'third_party', '--no-wait'], expect.any(Function));
+  expect(loadConfig()!.writableScopes).toEqual(config.writableScopes);
+});
+
+it('updates only the API key without asking for model details or displaying the secret', async () => {
+  const config = fixture();
+  const done = choices('set');
+  vi.mocked(clack.password).mockResolvedValue('synthetic-secret');
+  vi.mocked(clack.confirm).mockResolvedValue(true);
+  await runCredentialsWizard(config); done();
+  expect(clack.text).not.toHaveBeenCalled();
+  expect(loadConfig()).toEqual(config);
+  expect(readFileSync(envFilePath(), 'utf8')).toContain('synthetic-secret');
+  expect(notes()).not.toContain('synthetic-secret');
+  expect(runNetworkTest).not.toHaveBeenCalled();
+});
+
+it('does not write a replacement key when its confirmation is cancelled', async () => {
+  const config = fixture();
+  choices('set');
+  vi.mocked(clack.password).mockResolvedValue('synthetic-secret');
+  vi.mocked(clack.confirm).mockResolvedValue(Symbol('cancel'));
+  await expect(runCredentialsWizard(config)).rejects.toBeInstanceOf(UserCancelled);
+  expect(existsSync(envFilePath())).toBe(false);
+  expect(loadConfig()).toEqual(config);
+});
+
+it('changes the credential environment variable without modifying stored credentials', async () => {
+  const config = fixture();
+  writeFileSync(envFilePath(), 'CM_TUI_TEST_KEY="old-secret"\n');
+  choices('env'); texts('EXTERNAL_MODEL_KEY');
+  vi.mocked(clack.confirm).mockResolvedValue(true);
+  await runCredentialsWizard(config);
+  expect(loadConfig()).toEqual({ ...config, remote: { ...config.remote, apiKeyEnv: 'EXTERNAL_MODEL_KEY' } });
+  expect(readFileSync(envFilePath(), 'utf8')).toBe('CM_TUI_TEST_KEY="old-secret"\n');
+});
+
+it('edits one numeric tuning value, validates input and preserves every unrelated setting', async () => {
+  const config = fixture(); config.remote.reasoningEffort = 'high'; saveConfig(config);
+  const done = choices('tuning', 'tokens');
+  vi.mocked(clack.text).mockImplementationOnce(async opts => {
+    if (typeof opts.validate !== 'function') throw new Error('Expected a numeric validator');
+    expect(opts.validate('0')).toBeTruthy();
+    expect(opts.validate?.('1.5')).toBeTruthy();
+    expect(opts.validate?.('16385')).toBeTruthy();
+    expect(opts.validate?.('')).toBeUndefined();
+    expect(opts.validate?.('2048')).toBeUndefined();
+    return '2048';
+  });
+  vi.mocked(clack.confirm).mockResolvedValue(true);
+  await runAdvancedWizard(config); done();
+  expect(loadConfig()).toEqual({ ...config, remote: { ...config.remote, maxOutputTokens: 2048 } });
+  choices('tuning', 'tokens'); texts('');
+  await runAdvancedWizard(loadConfig()!);
+  expect(loadConfig()).toEqual(config);
+});
+
+it('offers Responses thinking options and removes the parameter when selecting the API default', async () => {
+  const config = fixture(); config.remote.reasoningEffort = 'high'; saveConfig(config);
+  choices('tuning', 'thinking', 'default');
+  vi.mocked(clack.confirm).mockResolvedValue(true);
+  await runAdvancedWizard(config);
+  expect(loadConfig()!.remote.reasoningEffort).toBeUndefined();
+  expect(clack.text).not.toHaveBeenCalled();
+});
+
+it('switches between mutually exclusive Chat thinking formats without modifying output limits', async () => {
+  const config = fixture(); config.remote.api = 'chat_completions'; config.remote.thinking = { type: 'enabled' }; config.remote.maxOutputTokens = 2048; saveConfig(config);
+  choices('tuning', 'thinking', 'enableThinking:false');
+  vi.mocked(clack.confirm).mockResolvedValue(true);
+  await runAdvancedWizard(config);
+  expect(loadConfig()!.remote.thinking).toBeUndefined();
+  expect(loadConfig()!.remote.enableThinking).toBe(false);
+  expect(loadConfig()!.remote.maxOutputTokens).toBe(2048);
+  choices('tuning', 'thinking', 'thinking:disabled');
+  await runAdvancedWizard(loadConfig()!);
+  expect(loadConfig()!.remote.enableThinking).toBeUndefined();
+  expect(loadConfig()!.remote.thinking).toEqual({ type: 'disabled' });
+});
+
+it.each([
+  ['scheduler', 'maxAttempts', '7'],
+  ['sessionCache', 'contextTailTurns', '0'],
+  ['disclosure', 'maxTotalBytes', '4096'],
+] as const)('edits a %s field without replacing its siblings', async (group, field, value) => {
+  const config = fixture();
+  choices('limits', group, field); texts(value);
+  vi.mocked(clack.confirm).mockResolvedValue(true);
+  await runAdvancedWizard(config);
+  expect(loadConfig()).toEqual({ ...config, [group]: { ...config[group], [field]: Number(value) } });
+});
+
+it('restores optional cache defaults without writing a second schema or losing unrelated values', async () => {
+  const config = fixture(); config.sessionCache = { contextTailTurns: 0 }; saveConfig(config);
+  choices('limits', 'sessionCache', 'reset');
+  vi.mocked(clack.confirm).mockResolvedValue(true);
+  await runAdvancedWizard(config);
+  const expected = { ...config }; delete expected.sessionCache;
+  expect(loadConfig()).toEqual(expected);
+});
+
+it('does not save a numeric edit after rejecting confirmation', async () => {
+  const config = fixture();
+  choices('limits', 'scheduler', 'maxAttempts'); texts('9');
+  vi.mocked(clack.confirm).mockResolvedValue(false);
+  await runAdvancedWizard(config);
+  expect(loadConfig()).toEqual(config);
+});
+
+it('switches stores only after confirmation and never moves or creates memory data', async () => {
+  const config = fixture();
+  mkdirSync(join(config.dataRoot, 'memory'), { recursive: true });
+  const file = join(config.dataRoot, 'memory/profile.md'); writeFileSync(file, '# Keep me\n');
+  const target = join(home, 'other-store');
+  choices('storage'); texts(target); vi.mocked(clack.confirm).mockResolvedValue(true);
+  await runAdvancedWizard(config);
+  expect(loadConfig()!.dataRoot).toBe(target);
+  expect(readFileSync(file, 'utf8')).toBe('# Keep me\n');
+  expect(existsSync(target)).toBe(false);
+});
+
+it.skipIf(process.platform === 'win32')('generates a bundle from the review summary without forcing technical pagination', async () => {
+  fixture();
+  const output = join(home, 'quick-bundle');
+  const done = choices('integrations', 'codex', 'posix', 'save', 'back', 'exit');
+  texts(output); vi.mocked(clack.confirm).mockResolvedValue(true);
+  await runTui(); done();
+  expect(existsSync(join(output, 'common-memory.config.toml'))).toBe(true);
+  expect(clack.log.error).not.toHaveBeenCalled();
+  expect(notes()).toContain('还需在助手中启用');
+});
+
 describe('configuration preservation and cancellation', () => {
-  function form() { texts('https://example.test/v1', 'new-model', 'CM_TUI_TEST_KEY'); choices('responses'); }
+  function form() { texts('https://example.test/v1', 'new-model'); choices('responses'); }
   it('preserves optional cache, limits, provenance, tuning, private secrets and legacy route absence', async () => {
     const config = fixture();
     delete config.remote.proxy;
@@ -265,7 +432,7 @@ describe('configuration preservation and cancellation', () => {
   });
   it('changing API explicitly clears incompatible thinking while preserving shared tuning', async () => {
     const config = fixture(); config.remote.reasoningEffort = 'high'; config.remote.maxOutputTokens = 2048; saveConfig(config);
-    texts(config.remote.baseUrl, config.remote.model, config.remote.apiKeyEnv); choices('chat_completions');
+    texts(config.remote.baseUrl, config.remote.model); choices('chat_completions');
     vi.mocked(clack.confirm).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
     const next = await runSetupWizard(loadConfig());
     expect(next.remote.api).toBe('chat_completions');
@@ -282,7 +449,7 @@ describe('configuration preservation and cancellation', () => {
   });
   it('does not replace a concurrently edited configuration', () => {
     const config = fixture(); saveConfig({ ...config, remote: { ...config.remote, model: 'changed-elsewhere' } });
-    expect(() => saveSettings(config, config)).toThrow('Configuration changed');
+    expect(() => saveSettings(config, config)).toThrow('配置已被其他操作修改');
     expect(loadConfig()!.remote.model).toBe('changed-elsewhere');
   });
   it('network cancellation writes neither proxy secret nor configuration', async () => {

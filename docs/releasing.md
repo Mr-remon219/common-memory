@@ -2,14 +2,14 @@
 
 ## 当前状态
 
-v0.2 使用所有者确认的 MIT 许可证。npm 版本是 **0.2.0**，GitHub tag 是 **v0.2.0**，
+v0.2 使用所有者确认的 MIT 许可证。npm 版本是 **0.2.1**，GitHub tag 是 **v0.2.1**，
 包名 `common-memory-core`，可执行命令 `common-memory`，默认发布标签 `latest`。
 这是面向早期使用者的版本，不声称已经完成全部真实客户端验收。
 
 Linux、macOS 和 WSL 在 Node 24 环境使用同一行安装命令：
 
 ```sh
-npm install -g common-memory-core@0.2.0
+npm install -g common-memory-core@0.2.1
 ```
 
 安装 Node / WSL 是前置要求，不包含在这个 npm 命令中。详细说明见 [README](../README.md)。
@@ -83,14 +83,14 @@ Release/tag 都要由维护者在对应服务上完成。本文和本地验证�
 发布后从一个新目录安装并核对 registry 中的版本：
 
 ```sh
-npm view common-memory-core@0.2.0 version dist.integrity
-npm install -g common-memory-core@0.2.0
+npm view common-memory-core@0.2.1 version dist.integrity
+npm install -g common-memory-core@0.2.1
 common-memory --version
 common-memory --help
 npm run test:published
 ```
 
-npm 发布成功并完成本地 registry 检查后，创建 GitHub Release `v0.2.0`。它会触发
+npm 发布成功并完成本地 registry 检查后，创建 GitHub Release `v0.2.1`。它会触发
 `published-package` 工作流：Ubuntu / macOS 实际执行上述一行全局安装，核对 CLI 版本，
 然后从 npm 下载 tarball 验证类型导出、Writer 提交/重启、Pi 模块和无 Key 的只读 MCP。
 也可通过 Actions 的 Run workflow 输入精确版本手动重跑。这个工作流**不发布包**，只有

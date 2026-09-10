@@ -15,117 +15,125 @@ const packageRoot = fileURLToPath(new URL('../../', import.meta.url));
 
 export function integrationReadiness(config: CommonMemoryConfig): string {
   return [
-    `Runtime: Node ${process.versions.node}; home: ${configDirectory()}`,
-    `Store: ${config.dataRoot}`,
-    `Read: no API key needed; scopes: ${config.disclosure.allowedScopes.join(', ')}`,
-    `Capture: user_explicit ${config.disclosure.allowedProvenance.includes('user_explicit') ? 'authorized' : 'not authorized'}`,
-    `Init: agent_observation ${config.disclosure.allowedProvenance.includes('agent_observation') ? 'authorized' : 'not authorized'}`,
-    `Writer credential: ${hasApiKey(config) ? 'configured (not tested)' : 'missing'}`,
-    `Writable scopes: ${config.writableScopes.join(', ') || '(none)'}`,
-    'Host installation / enabled tools / hook trust: NOT VERIFIED by these local checks.',
-    'Generated does not mean installed, trusted, connected, or successfully committed.',
+    `Node ${process.versions.node} · 配置目录：${configDirectory()}`,
+    `记忆存储：${config.dataRoot}`,
+    `读取：不需要 API Key · ${config.disclosure.allowedScopes.join(', ')}`,
+    `对话捕获：${config.disclosure.allowedProvenance.includes('user_explicit') ? '已授权' : '未授权'}`,
+    `AI 理解导入：${config.disclosure.allowedProvenance.includes('agent_observation') ? '已授权' : '未授权'}`,
+    `模型密钥：${hasApiKey(config) ? '已配置，未测试' : '未配置，可只读'}`,
+    `可更新范围：${config.writableScopes.join(', ') || '无（只读）'}`,
+    '以上是本机配置，不代表助手已安装、启用或信任连接。',
   ].join('\n');
 }
 
 async function chooseWorkspaces(config: CommonMemoryConfig): Promise<string[]> {
   const projects = listProjects(config);
   if (!projects.length) return [];
-  return unwrap(await clack.multiselect({ message: 'Optional registered project reads (global is included separately)', required: false,
-    options: projects.map(p => ({ value: p.root, label: terminalText(p.name), hint: terminalText(`${p.root} · ${config.disclosure.allowedScopes.includes(`project:${p.id}`) ? 'disclosure allowed' : 'NOT authorized'}`) })), initialValues: [] }));
+  return unwrap(await clack.multiselect({ message: '还要让助手读取哪些项目？（空格勾选，可不选；个人记忆另行包含）', required: false,
+    options: projects.map(p => ({ value: p.root, label: terminalText(p.name), hint: terminalText(`${p.root} · ${config.disclosure.allowedScopes.includes(`project:${p.id}`) ? '已授权读取' : '尚未授权读取'}`) })), initialValues: [] }));
 }
 
 async function launchMode(): Promise<McpConfigOptions> {
   // A WSL terminal does not establish the agent's operating environment.
-  const mode = await menu('Where does the agent process run?', [
-    { value: 'posix', label: 'Same POSIX environment as Common Memory', hint: 'macOS or agent inside this WSL/Linux runtime' },
-    { value: 'wsl', label: 'Native Windows agent → this WSL runtime', hint: 'Explicit distribution and Linux user; no Windows-native Core' },
+  const mode = await menu('你的 AI 助手运行在哪里？', [
+    { value: 'posix', label: '和当前终端在同一环境', hint: 'macOS / Linux / WSL 内运行的助手' },
+    { value: 'wsl', label: 'Windows 桌面上', hint: '通过桥接访问当前 WSL 中的记忆' },
   ]);
   if (mode === 'posix') return { wsl: false, workspaces: [] };
-  return { wsl: true, distro: await text('WSL distribution', process.env.WSL_DISTRO_NAME ?? ''), user: await text('Linux user in that distribution'), workspaces: [] };
+  return { wsl: true, distro: await text('WSL 发行版名称', process.env.WSL_DISTRO_NAME ?? ''), user: await text('该发行版中的 Linux 用户名'), workspaces: [] };
 }
 
 async function generateHost(config: CommonMemoryConfig, client: 'codex' | 'chatgpt-work'): Promise<void> {
   const options = await launchMode();
   options.workspaces = await chooseWorkspaces(config);
-  const output = expandPath(await text('New bundle directory (must not already exist)'));
+  const output = expandPath(await text('把接入文件保存到哪个新目录？（不能是已有目录）'));
   const args = ['--mode', options.wsl ? 'windows-wsl' : 'posix', '--output', output, ...options.workspaces.flatMap(w => ['--workspace', w])];
   if (options.wsl) {
     args.push('--distro', options.distro!, '--user', options.user!);
-    const bridge = await text('Absolute Windows destination of common-memory-bridge.ps1 (blank: translate output with wslpath)', '', true);
+    const bridge = await text('Windows 桥接脚本的绝对路径（留空用 wslpath 转换输出目录）', '', true);
     if (bridge) args.push('--bridge-path', bridge);
   }
   const prepared = prepareHostBundle(config, args, client);
-  await viewText(`${client} configuration preview`, prepared.bundle.config);
-  await viewText('Explicit refresh skill preview', prepared.bundle.skill + '\n' + prepared.bundle.policy);
-  if (prepared.bundle.bridge) await viewText('Windows bridge preview', prepared.bundle.bridge);
-  if (!await confirm(`Write this reviewed bundle to ${output}? Host config and trust will NOT be changed.`)) return;
+  note(`助手：${client}\n保存到：${output}\n包含：连接配置、刷新记忆的 Skill${prepared.bundle.bridge ? '、Windows 桥接脚本' : ''}\n只生成文件，不修改助手设置或 Hook 信任。`, '准备接入文件');
+  for (;;) {
+    const action = await menu('接下来做什么？', [
+      { value: 'save', label: '生成接入文件', hint: '下一步会说明如何安装到助手' },
+      { value: 'config', label: '预览连接配置' },
+      { value: 'skill', label: '预览刷新记忆 Skill' },
+      ...(prepared.bundle.bridge ? [{ value: 'bridge', label: '预览 Windows 桥接脚本' }] : []),
+      { value: 'back', label: '返回，不生成文件' },
+    ]);
+    if (action === 'back') return;
+    if (action === 'save') break;
+    await viewText(action === 'config' ? '连接配置预览' : action === 'skill' ? '刷新记忆 Skill 预览' : 'Windows 桥接预览', action === 'config' ? prepared.bundle.config : action === 'skill' ? prepared.bundle.skill + '\n' + prepared.bundle.policy : prepared.bundle.bridge!);
+  }
+  if (!await confirm(`将接入文件写入 ${output}？`)) return;
   checkConfigUnchanged(config);
-  if (existsSync(output)) throw new Error('Choose a new bundle directory. Existing destinations are not changed by this wizard.');
+  if (existsSync(output)) throw new Error('这个目录已存在。请选择新目录，不会覆盖已有文件。');
   writeHostBundle(prepared.output, prepared.bundle);
   note([
-    `Generated: ${output}`,
-    '1. Inspect common-memory.config.toml and merge/install it in the ACTUAL agent configuration directory; keep Work and Codex profiles separate.',
-    client === 'codex' ? '2. For Codex, use the common-memory profile: codex --profile common-memory.' : '2. Select the corresponding profile in the Work local agent environment (ordinary Chat is not covered).',
-    '3. Install skills/memory-refresh in that agent’s skills directory. For Windows, place the bridge at the exact previewed Windows path.',
-    '4. Review and trust commands through the host /hooks interface. No trust bypass was installed.',
-    '5. Start a fresh host process. Review memory here and check Maintenance for actual session processing.',
-    'Refresh stays inside the live host: /memory-refresh. The TUI cannot select an activation by cwd.',
-    'Disable/remove: use host /hooks and its MCP settings, then remove only the config/skill entries you installed; canonical memory remains intact.',
-    'Regenerate into a NEW directory after changing Node, installation path, home or workspace selection.',
-  ].join('\n'), 'Generated — host activation still required');
+    `已生成：${output}`,
+    '1. 审阅 common-memory.config.toml，合并到实际使用的助手配置。Work 与 Codex 的配置请分开。',
+    '2. 将 skills/memory-refresh 放入该助手的 skills 目录；Windows 还需将桥接脚本放到指定路径。',
+    '3. 在助手 /hooks 中审阅并信任命令，然后启动新会话。',
+    client === 'codex' ? '启动：codex --profile common-memory' : '在 Work 本地 Agent 中选择对应配置；不适用于普通 Chat。',
+    '会话内用 /memory-refresh 刷新。回到「查看记忆」和「处理未完成任务」检查结果。',
+    '停用请在助手 /hooks 与 MCP 设置中操作，再移除自己安装的配置与 Skill；记忆文件保留。',
+    'Node、安装位置、配置目录或项目选择改变后，请生成新的接入文件。',
+  ].join('\n'), '文件已生成 · 还需在助手中启用');
 }
 
 async function generateMcp(config: CommonMemoryConfig): Promise<void> {
   const options = await launchMode();
   options.workspaces = await chooseWorkspaces(config);
   const body = renderMcpConfig(config, options);
-  await viewText('MCP configuration preview (separate init/read processes)', body);
-  if (await confirm('Export this configuration to a new file?')) {
-    const output = expandPath(await text('New TOML file (parent directory must exist)'));
+  await viewText('MCP 配置预览（读取与初始化为独立进程）', body);
+  if (await confirm('导出到一个新文件？')) {
+    const output = expandPath(await text('新 TOML 文件路径（父目录必须存在）'));
     checkConfigUnchanged(config);
     writeFileSync(output, body, { flag: 'wx', mode: 0o600 });
-    clack.log.success(`Exported to ${terminalText(output)}; not installed in the host.`);
+    clack.log.success(`已导出到 ${terminalText(output)}；尚未安装到助手。`);
   }
-  note('Merge only the desired blocks into the actual MCP host configuration. Read and Init stay separate; Codex should disable the Init server. Restart the host and inspect its tool list. Disable/remove through host MCP settings; do not delete the store. Relay remains an explicit trusted-host opt-in via the automation CLI, never enabled by these templates.', 'MCP activation / removal');
+  note('将需要的配置块合并到助手的 MCP 设置，读取与初始化保持分离；Codex 应禁用 Init。\n重启助手并检查工具列表。停用请用助手的 MCP 设置，不要删除记忆存储。\n这些模板不会启用 Relay；可信宿主需要通过 CLI 单独配置。', '下一步 · 在助手中启用');
 }
 
 async function piIntegration(): Promise<void> {
-  note(`Package: ${packageRoot}\nPi 0.84.4 extension; run Pi in the same POSIX/WSL environment.\nUse the same COMMON_MEMORY_HOME. Installation does not grant memory scopes.\nNative /memory-refresh and /memory-flush remain in the active Pi session.\nPi settings and trust remain owned by Pi; no Common Memory host-settings editor is added.`, 'Pi management');
-  const action = await menu('Pi · official package manager', [
-    { value: 'list', label: 'Inspect installed packages (pi list)' },
-    { value: 'install', label: 'Register this local package for the current user' },
-    { value: 'config', label: 'Enable / disable resources in Pi’s own UI' },
-    { value: 'remove', label: 'Remove this package registration', hint: 'Does not remove Common Memory data' },
-    { value: 'back', label: 'Back' },
+  note('在同一终端环境中使用 Pi 0.84.4，配置目录需保持一致。\n安装不会自动授权记忆。启停与信任交给 Pi 自己管理。', '连接 Pi');
+  const action = await menu('想对 Pi 做什么？', [
+    { value: 'install', label: '安装 Common Memory 扩展', hint: '为当前用户登记本地包' },
+    { value: 'list', label: '查看已安装扩展', hint: 'pi list' },
+    { value: 'config', label: '启用 / 停用扩展', hint: '打开 Pi 自己的配置界面' },
+    { value: 'remove', label: '移除扩展', hint: '不会删除记忆' },
+    { value: 'back', label: '返回' },
   ]);
   if (action === 'back') return;
-  if (action === 'install' && !existsSync(join(packageRoot, 'dist/pi-extension/index.js'))) throw new Error('Build the package before registering the Pi extension.');
+  if (action === 'install' && !existsSync(join(packageRoot, 'dist/pi-extension/index.js'))) throw new Error('未找到构建产物。请先构建 Common Memory，再安装扩展。');
   const args = ['install', 'remove'].includes(action) ? [action, packageRoot] : [action];
-  note(`pi ${args.map(shellQuote).join(' ')}\nCOMMON_MEMORY_HOME=${configDirectory()}\nUses the pi executable on PATH. Install/remove use user settings; Pi may request its own project trust.`, 'Native host handoff');
-  if (!await confirm('Run this Pi command?')) return;
+  note(`pi ${args.map(shellQuote).join(' ')}\nCOMMON_MEMORY_HOME=${configDirectory()}\n使用 PATH 中的 Pi；安装和移除影响用户配置。Pi 可能要求项目信任。`, '即将交给 Pi 执行');
+  if (!await confirm('执行以上 Pi 命令？')) return;
   const code = await runInteractiveProcess('pi', args, { ...process.env, COMMON_MEMORY_HOME: configDirectory() });
-  if (code !== 0) throw new Error(`Pi command failed or was cancelled (exit ${code}); host state was not verified.`);
-  clack.log.success('Pi command finished. Restart Pi after changes; this does not prove a live capture or memory read.');
+  if (code !== 0) throw new Error(`Pi 命令未完成或已取消（退出码 ${code}），请在 Pi 中检查状态。`);
+  clack.log.success('Pi 命令已结束。修改后请重启 Pi，再检查实际的捕获与记忆读取。');
+  note('在 Pi 会话中用 /memory-refresh 刷新记忆，/memory-flush 处理队列。', '下一步');
 }
 
 export async function integrationsScreen(): Promise<void> {
   for (;;) {
     const config = loadConfig();
-    if (!config) throw new Error('Configure Common Memory first');
-    const action = await menu('Common Memory / Integrations', [
-      { value: 'readiness', label: 'Local readiness and authority' },
-      { value: 'pi', label: 'Pi · manage extension via Pi' },
-      { value: 'codex', label: 'Codex · generate session-hook + read bundle' },
-      { value: 'work', label: 'ChatGPT Work · generate session + read/init bundle' },
-      { value: 'mcp', label: 'MCP-only · preview/export stdio configurations' },
-      { value: 'back', label: 'Back' },
+    if (!config) throw new Error('请先完成模型设置。');
+    const action = await menu('要连接哪个 AI 助手？', [
+      { value: 'pi', label: 'Pi', hint: '安装、启停或移除扩展' },
+      { value: 'codex', label: 'Codex', hint: '生成会话与记忆读取配置' },
+      { value: 'work', label: 'ChatGPT Work', hint: '生成本地 Agent 接入文件' },
+      { value: 'mcp', label: '其他 MCP 助手', hint: '预览、导出 stdio 配置' },
+      { value: 'readiness', label: '检查本机接入条件', hint: '不检测助手是否已连接' },
+      { value: 'back', label: '返回' },
     ]);
     if (action === 'back') return;
     await attempt(async () => {
-      if (action === 'readiness') note(integrationReadiness(config), 'Local readiness — not host detection');
+      if (action === 'readiness') note(integrationReadiness(config), '本机接入条件');
       else if (action === 'pi') await piIntegration();
       else {
-        note(integrationReadiness(config), 'Integration prerequisites');
         if (action === 'mcp') await generateMcp(config);
         else await generateHost(config, action === 'codex' ? 'codex' : 'chatgpt-work');
       }

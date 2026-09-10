@@ -10,7 +10,7 @@ Common Memory 把长期内容保存在本机的 Markdown 中，通过 Pi 扩展�
 会话接入和本地 MCP，让助手读取获授权的个人偏好、背景与项目上下文。模型提出维护决定，
 本地 Core 校验后写入；你可以直接查看和编辑文件。
 
-**v0.2** · npm 包名 `common-memory-core` · 命令 `common-memory` · MIT 许可证。
+**v0.2.1** · npm 包名 `common-memory-core` · 命令 `common-memory` · MIT 许可证。
 这是早期版本；安装可用不等于所有真实宿主和模型行为均已验证，具体边界见下文。
 
 ## 一行安装
@@ -18,7 +18,7 @@ Common Memory 把长期内容保存在本机的 Markdown 中，通过 Pi 扩展�
 在 **Linux、macOS 或 Windows 的 WSL 终端**中执行（需已安装 **Node.js 24.x**，包含 npm）：
 
 ```sh
-npm install -g common-memory-core@0.2.0
+npm install -g common-memory-core@0.2.1
 ```
 
 安装后运行 `common-memory` 打开交互工作台。无需克隆仓库、手动构建或先启动 Pi。
@@ -27,19 +27,23 @@ npm install -g common-memory-core@0.2.0
   安装，或用现有版本管理器切换。上面的一行命令安装 Common Memory，**不会安装 Node 或 WSL**。
 - Windows 用户在 WSL 内安装，不要在原生 PowerShell 中安装另一份 Core。
 - 如遇全局安装权限错误，使用用户级 Node 版本管理器；不建议 `sudo npm install`。
-- 不想全局安装？可用 `npx --yes common-memory-core@0.2.0` 打开工作台。
+- 不想全局安装？可用 `npx --yes common-memory-core@0.2.1` 打开工作台。
 - 本版仍有必需的 Pi **0.84.4** peer 依赖：仅使用 CLI/MCP 也会安装该依赖树，但不会自动启动或配置 Pi。
 
 ## 第一次使用
 
-1. **配置模型**：运行 `common-memory` → 配置 OpenAI-compatible API 地址、模型和凭据。
-   支持 Responses 和 Chat Completions，两者显式选择，不会静默切换。
-2. **确认权限**：选择可以披露和写入的范围。项目注册不自动授权；Markdown 导入、其他
-   Agent 的理解、assistant/tool 上下文需要分别授权。
-3. **连接助手**：在 Integrations 中管理 Pi 资源，或预览、导出 Codex / Work / MCP 配置。
-   在实际宿主中合并配置并完成 Hook 信任；**生成配置不等于已经连接**。
-4. **检查结果**：在 Memory 中浏览，或运行 `common-memory show`。有待处理工作时查看
-   Maintenance / `common-memory status`，不要把“已排队”当成“已记住”。
+1. **开始设置**：运行 `common-memory`，填写 API 地址、模型，选择 Responses 或
+   Chat Completions。密钥可稍后填写；保存后可继续连接助手、测试连接或直接返回首页。
+2. **确认权限**：在「项目与权限」中分别选择能读取、更新的记忆和可发送给模型的材料。
+   添加项目不自动授权；导入 Markdown 时，如未授权会引导你先设置，不会自行开启。
+3. **连接助手**：选择「连接 / 管理 AI 助手」，管理 Pi 扩展或生成 Codex / Work / MCP
+   接入文件。可按需预览技术内容；生成后按提示在实际助手中安装并信任 Hook。
+   **生成配置不等于已经连接**。
+4. **检查结果**：首页直接「查看记忆」或「导入 Markdown」。遇到问题可打开
+   「处理未完成任务」；改密钥、代理或测试连接在「模型与设置」，不用重新跑完整设置。
+
+上下键选择，Enter 确认，多选用空格，Esc 返回（首页退出）。取消后续步骤不会撤回
+已保存的配置或已排队材料。高级设置按选项、数字逐项修改，不需要编辑 JSON。
 
 默认配置位于 `~/.common-memory/config.json`，API Key 保存在同目录的私有 `.env` 中；
 `COMMON_MEMORY_HOME` 可指定其他配置目录。默认长期记忆位于
