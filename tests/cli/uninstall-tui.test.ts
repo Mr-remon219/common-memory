@@ -1,3 +1,4 @@
+import { stubInstalledBuild } from '../helpers/installation-build.js';
 import * as clack from '@clack/prompts';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -14,7 +15,7 @@ vi.mock('../../src/cli/uninstall.js', () => ({ npmInstallation: vi.fn(), uninsta
 let home: string;
 const originalIn = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY'), originalOut = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
 beforeEach(() => {
-  vi.resetAllMocks(); home = mkdtempSync(join(tmpdir(), 'cm-uninstall-tui-')); vi.stubEnv('COMMON_MEMORY_HOME', home);
+  vi.resetAllMocks(); stubInstalledBuild(); home = mkdtempSync(join(tmpdir(), 'cm-uninstall-tui-')); vi.stubEnv('COMMON_MEMORY_HOME', home);
   Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: true }); Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
   const config = defaultConfig(); config.remote.model = 'synthetic'; saveConfig(config);
   vi.mocked(npmInstallation).mockReturnValue({ node: process.execPath, npm: '/fake/npm', prefix: '/fake', packageRoot: '/fake/package' });

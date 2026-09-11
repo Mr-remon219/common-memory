@@ -1,3 +1,4 @@
+import { stubInstalledBuild } from '../helpers/installation-build.js';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,6 +10,7 @@ import { RuntimeStore } from '../../src/v2/runtime.js';
 
 let root: string, home: string, config: CommonMemoryConfig;
 beforeEach(() => {
+  stubInstalledBuild();
   root = realpathSync(mkdtempSync(join(tmpdir(), 'cm-uninstall-'))); home = join(root, 'common-memory');
   vi.stubEnv('HOME', root); vi.stubEnv('COMMON_MEMORY_HOME', home); vi.stubEnv('PATH', ''); vi.stubEnv('WSL_DISTRO_NAME', ''); vi.stubEnv('CODEX_HOME', join(root, 'codex')); vi.stubEnv('PI_CODING_AGENT_DIR', join(root, 'pi'));
   config = defaultConfig(); config.remote.model = 'synthetic'; config.remote.apiKeyEnv = 'TEST_KEY'; saveConfig(config); config = loadConfig()!;

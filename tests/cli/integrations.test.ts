@@ -1,3 +1,4 @@
+import { stubInstalledBuild } from '../helpers/installation-build.js';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,7 +9,7 @@ import { installationTransaction, readInstallationFile, writeInstallationFile } 
 import { scanIntegrationTargets, type IntegrationTarget } from '../../src/cli/integration-targets.js';
 
 let root: string, home: string, dataRoot: string;
-beforeEach(() => { root = realpathSync(mkdtempSync(join(tmpdir(), 'cm-integrations-'))); home = join(root, 'common-memory'); dataRoot = join(home, 'data'); vi.stubEnv('COMMON_MEMORY_HOME', home); });
+beforeEach(() => { root = realpathSync(mkdtempSync(join(tmpdir(), 'cm-integrations-'))); home = join(root, 'common-memory'); dataRoot = join(home, 'data'); vi.stubEnv('COMMON_MEMORY_HOME', home); stubInstalledBuild(); });
 afterEach(() => { vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }); });
 function target(id: 'codex' | 'chatgpt' | 'pi', hooks = id !== 'chatgpt'): IntegrationTarget { return { id, name: id, root: join(root, id === 'pi' ? 'pi' : 'codex'), mode: 'posix', hooks }; }
 const install = (targets: IntegrationTarget[]) => installIntegrations(targets, dataRoot, { home });
@@ -56,8 +57,14 @@ it('read-only clients do not get unsupported hooks or import authority', () => {
   expect(existsSync(join(codex.root, 'hooks.json'))).toBe(false);
   expect(readFileSync(join(codex.root, 'config.toml'), 'utf8')).not.toContain('memory_init');
 });
-it('preflights all selected clients before committing any of them', () => {
-  const pi = target('pi'), codex = target('codex'); mkdirSync(codex.root);
+it('preflights build availability and all selected clients before committing any of them', () => {
+  const pi = target('pi'), codex = target('codex');
+  stubInstalledBuild(false);
+  expect(() => install([pi, codex])).toThrow('缺少构建产物');
+  expect(readInstallationState()).toBeNull();
+  expect(existsSync(join(pi.root, 'settings.json'))).toBe(false);
+  stubInstalledBuild();
+  mkdirSync(codex.root);
   writeFileSync(join(codex.root, 'config.toml'), '[mcp_servers.common_memory]\ncommand = "user-owned"\n');
   expect(() => install([pi, codex])).toThrow('未归属');
   expect(existsSync(join(pi.root, 'settings.json'))).toBe(false); expect(existsSync(join(home, 'integrations/pi/common-memory.js'))).toBe(false);

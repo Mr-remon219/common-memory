@@ -38,6 +38,8 @@
 - Remove scripted semantic-answer fixtures and fixture-count checks; keep focused
   ablation report contracts and reduce redundant CLI startups. The full gate retains
   all safety boundaries and passes 508 tests; real-model quality remains independent.
+- Make installation/setup unit fixtures independent of pre-existing build artifacts
+  and bound scripted prompt retries, so clean-checkout CI fails promptly on regressions.
 
 ### Boundaries
 

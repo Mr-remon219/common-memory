@@ -1,3 +1,4 @@
+import { stubInstalledBuild } from '../helpers/installation-build.js';
 import * as clack from '@clack/prompts';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -19,7 +20,7 @@ vi.mock('../../src/cli/integration-targets.js', () => ({ scanIntegrationTargets:
 let home: string;
 const originalIn = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY'), originalOut = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
 beforeEach(() => {
-  vi.resetAllMocks(); home = mkdtempSync(join(tmpdir(), 'cm-setup-')); vi.stubEnv('COMMON_MEMORY_HOME', home);
+  vi.resetAllMocks(); stubInstalledBuild(); home = mkdtempSync(join(tmpdir(), 'cm-setup-')); vi.stubEnv('COMMON_MEMORY_HOME', home);
   Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: true }); Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
   vi.mocked(discoverModels).mockResolvedValue([{ id: 'model-a', api: 'chat_completions' }, { id: 'model-b', api: 'chat_completions' }]);
   vi.mocked(clack.password).mockResolvedValue('synthetic-private-key'); vi.mocked(scanIntegrationTargets).mockReturnValue([]);
@@ -86,7 +87,8 @@ it('does not save a model or key over a concurrently changed config', async () =
 it('runs the entire flow, uses Space only for integrations, writes real client config, then exits', async () => {
   choices('deepseek', 'model-a');
   vi.mocked(scanIntegrationTargets).mockReturnValue([{ id: 'pi', name: 'Pi', root: join(home, 'pi'), mode: 'posix', hooks: true }]);
-  vi.mocked(clack.multiselect).mockResolvedValue(['pi']);
+  // A regression must fail promptly rather than retrying a resolved prompt forever.
+  vi.mocked(clack.multiselect).mockResolvedValueOnce(['pi']).mockRejectedValue(new Error('Unexpected integration prompt retry'));
   await runSetupFlow();
   expect(discoverModels).toHaveBeenCalledTimes(1); expect(clack.multiselect).toHaveBeenCalledTimes(1); expect(clack.confirm).not.toHaveBeenCalled();
   expect(readFileSync(join(home, 'pi/settings.json'), 'utf8')).toContain('common-memory.js');
