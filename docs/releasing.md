@@ -2,14 +2,14 @@
 
 ## 当前状态
 
-v0.2 使用所有者确认的 MIT 许可证。npm 版本是 **0.2.1**，GitHub tag 是 **v0.2.1**，
+v0.3 使用所有者确认的 MIT 许可证。npm 版本是 **0.3.0**，GitHub tag 是 **v0.3.0**，
 包名 `common-memory-core`，可执行命令 `common-memory`，默认发布标签 `latest`。
 这是面向早期使用者的版本，不声称已经完成全部真实客户端验收。
 
 Linux、macOS 和 WSL 在 Node 24 环境使用同一行安装命令：
 
 ```sh
-npm install -g common-memory-core@0.2.1
+npm install -g common-memory-core@0.3.0
 ```
 
 安装 Node / WSL 是前置要求，不包含在这个 npm 命令中。详细说明见 [README](../README.md)。
@@ -65,10 +65,15 @@ tarball 测试。macOS 测试临时目录采用真实路径，避免系统 `/var
 `prepublishOnly` 依次执行发布锁检查、完整 gate 和隔离消费者检查；`prepack` 构建生产产物。
 不要使用 `npm publish --ignore-scripts` 绕过检查。验证失败时保留原输出并修复原因。
 
-## 首次 npm 发布（维护者手动执行）
+## npm 发布（维护者执行）
 
-完成上述检查、提交并推送经过验证的代码后，再进行账号认证和发布。README 先写好
-正式版本的安装说明；发布完成后使用 registry 返回的产物验证，不用工作树构建冒充已发布包。
+完成上述本地检查后，将候选提交推送到获授权的发布候选分支，等待该精确 SHA 的
+`core-ci` 全平台通过，再快进正式分支并发布 npm。Actions 不能验证尚未推送的本地提交；
+旧版 main 的通过记录不能代替新候选版本，若不允许推送候选分支则停在本地验证阶段。
+任何修复都要重新验证修复后的 SHA，不移动已发布 tag。
+
+README 先写好正式版本的安装说明；发布完成后使用 registry 返回的产物验证，不用
+工作树构建冒充已发布包。
 
 ```sh
 npm login
@@ -83,14 +88,14 @@ Release/tag 都要由维护者在对应服务上完成。本文和本地验证�
 发布后从一个新目录安装并核对 registry 中的版本：
 
 ```sh
-npm view common-memory-core@0.2.1 version dist.integrity
-npm install -g common-memory-core@0.2.1
+npm view common-memory-core@0.3.0 version dist.integrity
+npm install -g common-memory-core@0.3.0
 common-memory --version
 common-memory --help
 npm run test:published
 ```
 
-npm 发布成功并完成本地 registry 检查后，创建 GitHub Release `v0.2.1`。它会触发
+npm 发布成功并完成本地 registry 检查后，创建 GitHub Release `v0.3.0`。它会触发
 `published-package` 工作流：Ubuntu / macOS 实际执行上述一行全局安装，核对 CLI 版本，
 然后从 npm 下载 tarball 验证类型导出、Writer 提交/重启、Pi 模块和无 Key 的只读 MCP。
 也可通过 Actions 的 Run workflow 输入精确版本手动重跑。这个工作流**不发布包**，只有

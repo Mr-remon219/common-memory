@@ -79,20 +79,17 @@ it('imports a Markdown file through the unchanged Writer, reports retention, ded
   const changed = await cli(['import', file, '--author', 'user'], env);
   expect(changed.code, changed.stdout + changed.stderr).toBe(0); expect(changed.stdout).toContain('accepted: queued as md-'); expect(seen).toHaveLength(2);
   expect(readFileSync(join(config.dataRoot, 'memory/profile.md'), 'utf8')).toMatch(/Imported notes.md part 1[\s\S]*Imported notes.md part 1/);
-  // Same content, different declared author: still the same material, reported as a duplicate, not re-processed.
-  const relabelled = await cli(['import', file, '--author', 'agent', '--label', 'old notes'], env);
-  expect(relabelled.code).toBe(0); expect(relabelled.stdout).toContain('duplicate:'); expect(seen).toHaveLength(2);
+  // Name/author/label deduplication variants are covered at admitDocumentImport,
+  // while the subprocess replay above proves identity survives CLI restarts.
 }, 30000);
 
-it('rejects empty, oversized, non-Markdown, policy-violating and unauthorized imports without queuing anything', async () => {
-  const { url } = await provider();
+it('maps parser, preprocessing and authorization refusals to CLI failure without storage or network effects', async () => {
+  const { url, seen } = await provider();
   const { env, config, home } = fixture(url);
-  const cases: [string, string | Buffer, string[], string][] = [
-    ['empty.md', '\n\n', [], 'EMPTY_DOCUMENT'],
-    ['big.md', 'x'.repeat(262145), [], 'DOCUMENT_TOO_LARGE'],
-    ['notes.txt', '# hi\n', [], 'UNSUPPORTED_FILE_TYPE'],
+  // One representative per command failure path. The file-type/encoding/size
+  // matrix belongs to tests/v2/document-import.test.ts, not eight CLI boots.
+  const cases: [string, string, string[], string][] = [
     ['secret.md', '# Env\n\npassword: hunter2hunter2\n', [], 'SENSITIVE_CONTENT_REJECTED part 1/1'],
-    ['bad.md', Buffer.from([0xc3, 0x28]), [], 'INVALID_ENCODING'],
     ['ok.md', '# ok\n\nfine\n', ['--author', 'nobody'], '--author must be one of'],
     ['ok.md', '# ok\n\nfine\n', ['--workspace', '/definitely/not/registered'], 'UNREGISTERED_WORKSPACE'],
   ];
@@ -101,13 +98,13 @@ it('rejects empty, oversized, non-Markdown, policy-violating and unauthorized im
     const result = await cli(['import', file, ...extra], env);
     expect(result.code, name).toBe(1); expect(result.stderr, name).toContain(message);
   }
-  expect((await cli(['import', join(home, 'missing.md')], env)).stderr).toContain('FILE_NOT_FOUND');
   expect(existsSync(join(config.dataRoot, 'runtime.sqlite'))).toBe(false);
   // Provenance not authorized: the Writer is never even created.
   const disabled = fixture(url, ['user_explicit']);
   writeFileSync(join(disabled.home, 'n.md'), markdown);
   const off = await cli(['import', join(disabled.home, 'n.md')], disabled.env);
   expect(off.code).toBe(1); expect(off.stderr).toContain('IMPORT_DISABLED'); expect(existsSync(join(disabled.config.dataRoot, 'runtime.sqlite'))).toBe(false);
+  expect(seen).toEqual([]);
 }, 30000);
 
 it('a multi-part import reports partial failure honestly and resumes on re-import; import-only configs need no user_explicit', async () => {

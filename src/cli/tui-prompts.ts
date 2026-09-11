@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 export class UserCancelled extends Error {
-  constructor() { super('Cancelled'); this.name = 'UserCancelled'; }
+  constructor(readonly exit = false) { super('Cancelled'); this.name = 'UserCancelled'; }
 }
 export function unwrap<T>(value: T | symbol): T {
   if (clack.isCancel(value)) throw new UserCancelled();

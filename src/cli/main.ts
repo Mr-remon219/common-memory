@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { loadConfig } from "../config/config.js";
 import { runFlush } from "./flush-command.js";
 import { listProjects, registerProject, removeProject, retryJob, runtimeStatus, showMemory } from './operations.js';
-import { printStatus, runSetupWizard, runNetworkWizard, runTui, UserCancelled } from "./tui.js";
+import { printStatus, runNetworkWizard, runShowTui, runTui, UserCancelled } from "./tui.js";
 
 async function main(): Promise<void> {
   const [command,...args]=process.argv.slice(2);
@@ -11,7 +11,24 @@ async function main(): Promise<void> {
     console.log((JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as { version: string }).version);
     return;
   }
-  if(command==="--help" || command==="-h") {console.log("Common Memory V2\n\ncommon-memory                         Interactive workbench (TTY only)\n  Overview / Memory / Projects & permissions / Integrations / Maintenance / Settings\n\nScriptable commands and direct wizard shortcuts:\ncommon-memory [config|status|flush|session-drain]\ncommon-memory config --network\ncommon-memory network-test\ncommon-memory show [--workspace <absolute-path>]\ncommon-memory import <file.md> [--workspace <absolute-path>] [--author user|agent|third_party|mixed|unknown] [--label <text>] [--no-wait]\ncommon-memory project register <root> <name>\ncommon-memory project list\ncommon-memory project remove <id>\ncommon-memory retry <job-id>\ncommon-memory mcp --client-id <id> [--capability relay|init|read]... [--workspace <absolute-path>]... [--global] [--accept-client-reported-user-turns]\ncommon-memory codex-hook --home <absolute-path>\ncommon-memory codex-config [--mode posix|windows-wsl --output <new-directory>] [--workspace <absolute-path>]...\ncommon-memory work-hook --home <absolute-path>\ncommon-memory work-config --mode posix|windows-wsl --output <absolute-directory> [--distro <name>] [--user <name>] [--bridge-path <Windows-path>]\ncommon-memory session-refresh --home <absolute-path> [--client codex|chatgpt-work]\ncommon-memory mcp-config [--wsl] [--distro <name>] [--user <name>] [--workspace <absolute-path>]...");return;}
+  if(command==='--help' || command==='-h') {
+    console.log(`Common Memory
+
+common-memory              Setup / memory management
+common-memory show         Overview / View Memory / Modify Memory
+common-memory uninstall    Remove integrations / remove application
+
+↑↓ Navigate · Enter Select · Esc Back
+Space is used only for selecting integrations.
+
+common-memory config       Reopen Model Configuration
+common-memory show --plain  Plain authorized memory output
+common-memory --version    Installed version
+
+Existing automation and protocol commands remain supported; see docs/usage.md.`);
+    return;
+  }
+  if(command==='uninstall' && !args.length){await (await import('./uninstall-tui.js')).runUninstallTui();return;}
   if(command==='work-config'){(await import('./work-config.js')).runWorkConfig(args);return;}
   if(command==='work-hook'){await (await import('./codex-hook.js')).runCodexHook(args,'chatgpt-work');return;}
   if(command==='session-refresh'){(await import('./codex-hook.js')).runSessionRefresh(args);return;}
@@ -34,19 +51,20 @@ async function main(): Promise<void> {
     process.stdout.write(renderMcpConfig(config,parseMcpConfigArgs(args)));return;
   }
   if(command==="show") {
-    // Same read path and authorization as MCP memory_read and the Pi extension: what consumers see.
+    // TTY management and plain automation share consumer read authorization.
     const config=loadConfig();if(!config)throw new Error("Run common-memory config first");
-    if(args.length && !(args.length===2 && args[0]==="--workspace"))throw new TypeError("Unknown command or unexpected arguments; use --help");
-    showMemory(config,args[1]);
+    if(args.length && !(args.length===1 && args[0]==='--plain') && !(args.length===2 && args[0]==="--workspace"))throw new TypeError("Unknown command or unexpected arguments; use --help");
+    if(!args.length && process.stdin.isTTY && process.stdout.isTTY) await runShowTui();
+    else showMemory(config,args[0]==='--workspace' ? args[1] : undefined);
     return;
   }
   if(command==="network-test" && !args.length) { const config=loadConfig();if(!config)throw new Error("Run common-memory config first");process.exitCode=await (await import("./network-test.js")).runNetworkTest(config);return; }
   if(command==="config" && args.length===1 && args[0]==="--network") {await runNetworkWizard();return;}
   if(command===undefined) {
-    if(!process.stdin.isTTY || !process.stdout.isTTY) {console.log('Common Memory\n\nRun common-memory in an interactive terminal to open the workbench.\nUse common-memory --help for scriptable commands; no prompts were opened.');return;}
+    if(!process.stdin.isTTY || !process.stdout.isTTY) {console.log('Common Memory\n\nRun common-memory in an interactive terminal to configure it, or common-memory show to manage memory.\nUse common-memory --help for scriptable commands; no prompts were opened.');return;}
     await runTui();return;
   }
-  if(command==="config" && !args.length) {await runSetupWizard();return;}
+  if(command==="config" && !args.length) {await (await import('./model-configuration.js')).configureModel();return;}
   if(command==="status" && !args.length) {printStatus();const config=loadConfig();if(config){const status=runtimeStatus(config);if(status)console.log(JSON.stringify(status,null,2));}return;}
   const config=loadConfig();if(!config)throw new Error("Run common-memory config first");
   if(command==="flush" && !args.length) {process.exitCode=await runFlush(config);return;}

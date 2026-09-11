@@ -15,9 +15,9 @@ export function createConfiguredMemoryModel(
   overrides: ConfiguredModelOverrides = {},
 ): OpenAIResponsesMemoryModel | OpenAIChatMemoryModel {
   config = validateConfig(config);
-  if (!config.remote.proxy && env === process.env) loadLocalEnv();
+  if (!config.remote.proxy && !config.remote.apiKeySource && env === process.env) loadLocalEnv();
   const privateEnv = env === process.env || env.COMMON_MEMORY_HOME ? readPrivateEnv(envFilePath(env)) : {};
-  const apiKey = localApiKey(config.remote.apiKeyEnv, env, privateEnv);
+  const apiKey = localApiKey(config.remote.apiKeyEnv, config.remote.apiKeySource === 'private-env' ? {} : env, privateEnv);
   const route = resolveRoute(config.remote.baseUrl,config.remote.proxy,env,privateEnv);
   const caFile = config.remote.caFileEnv === undefined ? undefined : networkSecret(config.remote.caFileEnv,env,privateEnv);
   if (config.remote.caFileEnv !== undefined && !caFile?.trim()) throw networkConfigError("ca_config_invalid");

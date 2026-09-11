@@ -52,22 +52,9 @@ it('requires authorized document and section handles', () => {
   expect(() => validateDecision(body,'request',documents,evidence)).toThrow('INVALID_TARGET_REFERENCE');
 });
 
-it('explicit string types preserve the original const/enum acceptance across all decision kinds',async()=>{
- const {Ajv2020}=await import('ajv/dist/2020.js');const {maintenanceSchema}=await import('../../src/v2/contract.js');
- const original=JSON.parse(JSON.stringify(maintenanceSchema));
- function removeRedundantTypes(node:unknown):void{
-  if(!node||typeof node!=='object')return;
-  const value=node as Record<string,unknown>;
-  if(Object.hasOwn(value,'const')||Object.hasOwn(value,'enum'))delete value.type;
-  for(const child of Object.values(value))removeRedundantTypes(child);
- }
- removeRedundantTypes(original);
- const ajv=new Ajv2020({strict:false}),before=ajv.compile(original),after=ajv.compile(maintenanceSchema);
- for(const kind of ['retain','forget','maintain','ignore']){
-  const valid=response(kind);expect(before(valid)).toBe(true);expect(after(valid)).toBe(true);
-  for(const value of [null,0,true,{},[],'unsupported'])for(const field of ['kind','applicability',...(kind==='retain'?['admission','lifetime']:[])]){
-   const invalid=structuredClone(valid);Object.assign(invalid.decisions[0]!,{[field]:value});
-   expect(before(invalid)).toBe(false);expect(after(invalid)).toBe(false);
-  }
+it('rejects invalid admission and lifetime instead of silently normalizing model output',()=>{
+ for(const field of ['admission','lifetime']) for(const value of [null,0,true,{},[],'unsupported']) {
+  const invalid=response();Object.assign(invalid.decisions[0]!,{[field]:value});
+  expect(()=>validateDecision(invalid,'request',documents,evidence),`${field}=${JSON.stringify(value)}`).toThrow('INVALID_DECISION');
  }
 });

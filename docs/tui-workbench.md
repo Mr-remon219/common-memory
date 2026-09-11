@@ -1,105 +1,135 @@
-# Common Memory 交互工作台
+# 极简 TUI：Setup、Show、Uninstall
 
-`common-memory` 在交互终端打开中文任务菜单。v0.2.1 参考本机 search-boost 的
-`lib/installer/tui.mjs`、`index.mjs`、`keys-wizard.mjs`，以及 CodeGraph v1.6.0 的
-`dist/installer/index.js`：首页先问用户要做什么；按当前任务询问必要参数；完成后
-指出下一步。不照搬它们的授权默认值或宿主配置写入方式。
+本文描述 v0.3.0 的 Setup、管理和卸载流程。
 
-沿用已安装的 Clack select、multiselect、text、password、confirm 和分页查看，
-没有新增界面依赖、全屏渲染框架、后台服务或第二份业务实现。
-
-## 入口与操作路径
-
-```text
-未配置：开始设置 → API 地址、模型、接口、可选密钥 → 确认保存
-                   └─ 连接助手 / 测试模型 / 调整权限 / 返回首页
-
-首页：想做什么？
-  ├─ 查看记忆 → 个人 / 已登记项目 → 文档、文件位置
-  ├─ 导入 Markdown → 必要时引导授权 → 文件、范围、来源、处理方式 → 确认
-  ├─ 连接 / 管理 AI 助手
-  │   ├─ Pi → 交给 Pi 自己安装、查看、启停、移除
-  │   ├─ Codex / Work → 运行环境、项目、新目录 → 摘要、可选预览 → 生成
-  │   ├─ 其他 MCP 助手 → 环境、项目 → 配置预览、可选导出
-  │   └─ 检查本机接入条件（不检测助手是否已连接）
-  ├─ 项目与权限 → 添加项目、项目详情、移除登记、独立授权
-  ├─ 模型与设置
-  │   ├─ 更换模型 / API 地址
-  │   ├─ 单独设置 / 更换 API Key，或更换凭据环境变量
-  │   ├─ 代理 / 网络 / CA
-  │   ├─ 测试模型连接（确认后发送合成请求，不含记忆）
-  │   ├─ 权限
-  │   └─ 高级设置 → 输出、思考、处理节奏、容量、存储目录
-  ├─ 处理未完成任务 → 整理队列、失败诊断 / 重试、恢复交接、会话摘要
-  └─ 查看运行状态 → 本地进度、刷新、配置与存储路径详情
+```sh
+common-memory             # 首次 Setup；已配置则进入管理
+common-memory show        # Overview / View Memory / Modify Memory
+common-memory uninstall   # 移除接入或完整卸载
 ```
 
-首次设置不再要求填写环境变量名和存储路径，沿用默认值；后续分别在密钥和高级
-设置中修改。保存后提供可选的后续步骤，不自动调用模型或启动助手。默认只授权
-个人记忆和用户表达，其他材料与项目仍需明确授权。
+单选使用 ↑↓ / Enter，Esc 返回上一步；首页 Esc 退出。只有接入安装、移除的真正多选使用 Space。
+没有 Dashboard、Settings、账单、用量、Markdown 编辑器或 Delete Memory 页面。
 
-高级设置不再要求编辑 JSON。每次修改一项，显示当前值与新值，确认后调用原配置
-验证器保存。输出长度可留空恢复接口默认；思考选项按 Responses / Chat 区分，
-切换互斥参数时清除旧项；会话暂存可恢复内置默认值。其他配置及私有秘密保持不变。
+## 首次 Setup
 
-## 导航与结果反馈
+```text
+Model Configuration
+  Provider → API Key → 实时模型列表 → Enter 保存
+Integration Installation
+  扫描客户端 → Space 多选 → Enter 安装
+Done → 退出
+```
 
-- 上下键选择、Enter 确认、多选 Space；每个分区有明确返回选项。
-- 表单 Esc/Ctrl+C 取消当前操作；分区菜单取消回到调用它的菜单；首页取消退出。
-  高级设置的返回回到设置分区。首页记住刚才使用的入口。
-- 保存、授权、导入、模型请求、重试、导出与宿主命令均有明确确认，默认不执行。
-  取消后续步骤不撤回已经保存的设置或已经排队的材料，不承诺 Undo。
-- 首页不展开路径、队列、授权术语或多段说明；只有显式查看状态才打开已有 Runtime。
-- 空记忆说明如何开始；导入缺权限时提供打开权限表单的入口，不自动增加授权。
-  授权保存后重新读取配置，仍未允许导入时不入队。
-- 导入结果区分排队、处理完成和实际保留；失败给出检查入口，不将等待或取消当成功。
-- Codex/Work 先显示将生成什么、写到哪里；技术配置、Skill、桥接可按需分页预览，
-  不再要求逐个读完才能生成。生成后明确说明如何在实际助手中安装和启用。
+Provider 单选：
 
-## 保持的边界
+| Provider | 内置 Base URL | 请求协议 |
+| --- | --- | --- |
+| DeepSeek | `https://api.deepseek.com/v1` | Chat Completions |
+| Qwen / Alibaba Bailian | `https://dashscope.aliyuncs.com/compatible-mode/v1` | Chat Completions |
+| OpenAI | `https://api.openai.com/v1` | Responses |
+| Zhipu | `https://open.bigmodel.cn/api/paas/v4` | Chat Completions |
+| OpenCode Go | `https://opencode.ai/zen/go/v1` | 按支持的模型家族选择 |
+| Kimi | `https://api.moonshot.cn/v1` | Chat Completions |
+| Custom | 用户输入 | Chat Completions |
 
-Canonical Markdown 是事实来源；SQLite 是持久队列、租约与来源存储，不是可重建
-索引。TUI 使用 `operations.ts`、现有 import/flush/network-test、配置验证器和
-接入生成器，不增加 Core 写权限、检索、跨项目读取或宿主信任能力。
+预置项不询问 URL 或接口类型。Custom 只询问 **Base URL → API Key → Model Name**，不发现模型。
+Qwen、Kimi、Zhipu 使用上表的中国区普通 API；其他区域、Coding Plan 或 Responses-only 自定义接口
+不能假设与这些入口通用。前两类可使用兼容 Chat Completions 的 Custom 入口；其他协议仍属技术配置范围。
 
-读取使用与消费者相同的授权范围：个人记忆加所选已登记项目，与授权范围取交集。
-文档是本次读取的分页快照，重新打开「查看记忆」刷新。可以查看文件目录，在自己的
-编辑器中修改 Markdown；界面不新增写入接口。终端控制字符可见转义，原文不变。
+模型列表只在用户主动进入模型选择步骤时执行一次 `GET /models`：
 
-项目登记、允许读取/发送、允许写入、允许发送的材料类型分别处理。AI 理解和导入
-文档始终保留来源，不成为用户声明，不能单独作为遗忘用户来源内容的依据。
-更改授权不热撤销已运行客户端，需要重启。长时间表单保存前比较配置是否已变化，
-按对象内容比较，不把 JSON 键顺序变化误判为并发编辑；这不是跨文件原子事务或锁。
+- 使用本次填写的 Key；无推理探测、记忆上传、余额/账单查询、后台刷新或模型列表缓存。
+- 返回该目录中 Core 支持的文本模型；过滤媒体模型、异常标识及未支持的协议，不凭目录出现就宣称维护质量已验证。
+- OpenCode Go 的部分模型使用 Anthropic Messages；当前 Core 不支持该协议，因此不列入可选项。
+- 20 秒超时、响应上限 1 MiB；不跟随重定向、不显示服务端错误正文或 Key。
+- Esc 返回；重新进入时重新获取。失败不会保存本次 Key，可以重选 Provider 或使用 Custom。
+- 普通启动、`show`、Writer/Runtime、Pi、MCP 和后台任务均不发现模型。
+- 使用现有网络配置及环境代理，不增加网络设置步骤；错误代理环境仍会导致明确的发现失败，不暗中绕过。
 
-切换存储是选择另一份 store，不复制、合并或删除旧数据；先停写端，切换后重新生成
-受影响的接入文件。密钥和配置是独立私有文件，不承诺跨文件提交原子性。
+模型单选的 Enter 就是保存确认。配置、私有凭据和 Setup 中断标记使用可恢复的跨文件提交。
+新向导写入 `remote.preset` 与 `apiKeySource: "private-env"`，防止继承的其他 Provider Key 替换用户刚填写的 Key。
+凭据使用独立的生成标识，避免配置保存中断时旧模型读到新 Key；历史生成凭据只保存在私有 `.env`，完整卸载会清理。
+旧配置未设置 `apiKeySource` 时保留进程环境优先的原行为。
 
-Runtime 不存在时查看状态不创建它。已存在时沿用 RuntimeStore 的打开路径，可能
-执行已有的幂等 schema 初始化，不宣称数据库只读模式。记忆读取与 MCP read 仍不打开
-SQLite。会话摘要只显示 ID、计数和交接状态；任务诊断不含聊天正文或模型响应正文。
+`common-memory config` 是直接重进模型配置页的兼容快捷命令，不是 Settings 页面。
+首次流程在保存模型后中断，下次启动从接入步骤继续，不重新扫描模型。
+接入失败可重试；所有选项都取消选择则跳过，不显示虚假的“已安装接入”。
 
-Pi 的 package/settings/trust 交给 PATH 中的官方 `pi` 命令，采用参数数组、继承终端
-并固定当前 COMMON_MEMORY_HOME，不拼接 shell。不推测真实宿主是否已经捕获或读取。
-Codex/Work/MCP 只生成或导出配置，不修改宿主信任。WSL 环境不用于猜测助手运行位置。
-新 bundle 目录和导出文件不覆盖已有目标，底层写入失败可能留下部分新文件。
+## 自动接入的真实范围
 
-`/memory-refresh` 和 Pi 原生命令仍属于实际会话；TUI 不用 cwd 猜测会话身份。
-恢复交接前台运行同一 `session-drain` 入口；Ctrl+C 停止当前消费者，持久工作可恢复。
-flush 不封正在进行的会话尾批；完整十次交互或实际退出才交接。
+扫描和安装只发生于接入流程；不让用户找路径、复制 JSON 或安装插件包。
 
-自动化 CLI、stdio MCP、JSON Hook 和 detached 消费者入口不变。非 TTY 不打开菜单；
-直接配置表单明确报错。损坏配置不静默重置。CLI 技术状态输出不因中文界面改动而改变。
+| 客户端 | 自动安装内容 | 当前边界 |
+| --- | --- | --- |
+| Pi 0.84.4 | 用户级 `settings.json` 中的 Extension wrapper | 同一 Linux/macOS/WSL 环境；其他版本不假定 API 兼容 |
+| Codex CLI | 用户级只读 MCP；0.153.4 另装 Hooks 和显式 refresh skill | 其他版本仅读取，不宣称自动会话维护 |
+| ChatGPT Desktop | 本地 Work / Codex 的用户级只读 MCP | 不是普通 Chat；不自动捕获 Desktop 会话 |
 
-## 验证入口
+路径来自 PATH、标准用户目录、`CODEX_HOME` 和 `PI_CODING_AGENT_DIR`。
+macOS 检查 ChatGPT.app；WSL 通过只读 Windows Appx 探测确认桌面程序和用户目录，写入固定 WSL 启动配置。
+**不会只因存在 WSL 就推断 Windows Desktop 已安装或使用 WSL agent。**
 
-- `tests/cli/tui.test.ts`：脚本化 prompt + 临时真实配置/文件，覆盖导航、取消、首页
-  焦点、首次引导、独立密钥、导入授权、逐项高级设置、存储不迁移和接入导出。
-- `tests/cli/workbench-entries.test.ts`：非 TTY/CLI、协议错误通道、范围隔离、无正文
-  诊断、bundle 冲突/符号链接和生成结果一致性。
-- `tests/cli/network-test.test.ts`：合成连接测试、取消、清理。
-- `node scripts/verify.mjs`：Node 24.x 下类型、边界、全量测试和构建。
-- `npm run test:consumer` / `npm run test:published`：隔离安装的本地/registry 包验证。
+安装后的客户端需要重启/重新加载以读取配置。Hooks 仍须宿主信任；安装器不设置信任凭据，不改审批或沙箱策略，
+也不覆盖显式禁用 Hooks 的设置。已安装 ≠ 正在运行、已获信任或真实宿主连接验收通过。
 
-真实终端体验需另做 PTY 检查；脚本化 prompt 测试不证明终端显示效果。Linux 检查不
-替代 macOS/Windows CI、真实 Desktop UI 信任流程或真实模型质量验证。历史验证记录
-不能作为本次版本通过的证据。发布与平台边界见 [releasing.md](releasing.md)。
+安全策略：
+
+- `.installation/state.json` 记录精确文件、TOML 块和 JSON 列表项的归属。
+- 同目录的 Codex/Desktop 共享 MCP 资源；移除其中一个不破坏另一个。
+- 保留其他配置和 TOML 注释；拒绝接管手动同名项、重复 Pi 加载和已被修改的归属文件。
+- 所选客户端先全部预检，再跨文件提交；失败或中断可恢复。外部并发修改发生冲突时停下，不强行覆盖。
+- 拒绝链接、特殊文件、不安全路径以及冲突的 native/WSL 配置。
+- 未管理的旧版接入不会自动接管；这类迁移仍需另行处理，不报安装成功。
+
+## `common-memory show`
+
+主菜单只有 **Overview / View Memory / Modify Memory / Exit**。
+
+### Overview
+
+显示 Application、配置和 Memory 路径、整个数据目录的逻辑字节大小、Provider/Model、按需运行状态，以及安装记录与实际文件是否一致。
+不查询账单、不探测模型、不把 PATH 存在当成已连接，也不启动 Writer 或创建 Memory SQLite。
+这里的“已安装”仅表示归属文件存在且匹配，不等于客户端在线。
+
+### View Memory
+
+只读浏览获授权的 Profile、Preferences 和项目 Markdown，按终端高度分页并转义控制字符。
+无内容时显示空状态。项目权限不会因浏览而扩大，不提供 Markdown 编辑器。
+
+### Modify Memory
+
+输入自然语言，例如“我现在用 Linux，不再用 Windows”或“忘记我以前的工作地点”。
+当前 TUI 面向个人记忆；后端接受显式注册且获授权的项目目标，TUI 不额外增加项目设置页。
+
+提交前显示披露提醒，并检查权限、敏感信息和长度；随后作为真实 `interactive` 用户表达进入原 Writer/Core。
+不直接写 Markdown，不新建维护协议，也不扩大权限。Writer 处理完不一定产生改动，忽略不能报“修改成功”。
+等待、退避、失败、隔离和取消都有独立反馈。60 秒等待上限或提交后取消不撤回持久请求；先检查状态，勿重复提交。
+
+非 TTY 的 `show` 保持纯文本读取；`show --plain` 强制文本输出。自动化和协议命令继续保留，详见 [使用指南](usage.md)。
+
+## `common-memory uninstall`
+
+```text
+Remove integrations
+Remove Common Memory completely
+```
+
+- **Remove integrations**：Space 多选；仅移除本安装器归属的条目，保留程序、配置和全部 Memory Data。
+- **完整卸载**：确认已关闭客户端和后台任务；移除受管理接入、当前确切全局 npm 包和相关配置/密钥。
+  不停止其他软件、不卸载 Node/Pi，不猜测删除源码、npx、本地安装或其他 Node 的全局包。
+- **Memory Data 单独确认，默认保留**：保留整个 `dataRoot`，包括 Markdown、持久 SQLite、项目注册和恢复资料，
+  而非只保留 `memory/`。小型安装记录保留自定义数据位置，供重装使用，不含 API Key。
+- 明确确认删除时才删除当前数据目录；共享/重叠目录、链接、特殊文件和活动 Writer 租约会阻止删除。
+- 未管理的旧接入会阻止包删除，避免留下失效 Hooks；npm 失败时保留配置和数据，并明确报告已经移除的接入。
+- 私有 `.env` 中无关变量保留。不递归删除整个用户目录或配置 Home。
+
+## 验证范围
+
+单元/合成测试覆盖选择、取消、重复发现、无后台扫描、协议过滤、凭据来源、归属共享、冲突恢复、分离卸载和数据保护。
+打包消费测试验证实际 wrapper 加载、客户端文件安装/移除，并在隔离全局 npm prefix 中执行真实自卸载。
+Linux PTY 检查真实键盘与终端恢复；这些证据不等于 Windows/macOS Desktop UI、Hook 信任或真实 Provider 语义验收。
+
+参考官方约束：[Codex / Work 配置](https://learn.chatgpt.com/docs/config-file/config-basic)、
+[Hooks](https://learn.chatgpt.com/docs/hooks)、[OpenCode Go](https://opencode.ai/docs/go/)。
+核心权限与会话边界见 [架构](03-target-architecture.md) 和 [会话接入](session-integration.md)。

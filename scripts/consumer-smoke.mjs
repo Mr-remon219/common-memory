@@ -51,13 +51,18 @@ try {
   run([join(root, 'node_modules/typescript/bin/tsc'), '--strict', '--skipLibCheck', '--target', 'ES2024', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', '--noEmit', join(temp, 'consumer.ts')], { stdio: 'inherit' });
   run([join(temp, 'installed.mjs')], { stdio: 'inherit' });
 
+  if (!registryVersion) {
+    copyFileSync(join(root, 'tests/consumer/installation.mjs'), join(temp, 'installation.mjs'));
+    run([join(temp, 'installation.mjs')], { stdio: 'inherit' });
+  }
+
   const cli = join(pkg, 'dist/cli/main.js');
   const home = join(temp, 'read-only-home'); mkdirSync(home);
   const env = { ...process.env, COMMON_MEMORY_HOME: home, CM_CONSUMER_UNUSED_KEY: '' };
   const manifest = JSON.parse(readFileSync(join(pkg, 'package.json'), 'utf8'));
   assert.equal(manifest.license, 'MIT');
   assert.equal(run([cli, '--version'], { env }).trim(), registryVersion ?? manifest.version);
-  assert.match(run([cli, '--help'], { env }), /Interactive workbench/);
+  assert.match(run([cli, '--help'], { env }), /common-memory show/);
   assert.match(run([cli], { env }), /no prompts were opened/);
   assert.deepEqual(JSON.parse(readFileSync(join(pkg, 'package.json'), 'utf8')).bin, { 'common-memory': './dist/cli/main.js' });
   const shim = join(temp, 'node_modules/.bin/common-memory');
@@ -70,7 +75,9 @@ try {
   writeFileSync(join(home, 'config.json'), JSON.stringify(config));
   mkdirSync(join(config.dataRoot, 'memory'), { recursive: true });
   writeFileSync(join(config.dataRoot, 'memory/profile.md'), '# Profile\n\n## Package smoke\nSynthetic package reader fact.\n');
-  assert.match(run([cli, 'show'], { env }), /Synthetic package reader fact/);
+  const shown = run([cli, 'show'], { env });
+  assert.match(shown, /Synthetic package reader fact/);
+  if (!registryVersion) assert.equal(run([cli, 'show', '--plain'], { env }), shown);
   client = new Client({ name: 'installed-package-consumer', version: '1' });
   const transport = new StdioClientTransport({ command: process.execPath, args: [cli, 'mcp', '--client-id', 'package-smoke', '--capability', 'read', '--global'], env, stderr: 'pipe' });
   let stderr = ''; transport.stderr?.on('data', chunk => { stderr += chunk; });
@@ -82,6 +89,29 @@ try {
   assert.match(JSON.stringify(read.structuredContent), /Synthetic package reader fact/);
   await client.close(); client = undefined;
   assert.equal(existsSync(join(config.dataRoot, 'runtime.sqlite')), false, 'Read-only installed consumers must not open SQLite');
+  if (!registryVersion) {
+    // Exercise actual self-removal, never the caller's global prefix, home, clients or memory.
+    const prefix = join(temp, 'isolated-global'), uninstallHome = join(temp, 'uninstall-home');
+    console.log(npm(['install', '--global', '--prefix', prefix, '--ignore-scripts', '--omit=dev', '--no-audit', '--no-fund', join(temp, packed.filename)]).trim());
+    const globalRoot = join(prefix, ...(process.platform === 'win32' ? [] : ['lib']), 'node_modules/common-memory-core');
+    // URLs are resolved via pathToFileURL in the isolated process (including Windows drive paths).
+    const code = `import {pathToFileURL} from 'node:url'; import {mkdirSync,writeFileSync} from 'node:fs'; import {join} from 'node:path';
+      const root=${JSON.stringify(globalRoot)};
+      const {defaultConfig,saveConfig}=await import(pathToFileURL(join(root,'dist/config/config.js')));
+      const {installIntegrations}=await import(pathToFileURL(join(root,'dist/cli/integrations.js')));
+      const {npmInstallation,uninstallCompletely}=await import(pathToFileURL(join(root,'dist/cli/uninstall.js')));
+      const config=defaultConfig();config.remote.model='synthetic';saveConfig(config);
+      mkdirSync(join(config.dataRoot,'memory'),{recursive:true});writeFileSync(join(config.dataRoot,'memory/profile.md'),'Synthetic retained memory');
+      installIntegrations([],config.dataRoot);
+      const result=await uninstallCompletely({config,deleteMemory:false,clientsStopped:true,installation:npmInstallation()});
+      console.log(JSON.stringify(result));`;
+    const result = JSON.parse(run(['--input-type=module', '-e', code], { env: { ...process.env, HOME: join(temp, 'native-home'), USERPROFILE: join(temp, 'native-home'), COMMON_MEMORY_HOME: uninstallHome, CODEX_HOME: join(temp, 'no-codex'), PI_CODING_AGENT_DIR: join(temp, 'no-pi'), PATH: '', WSL_DISTRO_NAME: '', npm_config_prefix: prefix, NPM_CONFIG_PREFIX: prefix } }));
+    assert.equal(existsSync(globalRoot), false, 'Self-uninstall must remove the exact isolated global package');
+    assert.equal(existsSync(join(uninstallHome, 'config.json')), false);
+    assert.equal(readFileSync(join(result.retained, 'memory/profile.md'), 'utf8'), 'Synthetic retained memory');
+    assert.ok(existsSync(pkg), 'An unrelated local installation must remain untouched');
+    console.log('Actual npm self-removal passed in an isolated global prefix; Memory Data retained.');
+  }
   console.log(`${registryVersion ? `Published ${registryVersion}` : 'Local'} npm tarball installation passed: typed exports, prompt, durable Writer/readback, Pi load, CLI shim and keyless read-only MCP.`);
 } finally {
   try { await client?.close(); } finally { rmSync(temp, { recursive: true, force: true }); }

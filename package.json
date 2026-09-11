@@ -1,6 +1,6 @@
 {
   "name": "common-memory-core",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "license": "MIT",
   "description": "User-owned Markdown memory with durable maintenance, Pi integration and local stdio MCP access.",
   "repository": {
@@ -56,7 +56,7 @@
     "test:fixtures": "vitest run tests/v2",
     "test:recovery": "vitest run tests/v2",
     "test:consumer": "node scripts/consumer-smoke.mjs",
-    "test:published": "node scripts/consumer-smoke.mjs --registry-version 0.2.1",
+    "test:published": "node scripts/consumer-smoke.mjs --registry-version 0.3.0",
     "test:remote-contract": "vitest run tests/memory-manager",
     "prepack": "npm run build",
     "release:check": "node scripts/check-release.mjs",
@@ -71,6 +71,7 @@
     "@clack/prompts": "^1.7.0",
     "@modelcontextprotocol/server": "2.0.0",
     "ajv": "^8.17.1",
+    "smol-toml": "1.8.0",
     "typebox": "1.3.7",
     "undici": "8.10.2",
     "zod": "4.3.6"

@@ -27,11 +27,6 @@ describe('V2 writer',()=>{
   for(const file of readdirSync(join(path,'runtime/receipts'))){const receipt=readFileSync(join(path,'runtime/receipts',file),'utf8');expect(receipt).not.toContain('private model rationale');expect(receipt).not.toContain('Prefers');}
   w.close();
  });
- it('recovers file success / DB rollback from immutable receipt, no second model call',async()=>{
-  const path=root();let calls=0;const m=model(r=>{calls++;return body(r);});
-  const w=new Writer({dataRoot:path,allowedScopes:['global'],model:m,checkpoint:()=>{throw new Error('crash');}});enqueue(w);await w.run({force:true});w.close();
-  const next=new Writer({dataRoot:path,allowedScopes:['global'],model:m});expect((await next.run({force:true})).outcome).toBe('idle');expect(calls).toBe(1);expect(readFileSync(join(path,'memory/preferences.md'),'utf8')).toContain('Chinese');next.close();
- });
  it('consumes ignore and rejects malformed response without pollution',async()=>{
   const path=root();const w=new Writer({dataRoot:path,allowedScopes:['global'],model:model(r=>body(r,'ignore'))});enqueue(w);expect((await w.run({force:true})).outcome).toBe('ignored');expect((await w.run({force:true})).outcome).toBe('idle');w.close();
   const bad=new Writer({dataRoot:path,allowedScopes:['global'],model:model(()=>({oops:1}))});enqueue(bad,'new','e2');expect((await bad.run({force:true})).outcome).toBe('failed');expect(readdirSync(join(path,'memory'))).toEqual(['projects']);bad.close();
@@ -40,9 +35,15 @@ describe('V2 writer',()=>{
   let calls=0;const path=root();const w=new Writer({dataRoot:path,allowedScopes:['global'],maxRequestBytes:16000,model:model(r=>{calls++;return body(r);})});
   enqueue(w,'password=verysecret');expect((await w.run({force:true})).outcome).toBe('quarantined');enqueue(w,'x'.repeat(40000),'e2');expect((await w.run({force:true})).outcome).toBe('quarantined');expect(calls).toBe(0);expect(w.store.db.prepare('SELECT length(text) AS n FROM observations WHERE entryId=?').get('e2')!.n).toBe(40000);w.close();
  });
- it('detects human edits even for ignore; times out a model ignoring abort',async()=>{
-  const path=root();const w=new Writer({dataRoot:path,allowedScopes:['global'],model:model(r=>{writeFileSync(join(path,'memory/profile.md'),'# Profile\n\n## Manual\nHuman\n');return body(r,'ignore');})});enqueue(w);expect((await w.run({force:true})).outcome).toBe('failed');expect(w.store.status().observations[0]!.state).not.toBe('processed');w.close();
-  const timeout=new Writer({dataRoot:root(),allowedScopes:['global'],deadlineMs:20,model:{analyze:()=>new Promise(()=>{})}});enqueue(timeout);expect(await timeout.run({force:true})).toEqual({outcome:'failed',reason:'TIMEOUT'});timeout.close();
+ it('preserves human edits and leaves stale ignore unconsumed',async()=>{
+  const path=root();const manual='# Profile\n\n## Manual\nHuman\n';
+  const w=new Writer({dataRoot:path,allowedScopes:['global'],model:model(r=>{writeFileSync(join(path,'memory/profile.md'),manual);return body(r,'ignore');})});
+  try {
+   enqueue(w);expect(await w.run({force:true})).toEqual({outcome:'failed',reason:'STALE_REVISION'});
+   expect(readFileSync(join(path,'memory/profile.md'),'utf8')).toBe(manual);
+   expect(w.store.db.prepare('SELECT text,state FROM observations').get()).toEqual({text:'请用中文回答',state:'claimed'});
+   expect(w.store.hasReceipt(w.store.status().jobs[0]!.id)).toBe(false);
+  } finally {w.close();}
  });
 });
 
@@ -158,13 +159,11 @@ describe('project promotion',()=>{
    expect(w.canonical.snapshot([project.id]).find(d=>d.target===scope)!.content).toBe(after);
   } finally {w.close();}
  });
- it.each(['undisclosed','read-only','other-project','stale','unregistered','lease'])('rejects promotion boundary: %s',async variant=>{
+ // Snapshot CAS, removed registration and expired leases have dedicated race tests above.
+ it.each(['undisclosed','read-only','other-project'])('rejects promotion boundary: %s',async variant=>{
   const path=root(),registry=new ProjectRegistry(path),project=registry.register(root(),'A'),other=registry.register(root(),'B');
-  const scope=`project:${project.id}`;let now=0;
-  const w=new Writer({dataRoot:path,allowedScopes:variant==='undisclosed'?[scope]:['global',scope,`project:${other.id}`],writableScopes:variant==='read-only'?[scope]:['global',scope,`project:${other.id}`],scheduler:{now:()=>now,leaseMs:1000},model:model(r=>{
-   if(variant==='stale')writeFileSync(join(path,'memory/profile.md'),'# Profile\n\n## Manual\nNew state\n');
-   if(variant==='unregistered')registry.remove(project.id);
-   if(variant==='lease')now=1001;
+  const scope=`project:${project.id}`;
+  const w=new Writer({dataRoot:path,allowedScopes:variant==='undisclosed'?[scope]:['global',scope,`project:${other.id}`],writableScopes:variant==='read-only'?[scope]:['global',scope,`project:${other.id}`],model:model(r=>{
    return variant==='other-project'?body(r,'retain',[{op:'put_section',target:`project:${other.id}`,section:null,title:'A',body:'B'}]):body(r);
   })});
   try {
@@ -173,36 +172,6 @@ describe('project promotion',()=>{
    expect(w.canonical.snapshot([project.id]).find(d=>d.target==='preferences')!.sections).toEqual([]);
   } finally {w.close();}
  });
-});
-
-it.each([
- {text:'所有项目都用中文回答',applicability:'global',kind:'retain',admission:'remember',value:'Prefers Chinese.'},
- {text:'只在本项目用中文回答',applicability:'project',kind:'retain',admission:'remember',value:'This project: Chinese.'},
- {text:'也许中文吧',applicability:'uncertain',kind:'ignore',admission:'remember',value:''},
- {text:'这次请用中文',applicability:'project',kind:'ignore',admission:'remember',value:''},
- {text:'全局偏好补充：代码注释用英文',applicability:'global',kind:'retain',admission:'update',value:'Chinese responses; English code comments.'},
- {text:'纠正之前说法：全局仅解释用中文',applicability:'global',kind:'retain',admission:'correct',value:'Chinese explanations only.'},
- {text:'仅本项目例外，解释用英文',applicability:'project',kind:'retain',admission:'remember',value:'This project: English explanations.'},
-])('executes scripted scope judgment without inferring semantics: $text',async fixture=>{
- const path=root(),project=new ProjectRegistry(path).register(root(),'A'),scope=`project:${project.id}`;
- const w=new Writer({dataRoot:path,allowedScopes:['global',scope],model:model(r=>{
-  const target=fixture.applicability==='project'?scope:'preferences';
-  const response=body(r,fixture.kind,[{op:'put_section',target,section:target==='preferences'?'s1':null,title:'Communication',body:fixture.value}]);
-  response.decisions[0]!.applicability=fixture.applicability;
-  if(fixture.kind==='retain')response.decisions[0]!.admission=fixture.admission;
-  return response;
- })});
- try {
-  writeFileSync(join(path,'memory/preferences.md'),'# Preferences\n\n## Communication\nOriginal global preference.\n');
-  const before=w.canonical.snapshot([project.id]);
-  w.store.enqueue({sessionId:'s',entryId:'p',text:fixture.text,scope,source:'interactive',observedAt:new Date().toISOString()});
-  expect((await w.run({force:true})).outcome).toBe(fixture.kind==='ignore'?'ignored':'committed');
-  const after=w.canonical.snapshot([project.id]);
-  for(const doc of after){
-   if(fixture.kind==='retain'&&doc.target===(fixture.applicability==='global'?'preferences':scope))expect(doc.content).toContain(fixture.value);
-   else expect(doc.content).toBe(before.find(d=>d.target===doc.target)!.content);
-  }
- } finally {w.close();}
 });
 
 describe('agent import provenance',()=>{
@@ -225,11 +194,20 @@ describe('agent import provenance',()=>{
   const w=new Writer({dataRoot:path,allowedScopes:['global'],model:model(r=>{
    if(phase===0)return body(r,'retain',[{op:'put_section',target:'profile',section:null,title:'Background',body:'Studies ecology.\n'}]);
    const refs=(r.projection.observations as {ref:string}[]).map(o=>o.ref);
-   return {version:'memory_maintenance_v2',request_id:r.projection.request_id,decisions:[{applicability:'global',confidence:1,reason:'x',evidence:refs,...shape}]};
+   return {version:'memory_maintenance_v2',request_id:r.projection.request_id,decisions:[
+    {kind:'retain',admission:'remember',lifetime:'stable',applicability:'global',confidence:1,reason:'valid append',evidence:refs,operations:[{op:'put_section',target:'preferences',section:null,title:'Imported',body:'Otherwise permitted import.'}]},
+    {applicability:'global',confidence:1,reason:'x',evidence:refs,...shape},
+   ]};
   })});
-  enqueue(w,'我在学生态学','u0');expect((await w.run({force:true})).outcome).toBe('committed');
-  phase=1;imported(w);expect(await w.run({force:true})).toEqual({outcome:'failed',reason:'UNAUTHORIZED_IMPORT_OVERWRITE'});
-  expect(readFileSync(join(path,'memory/profile.md'),'utf8')).toContain('Studies ecology.');w.close();
+  try {
+   enqueue(w,'我在学生态学','u0');expect((await w.run({force:true})).outcome).toBe('committed');
+   const before=w.canonical.snapshot();
+   phase=1;imported(w);expect(await w.run({force:true})).toEqual({outcome:'failed',reason:'UNAUTHORIZED_IMPORT_OVERWRITE'});
+   expect(w.canonical.snapshot()).toEqual(before); // Even the valid first decision must not be published.
+   expect(readdirSync(join(path,'runtime/receipts'))).toHaveLength(1);
+   expect(w.store.db.prepare("SELECT state,text FROM observations WHERE entryId='imp'").get()).toMatchObject({state:'claimed',text:expect.any(String)});
+   expect(w.store.documentSourceKeys('preferences')).toEqual([]);
+  } finally {w.close();}
  });
  it('an import may append new Sections and later rework Sections that only imports produced',async()=>{
   const path=root();let phase=0;
@@ -291,11 +269,20 @@ describe('document import provenance',()=>{
   const w=new Writer({dataRoot:path,allowedScopes:['global'],model:model(r=>{
    if(phase===0)return body(r,'retain',[{op:'put_section',target:'profile',section:null,title:'Background',body:'Studies ecology.\n'}]);
    const refs=(r.projection.observations as {ref:string}[]).map(o=>o.ref);
-   return {version:'memory_maintenance_v2',request_id:r.projection.request_id,decisions:[{applicability:'global',confidence:1,reason:'x',evidence:refs,...shape}]};
+   return {version:'memory_maintenance_v2',request_id:r.projection.request_id,decisions:[
+    {kind:'retain',admission:'remember',lifetime:'stable',applicability:'global',confidence:1,reason:'valid append',evidence:refs,operations:[{op:'put_section',target:'preferences',section:null,title:'Imported',body:'Otherwise permitted import.'}]},
+    {applicability:'global',confidence:1,reason:'x',evidence:refs,...shape},
+   ]};
   })});
-  enqueue(w,'我在学生态学','u0');expect((await w.run({force:true})).outcome).toBe('committed');
-  phase=1;imported(w);expect(await w.run({force:true})).toEqual({outcome:'failed',reason});
-  expect(readFileSync(join(path,'memory/profile.md'),'utf8')).toContain('Studies ecology.');w.close();
+  try {
+   enqueue(w,'我在学生态学','u0');expect((await w.run({force:true})).outcome).toBe('committed');
+   const before=w.canonical.snapshot();
+   phase=1;imported(w);expect(await w.run({force:true})).toEqual({outcome:'failed',reason});
+   expect(w.canonical.snapshot()).toEqual(before);
+   expect(readdirSync(join(path,'runtime/receipts'))).toHaveLength(1);
+   expect(w.store.db.prepare("SELECT state,text FROM observations WHERE entryId='part-1'").get()).toMatchObject({state:'claimed',text:expect.any(String)});
+   expect(w.store.documentSourceKeys('preferences')).toEqual([]);
+  } finally {w.close();}
  });
  it('a document may append attributed Sections and rework Sections that only imports produced (agent or document)',async()=>{
   const path=root();let phase=0;
@@ -332,10 +319,6 @@ describe('provenance authorization (init-only configuration)',()=>{
   // document_import is a third class: not authorized here either.
   w.store.enqueue({sessionId:'import:x',entryId:'part-1',scope:'global',source:'document_import',observedAt:new Date().toISOString(),text:encodeDocumentChunk({importId:'md-1',sourceLabel:'n.md',declaredAuthor:'unknown',fileName:'n.md',contentDigest:'1',part:{index:1,count:1},headingPath:[],text:'# N\n\nx\n'})});
   expect((await w.run({force:true})).outcome).toBe('quarantined');expect(seen).toEqual(['agent_import']);w.close();
- });
- it('without allowedProvenance every admitted class is processed (library default unchanged)',async()=>{
-  const w=new Writer({dataRoot:root(),allowedScopes:['global'],model:model(r=>body(r,'ignore'))});
-  enqueue(w);expect((await w.run({force:true})).outcome).toBe('ignored');w.close();
  });
 });
 

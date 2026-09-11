@@ -1,4 +1,5 @@
 import { SESSION_CACHE_DEFAULTS, type SessionCacheOptions } from '../v2/session.js';
+import { PROVIDERS, type ProviderId } from './providers.js';
 import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -11,7 +12,7 @@ import { normalizeOpenAICompatibleBaseUrl } from "../memory-manager/openai/opena
 
 import { validateRemoteTuning, type RemoteApi, type RemoteTuning } from "../memory-manager/openai/options.js";
 
-import { loadLegacyEnv, privateAssignment } from "./private-env.js";
+import { loadLegacyEnv, privateAssignment, readPrivateEnv } from "./private-env.js";
 import { validateProxyConfig, validateCaEnv, PRIVATE_NETWORK_KEYS, type ProxyConfig } from "../memory-manager/network/route.js";
 
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/u;
@@ -23,12 +24,14 @@ export interface CommonMemoryConfig {
   dataRoot: string;
   remote: RemoteTuning & {
     api?: RemoteApi;
+    preset?: ProviderId;
     proxy?: ProxyConfig;
     caFileEnv?: string;
     provider: "openai-compatible";
     baseUrl: string;
     model: string;
     apiKeyEnv: string;
+    apiKeySource?: 'private-env';
   };
   disclosure: RemoteDisclosurePolicy;
   writableScopes: string[];
@@ -87,10 +90,15 @@ export function saveConfig(config: CommonMemoryConfig, path = configFilePath()):
 }
 
 export function saveApiKeyToEnvFile(apiKeyEnv: string, apiKey: string, path = envFilePath()): void {
+  writePrivateFile(path, apiKeyEnvContents(apiKeyEnv, apiKey, existsSync(path) ? readFileSync(path, 'utf8') : ''));
+}
+
+/** Shared pure builder for the CLI's recoverable config + credential transaction. */
+export function apiKeyEnvContents(apiKeyEnv: string, apiKey: string, body: string): string {
   const name = apiKeyEnv.trim(); const value = apiKey.trim();
   if (!ENV_NAME.test(name)) throw new TypeError("apiKeyEnv must be an environment variable name");
   if (!value || /[\r\n\0]/u.test(value)) throw new TypeError("API key must be a non-empty single line");
-  const lines = existsSync(path) ? readFileSync(path, "utf8").split(/\r?\n/u) : [];
+  const lines = body.split(/\r?\n/u);
   // dotenv is not JSON: JSON escaping changes backslashes and quoted credentials.
   let assignment: string;
   try { assignment = privateAssignment(name, value); }
@@ -99,7 +107,7 @@ export function saveApiKeyToEnvFile(apiKeyEnv: string, apiKey: string, path = en
   let replaced = false;
   const next = lines.filter((line, index) => index < lines.length - 1 || line !== "").map((line) => { if (!matcher.test(line)) return line; if (replaced) return null; replaced = true; return assignment; }).filter((line): line is string => line !== null);
   if (!replaced) next.push(assignment);
-  writePrivateFile(path, `${next.join("\n")}\n`);
+  return `${next.join("\n")}\n`;
 }
 
 export function loadLocalEnv(path = envFilePath()): void {
@@ -107,7 +115,8 @@ export function loadLocalEnv(path = envFilePath()): void {
 }
 
 export function resolveApiKey(config: CommonMemoryConfig, env: NodeJS.ProcessEnv = process.env): string {
-  const value = env[config.remote.apiKeyEnv]?.trim();
+  const source = config.remote.apiKeySource === 'private-env' ? readPrivateEnv(envFilePath(env)) : env;
+  const value = source[config.remote.apiKeyEnv]?.trim();
   if (!value) throw new TypeError(`API key environment variable ${config.remote.apiKeyEnv} is not set`);
   return value;
 }
@@ -115,7 +124,11 @@ export function resolveApiKey(config: CommonMemoryConfig, env: NodeJS.ProcessEnv
 export function validateConfig(value: unknown): CommonMemoryConfig {
   if (!isRecord(value) || !hasRequiredAndOptionalKeys(value, ["schemaVersion", "dataRoot", "remote", "disclosure", "writableScopes", "scheduler"], ["sessionCache"]) || value.schemaVersion !== 2) throw new TypeError("Unsupported Common Memory config");
   if (typeof value.dataRoot !== "string" || !isAbsolute(value.dataRoot)) throw new TypeError("dataRoot must be an absolute path");
-  if (!isRecord(value.remote) || !hasRequiredAndOptionalKeys(value.remote, ["provider", "baseUrl", "model", "apiKeyEnv"], ["api", "maxOutputTokens", "reasoningEffort", "thinking", "enableThinking", "proxy", "caFileEnv"]) || value.remote.provider !== "openai-compatible") throw new TypeError("Invalid remote provider config");
+  if (!isRecord(value.remote) || !hasRequiredAndOptionalKeys(value.remote, ["provider", "baseUrl", "model", "apiKeyEnv"], ["api", "preset", "apiKeySource", "maxOutputTokens", "reasoningEffort", "thinking", "enableThinking", "proxy", "caFileEnv"]) || value.remote.provider !== "openai-compatible") throw new TypeError("Invalid remote provider config");
+  const apiKeySource = value.remote.apiKeySource;
+  if (apiKeySource !== undefined && apiKeySource !== 'private-env') throw new TypeError('Invalid API key source');
+  const preset = value.remote.preset;
+  if (preset !== undefined && !PROVIDERS.some(provider => provider.id === preset)) throw new TypeError('Invalid provider preset');
   const api = value.remote.api === undefined ? "responses" : value.remote.api;
   if (api !== "responses" && api !== "chat_completions") throw new TypeError("remote.api must be responses or chat_completions");
   const proxy = value.remote.proxy === undefined ? undefined : validateProxyConfig(value.remote.proxy);
@@ -142,7 +155,7 @@ export function validateConfig(value: unknown): CommonMemoryConfig {
     writableScopes: [...value.writableScopes] as string[],
     scheduler: { ...value.scheduler } as CommonMemoryConfig["scheduler"],
     dataRoot: resolve(value.dataRoot),
-    remote: { provider: "openai-compatible", baseUrl, model, apiKeyEnv, ...(value.remote.api === undefined ? {} : {api}), ...tuning, ...(proxy === undefined ? {} : {proxy}), ...(caFileEnv === undefined ? {} : {caFileEnv}) },
+    remote: { provider: "openai-compatible", baseUrl, model, apiKeyEnv, ...(apiKeySource === undefined ? {} : {apiKeySource}), ...(preset === undefined ? {} : {preset: preset as ProviderId}), ...(value.remote.api === undefined ? {} : {api}), ...tuning, ...(proxy === undefined ? {} : {proxy}), ...(caFileEnv === undefined ? {} : {caFileEnv}) },
     disclosure: {
       enabled: true,
       allowedScopes: [...disclosure.allowedScopes],

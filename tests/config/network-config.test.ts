@@ -44,6 +44,17 @@ it('process API key overrides private key locally; an explicit empty key remains
   expect(authorization).toBe('Bearer process-key');
   expect(()=>createConfiguredMemoryModel(config,{COMMON_MEMORY_HOME:home,CM_LOCAL_KEY:''})).toThrow('is not set');
 });
+it('explicit setup credentials cannot be replaced by an inherited provider key', async () => {
+  const home=root();writeFileSync(join(home,'.env'),'CM_LOCAL_KEY=entered-private-key');
+  const config=defaultConfig({COMMON_MEMORY_HOME:home});config.remote.model='fake';config.remote.apiKeyEnv='CM_LOCAL_KEY';config.remote.apiKeySource='private-env';
+  const validated=validateConfig(config);expect(validated.remote.apiKeySource).toBe('private-env');
+  let authorization: unknown;
+  const model=createConfiguredMemoryModel(validated,{COMMON_MEMORY_HOME:home,CM_LOCAL_KEY:'unrelated-inherited-key'},{fetch:async(_url,init)=>{authorization=(init?.headers as Record<string,string>).authorization;return new Response('{}',{status:401});}});
+  try { await model.analyze({projection:{},schema:{},prompt:'test'},{requestId:'r',deadlineMs:1000}); } catch { /* fake authentication response */ } finally { await model.close(); }
+  expect(authorization).toBe('Bearer entered-private-key');
+  expect(()=>validateConfig({...config,remote:{...config.remote,apiKeySource:'unknown'}})).toThrow('API key source');
+  expect(()=>validateConfig({...config,remote:{...config.remote,preset:'unknown'}})).toThrow('provider preset');
+});
 it('status is local, redacted and does not create absent homes or data roots', () => {
   const home=join(root(),'missing'),config=defaultConfig({COMMON_MEMORY_HOME:home});config.remote.model='fake';
   expect(describeConfiguredNetwork(config,{COMMON_MEMORY_HOME:home,ALL_PROXY:'http://name:password@proxy.invalid'})).toEqual({mode:'env',route:'proxy',reason:'all_proxy',protocol:'http'});

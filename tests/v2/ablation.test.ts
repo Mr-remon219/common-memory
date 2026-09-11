@@ -3,36 +3,49 @@ import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
 import { RuntimeStore } from '../../src/v2/runtime.js';
 
-interface Row { scenario:string; variant:string; processed:number; pending:number; maintenanceBatches:number; meanWaitToHorizonMs:number; batches:{atMs:number;entries:string[]}[] }
+interface Row {
+  variant: string;
+  processed: number;
+  pending: number;
+  maintenanceBatches: number;
+  meanWaitToHorizonMs: number;
+  batches: { atMs: number; entries: string[] }[];
+}
 const experiment = await import(pathToFileURL(resolve('scripts/ablate-v2.mjs')).href);
-it('isolates each trigger with paired horizons, durable lifecycle and no final forced flush',async()=>{
- const scenarios=experiment.loadScenarios().filter((s:{stratum:string})=>s.stratum!=='original-30');
- const report=await experiment.runAblation(RuntimeStore,{scenarios,repeats:2});
- const row=(scenario:string,variant:string):Row=>report.records.find((r:Row)=>r.scenario===scenario&&r.variant===variant);
- expect(report.modelCalls).toBe(0);expect(report.semanticQualityVerified).toBe(false);expect(report.terminalForcedFlush).toBe(false);
- for(const [scenario,variant] of [['count-burst','no-count'],['byte-single-turn','no-bytes'],['idle-open-tail','no-idle'],['lifecycle-short-tail','no-lifecycle'],['shutdown-restart-tail','no-lifecycle'],['max-wait-high-count','no-max-wait'],['busy-aged-backlog','no-max-wait']]){
-  expect(row(scenario!,'baseline').processed).toBeGreaterThan(row(scenario!,variant!).processed);
- }
- expect(row('shutdown-restart-tail','baseline').batches[0]!.atMs).toBe(40000);
- expect(row('continuous-defaults','no-max-wait')).toEqual({...row('continuous-defaults','baseline'),variant:'no-max-wait'});
- expect(row('busy-boundary','baseline').batches[0]!.atMs).toBe(200000);
- expect(row('busy-aged-backlog','baseline').batches[0]!.atMs).toBe(660000);
- expect(row('busy-aged-backlog','no-max-wait').pending).toBe(2);
- for(const r of report.records as Row[])expect(r.batches.every(batch=>batch.entries.length<=6)).toBe(true);
-// 10 scenarios × 6 variants × 2 repeats use real on-disk stores; Windows CI
-// takes over 30 seconds. Keep this budget local rather than relaxing all tests.
-},120_000);
-it('disabling count keeps 6-turn batch capacity; enqueue wins over simultaneous idle deadline',async()=>{
- const report=await experiment.runAblation(RuntimeStore,{repeats:1,scenarios:[
-  {id:'capacity',stratum:'test',turns:Array.from({length:20},()=>({atMs:0})),horizonMs:125000},
-  {id:'deadline-tie',stratum:'test',turns:[{atMs:0},{atMs:120000}],horizonMs:120000},
- ]});
- const rows=report.records as Row[];const removed=rows.find(r=>r.scenario==='capacity'&&r.variant==='no-count')!;
- expect(removed.processed).toBe(20);expect(removed.batches.map(b=>b.entries.length)).toEqual([6,6,6,2]);
- expect(rows.find(r=>r.scenario==='deadline-tie'&&r.variant==='baseline')!.pending).toBe(2);
+
+// Core scheduler boundaries live in runtime*.test.ts. The default gate checks
+// the report harness, not the entire benchmark matrix or a fixed fixture count.
+it('reports a paired restart/flush counterfactual with censored pending work and reproducible repeats', async () => {
+  const report = await experiment.runAblation(RuntimeStore, { repeats: 2, scenarios: [{
+    id: 'restart-tail', stratum: 'test', turns: [{ atMs: 0 }],
+    events: [{ atMs: 1000, kind: 'close' }, { atMs: 2000, kind: 'open' }], horizonMs: 3000,
+  }] });
+  expect(report).toMatchObject({ modelCalls: 0, semanticQualityVerified: false, terminalForcedFlush: false, executions: 12 });
+  expect(report.records).toHaveLength(6);
+  for (const row of report.records as Row[]) {
+    const noFlush = row.variant === 'no-lifecycle';
+    expect(row).toMatchObject({
+      processed: noFlush ? 0 : 1, pending: noFlush ? 1 : 0,
+      maintenanceBatches: noFlush ? 0 : 1, meanWaitToHorizonMs: noFlush ? 3000 : 2000,
+      batches: noFlush ? [] : [{ atMs: 2000, entries: ['0'] }],
+    });
+    expect(report.summaries.find((summary: Row) => summary.variant === row.variant)).toMatchObject({
+      processed: row.processed, pending: row.pending, maintenanceBatches: row.maintenanceBatches,
+      meanWaitToHorizonMs: row.meanWaitToHorizonMs,
+      deltaPending: noFlush ? 1 : 0, deltaBatches: noFlush ? -1 : 0,
+    });
+  }
 });
-it('keeps sensitivity cases separate and rejects invalid repeat counts',async()=>{
- const scenarios=experiment.loadScenarios();expect(scenarios).toHaveLength(40);
- expect(scenarios.filter((s:{stratum:string})=>s.stratum==='original-30')).toHaveLength(30);
- await expect(experiment.runAblation(RuntimeStore,{scenarios:[],repeats:0})).rejects.toThrow();
+
+it('keeps enqueue-before-tick ordering and fixed batch capacity when count is disabled', async () => {
+  const report = await experiment.runAblation(RuntimeStore, { repeats: 1, scenarios: [
+    { id: 'capacity', stratum: 'test', turns: Array.from({ length: 20 }, () => ({ atMs: 0 })), horizonMs: 125000 },
+    { id: 'deadline-tie', stratum: 'test', turns: [{ atMs: 0 }, { atMs: 120000 }], horizonMs: 120000 },
+  ] });
+  const rows = report.records as (Row & { scenario: string })[];
+  const removed = rows.find(r => r.scenario === 'capacity' && r.variant === 'no-count')!;
+  expect(removed.processed).toBe(20);
+  expect(removed.batches.map(b => b.entries.length)).toEqual([6, 6, 6, 2]);
+  expect(rows.find(r => r.scenario === 'deadline-tie' && r.variant === 'baseline')!.pending).toBe(2);
+  await expect(experiment.runAblation(RuntimeStore, { scenarios: [], repeats: 0 })).rejects.toThrow('repeats must be 1..20');
 });

@@ -56,11 +56,19 @@ it('scripted status and show share operations without requiring a key or creatin
   expect(existsSync(config.dataRoot)).toBe(false);
   mkdirSync(join(config.dataRoot, 'memory'), { recursive: true });
   writeFileSync(join(config.dataRoot, 'memory/profile.md'), '# Profile\n\n## Test\nSynthetic memory.\n');
-  const shown = cli(['show']);
   const expected: string[] = []; showMemory(config, undefined, line => expected.push(line));
-  expect(shown.status, shown.stderr).toBe(0);
-  expect(shown.stdout).toBe(expected.join('\n') + '\n');
+  for (const args of [['show'], ['show', '--plain']]) {
+    const shown = cli(args);
+    expect(shown.status, shown.stderr).toBe(0);
+    expect(shown.stdout).toBe(expected.join('\n') + '\n');
+  }
   expect(existsSync(join(config.dataRoot, 'runtime.sqlite'))).toBe(false);
+});
+it.each([['show', '--unexpected'], ['show', '--plain', '--workspace', '/tmp'], ['show', '--workspace']])('rejects unsupported show arguments %j without opening storage', (...args) => {
+  const config = fixture();
+  const result = cli(args);
+  expect(result.status).toBe(1); expect(result.stderr).toContain('unexpected arguments');
+  expect(existsSync(config.dataRoot)).toBe(false);
 });
 it('workspace selection cannot disclose another project or widen global permission', () => {
   const config = fixture();

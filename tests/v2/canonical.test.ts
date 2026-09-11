@@ -32,16 +32,6 @@ describe('Markdown canonical', () => {
     }
     expect(() => store.apply(store.snapshot(), [{ op: 'put_section', target: 'profile', section: 's1', title: 'Topic', body: '```\n---\n```' }])).not.toThrow();
   });
-  it.each(['staged', 'commit-marker', 'target:memory/profile.md', 'target:runtime/receipts/fault.json', 'before-cleanup'])('recovers injected failure at %s', phase => {
-    const { root } = setup();
-    const store = new CanonicalStore(root, { checkpoint: current => { if (current === phase) throw new Error('injected'); } });
-    const content = '# Profile\n\n## State\nB\n';
-    expect(() => store.commit(store.snapshot(), new Map([['profile', content]]), { id: 'fault' })).toThrow('injected');
-    const recovered = new CanonicalStore(root); recovered.recover();
-    expect(recovered.snapshot()[0]!.content).toBe(phase === 'staged' ? '# Profile\n\n' : content);
-    expect(recovered.receipts()).toEqual(phase === 'staged' ? [] : [{ id: 'fault' }]);
-    expect(readdirSync(join(root, 'runtime/transactions'))).toEqual([]);
-  });
   it.each(['commit-marker', 'target:memory/profile.md'])('does not overwrite external edits after fault at %s', phase => {
     const { root } = setup();
     const store = new CanonicalStore(root, { checkpoint: current => { if (current === phase) throw new Error('injected'); } });
@@ -51,17 +41,26 @@ describe('Markdown canonical', () => {
     expect(readFileSync(join(root, 'memory/profile.md'), 'utf8')).toBe(manual);
     expect(new CanonicalStore(root).receipts()).toEqual([]);
   });
-  it.each(['staged', 'commit-marker', 'target:memory/profile.md', 'target:runtime/receipts/killed.json', 'before-cleanup'])('recovers after forced subprocess exit at %s', phase => {
-    const { root } = setup();
+  it.each(['staged', 'commit-marker', 'target:memory/profile.md', 'target:memory/preferences.md', 'target:runtime/receipts/killed.json', 'before-cleanup'])('recovers a multi-document transaction after subprocess exit at %s', phase => {
+    const { root, store } = setup();
+    const before = ['# Profile\n\n## State\nOld profile\n', '# Preferences\n\n## State\nOld preference\n'];
+    const after = ['# Profile\n\n## State\nNew profile\n', '# Preferences\n\n## State\nNew preference\n'];
+    const targets = ['profile', 'preferences'];
+    targets.forEach((target, i) => writeFileSync(join(root, `memory/${target}.md`), before[i]!));
     const moduleUrl = new URL('../../src/v2/canonical.ts', import.meta.url).href;
     const script = `import { CanonicalStore } from ${JSON.stringify(moduleUrl)};
       const store = new CanonicalStore(${JSON.stringify(root)}, { checkpoint: phase => { if (phase === ${JSON.stringify(phase)}) process.exit(73); } });
-      store.commit(store.snapshot(), new Map([['profile', '# Profile\\n\\n## State\\nB\\n']]), { id: 'killed' });`;
-    const child = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
+      store.commit(store.snapshot(), new Map(${JSON.stringify(targets.map((target, i) => [target, after[i]]))}), { id: 'killed' });`;
+    const child = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 10000 });
     expect(child.status, child.stderr).toBe(73);
-    const recovered = new CanonicalStore(root); recovered.recover();
+    // Prove the fixture really stopped between replacements, not merely before/after the transaction.
+    if (phase === 'target:memory/profile.md') expect(store.snapshot().map(d => d.content)).toEqual([after[0], before[1]]);
+    const recovered = new CanonicalStore(root);
+    recovered.recover();
+    recovered.recover();
+    expect(recovered.snapshot().map(d => d.content)).toEqual(phase === 'staged' ? before : after);
     expect(recovered.receipts()).toEqual(phase === 'staged' ? [] : [{ id: 'killed' }]);
-    expect(recovered.snapshot()[0]!.content).toBe(phase === 'staged' ? '# Profile\n\n' : '# Profile\n\n## State\nB\n');
+    expect(readdirSync(join(root, 'runtime/transactions'))).toEqual([]);
   });
   it('rejects symlinks and path traversal without modifying external data', () => {
     const { root, store } = setup(); const external = join(root, 'external'); writeFileSync(external, 'private'); symlinkSync(external, join(root, 'memory/profile.md')); expect(() => store.snapshot()).toThrow('Unsafe file'); expect(readFileSync(external, 'utf8')).toBe('private');

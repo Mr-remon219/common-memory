@@ -67,7 +67,7 @@ export async function runSetupWizard(existing: CommonMemoryConfig | null = loadC
 }
 
 export function hasApiKey(config: CommonMemoryConfig): boolean {
-  try { return Boolean(localApiKey(config.remote.apiKeyEnv, process.env, readPrivateEnv(envFilePath()))); } catch { return false; }
+  try { return Boolean(localApiKey(config.remote.apiKeyEnv, config.remote.apiKeySource === 'private-env' ? {} : process.env, readPrivateEnv(envFilePath()))); } catch { return false; }
 }
 function networkStatus(config: CommonMemoryConfig): string {
   try { const route = describeConfiguredNetwork(config); return `Network: ${route.mode} → ${route.route} (${route.reason}${route.protocol ? `, ${route.protocol}` : ''}); connection not tested`; }
@@ -94,7 +94,10 @@ export async function runCredentialsWizard(current: CommonMemoryConfig): Promise
   if (action === 'env') {
     const name = unwrap(await clack.text({ message: '环境变量名称', initialValue: current.remote.apiKeyEnv,
       validate: value => /^[A-Za-z_][A-Za-z0-9_]*$/u.test(value?.trim() ?? '') ? undefined : '请填写合法的环境变量名，例如 OPENAI_API_KEY' })).trim();
-    if (await confirm(`改用 ${name}？现有私有密钥不会被删除。`)) saveSettings({ ...current, remote: { ...current.remote, apiKeyEnv: name } }, current);
+    if (await confirm(`改用 ${name}？现有私有密钥不会被删除。`)) {
+      const { apiKeySource: _source, ...remote } = current.remote;
+      saveSettings({ ...current, remote: { ...remote, apiKeyEnv: name } }, current);
+    }
     return;
   }
   const key = await keyInput();

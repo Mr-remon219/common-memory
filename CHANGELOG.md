@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.3.0 — 2026-09-11
+
+### Minimal setup and management
+
+- Reduce management to Overview, View Memory and Modify Memory, accessible through
+  interactive `common-memory show` and already-configured `common-memory`.
+- Submit natural-language personal-memory changes as user expressions through the
+  existing configured Writer/Core; distinguish processed, pending, failed and cancelled.
+- Preserve non-TTY `show` output and add explicit `show --plain`; keep automation and
+  machine protocol commands separate from the management menu.
+- Add Provider → API Key → live single-select model setup with built-in URLs. Custom
+  asks URL/Key/Model only; startup and runtime never discover models. Unsupported Go
+  protocols are excluded rather than sent to a guessed endpoint.
+- Commit model configuration and private credentials recoverably; explicit setup keys
+  are not overridden by inherited provider keys. Preserve old configuration behavior.
+- Automatically discover and install owned Pi/Codex/Desktop integration files, with
+  conflict protection, shared ownership and crash recovery. Pi requires 0.84.4;
+  unsupported Codex capture versions and Desktop receive read-only MCP. Hook trust
+  remains the host's responsibility, not an installation success claim.
+- Display paths, data size, Provider/Model and verified installation-file presence,
+  without opening Memory SQLite or claiming a running daemon.
+- Add integration removal and exact-global-npm self-uninstall; Memory Data has separate
+  default-preserve confirmation. Retain the entire durable dataRoot by default and
+  reject unsafe deletion paths and unmanaged legacy references.
+- Verify packaged automatic integration loading/removal and actual self-uninstall in
+  an isolated global prefix; real desktop trust and provider semantics remain separate.
+
+### Test quality
+
+- Replace duplicate single-document recovery checks with multi-document subprocess
+  interruption tests and a Writer files-before-SQLite crash/restart/forget journey.
+- Verify session completion through dead-letter, explicit retry and restart, keeping
+  incomplete turns incomplete even after their observations are processed.
+- Test atomic multi-part import rollback and all-or-nothing rejection of mixed valid
+  and unauthorized import decisions, without losing queued source material.
+- Remove scripted semantic-answer fixtures and fixture-count checks; keep focused
+  ablation report contracts and reduce redundant CLI startups. The full gate retains
+  all safety boundaries and passes 508 tests; real-model quality remains independent.
+
+### Boundaries
+
+- No change to canonical Markdown authority, durable queue schema, maintenance
+  protocol, independent provenance permissions, or host approval/trust requirements.
+- Existing V2 configuration remains compatible. Unmanaged legacy integrations are
+  not silently taken over; uninstall preserves the complete Memory Data by default.
+- Linux offline and package tests do not establish real Desktop UI, Windows/macOS
+  host integration or provider semantic correctness.
+
 ## 0.2.1 — 2026-09-10
 
 ### Usability

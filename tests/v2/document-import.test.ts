@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { admitDocumentImport, chunkMarkdown, decodeDocumentChunk, documentImportOutcome, MAX_DOCUMENT_BYTES, prepareDocumentImport, readMarkdownFile } from '../../src/v2/document-import.js';
 import { isImportSource, provenanceOf } from '../../src/v2/import.js';
 import { RuntimeStore } from '../../src/v2/runtime.js';
@@ -92,6 +92,36 @@ describe('file preprocessing', () => {
 });
 
 describe('admission and outcome', () => {
+  it('rolls back an interrupted multi-part admission and accepts the complete retry after reopening', () => {
+    const dir = root();
+    const prepared = prepareDocumentImport(file(dir, 'parts.md', '# Notes\n\n' + Array.from({ length: 3 }, (_, i) => `## Part ${i}\n\n${'x'.repeat(20000)}\n\n`).join('')));
+    expect(prepared.chunks.length).toBeGreaterThan(1);
+    const store = new RuntimeStore(dir);
+    const enqueue = store.enqueue.bind(store);
+    let calls = 0;
+    const failure = vi.spyOn(store, 'enqueue').mockImplementation(input => {
+      const result = enqueue(input);
+      if (++calls === 2) throw new Error('Synthetic storage failure after second insert');
+      return result;
+    });
+    try {
+      expect(() => admitDocumentImport(store, prepared, 'global')).toThrow('Synthetic storage failure');
+      expect(calls).toBe(2);
+      expect(store.db.prepare('SELECT COUNT(*) AS n FROM observations').get()!.n).toBe(0);
+      expect(store.claim({ force: true })).toBeNull();
+    } finally { failure.mockRestore(); store.close(); }
+    const reopened = new RuntimeStore(dir);
+    try {
+      expect(admitDocumentImport(reopened, prepared, 'global')).toEqual({ importId: prepared.importId, duplicate: false, parts: prepared.chunks.length });
+      const job = reopened.claim()!;
+      expect(job.observations.map(o => o.entryId)).toEqual(prepared.chunks.map(c => c.entryId));
+      expect(job.observations.map(o => o.text)).toEqual(prepared.chunks.map(c => c.text));
+      reopened.finish(job);
+      expect(documentImportOutcome(reopened, prepared.importId, 'global', prepared.chunks.length).complete).toBe(true);
+      expect(admitDocumentImport(reopened, prepared, 'global').duplicate).toBe(true);
+      expect(reopened.claim({ force: true })).toBeNull();
+    } finally { reopened.close(); }
+  });
   it('queues all parts atomically, deduplicates identical content regardless of name or label, separates scopes', () => {
     const dir = root(); const store = new RuntimeStore(dir, { turnThreshold: 6 });
     try {

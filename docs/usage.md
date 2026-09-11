@@ -1,4 +1,4 @@
-# Common Memory v0.2 — 使用与配置
+# Common Memory v0.3 — 使用与配置
 
 Durable, user-owned memory maintenance for Pi and local MCP hosts, plus authorized
 read-only disclosure of the resulting Markdown to Pi, Codex CLI and other local MCP
@@ -20,14 +20,18 @@ Memory runs inside WSL and the ChatGPT/Codex desktop app reaches it through `wsl
 
 ## Setup
 
-Requires Node.js 24. Install with `npm install -g common-memory-core@0.2.0`, then run
-`common-memory`. Source contributors can use `npm ci && npm run build` followed by
-`node dist/cli/main.js`. The default interactive workbench brings
-configuration, memory browsing/import, projects and permissions, integration management,
-and queue/session maintenance into one navigable interface. The local wizard writes
-`~/.common-memory/config.json` and, when local credentials are supplied, a private
-`.env` file (`COMMON_MEMORY_HOME` overrides this location). Configure an OpenAI-compatible
-API root and choose a request mode in `remote.api` (omitted means `responses`).
+Requires Node.js 24. Installation: `npm install -g common-memory-core@0.3.0`.
+The following TUI describes the v0.3.0 Setup, management and uninstall flow.
+Source contributors use `npm ci && npm run build`, then `node dist/cli/main.js`.
+First-run `common-memory` selects Provider → API Key → live model list, then scans
+clients for multi-select automatic installation and exits. Custom asks URL/Key/Model
+without discovery. Model discovery never runs on ordinary startup or in runtime.
+`common-memory config` explicitly reopens model configuration.
+See [TUI flow and integration limits](tui-workbench.md).
+The wizard commits `~/.common-memory/config.json` and private `.env` credentials
+recoverably (`COMMON_MEMORY_HOME` overrides this location). Presets choose supported
+protocols; Custom uses Chat Completions. Technical configuration may set `remote.api`
+explicitly (omitted means `responses`).
 Responses uses strict Structured Outputs; `chat_completions` uses JSON object mode
 with the complete maintenance schema in the system message. Both use the same Core
 validation and commit path. Keys are never stored in canonical memory.
@@ -35,13 +39,18 @@ V2 requires configuration `schemaVersion: 2`; pre-V2 configuration/data is not m
 or automatically deleted. Existing V2 configurations remain valid; the V2 jobs table
 receives an idempotent, transactional nullable diagnostic column when opened.
 
-Optional fields in `remote` (Settings → Advanced tuning in the workbench, or edit
-`config.json`). API keys remain in private `.env`; ordinary model edits can keep existing
-or external credentials, and preserve unrelated configuration:
+Advanced fields in `remote` remain technical `config.json` options, not management
+pages. The new wizard requests a key explicitly and records `apiKeySource: "private-env"`
+with a generated credential name, preventing inherited provider keys from replacing it.
+Absent that marker, legacy configurations keep process-environment key precedence.
+The wizard preserves unrelated configuration and clears incompatible thinking/effort
+options when choosing a model. The following fields remain available outside the TUI:
 
 | Field | Accepted values / effect |
 | --- | --- |
-| `api` | `responses` (default) or `chat_completions`; explicit selection, no fallback |
+| `api` | `responses` (default) or `chat_completions`; no runtime fallback |
+| `preset` | Optional provider identity recorded by setup; `custom` keeps an explicit custom identity |
+| `apiKeySource` | Optional `private-env`; new setup reads its private key only; omission preserves legacy precedence |
 | `maxOutputTokens` | Integer 1–16384; default 4096; `max_output_tokens` for Responses, `max_tokens` for Chat |
 | `reasoningEffort` | Responses only: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; sent as `reasoning.effort` |
 | `thinking` | Chat only: `{ "type": "enabled" }` or `{ "type": "disabled" }` |
@@ -54,8 +63,9 @@ Current provider evidence and the reusable verification procedure are recorded i
 [Provider verification](provider-verification.md); earlier experiments remain in
 [Init v0.1 closeout verification](init-v0.1-closeout.md).
 
-Register the built package as a Pi extension using the package's `pi.extensions`
-entry. It records input origins, durably records actual user `message_end` deliveries,
+Setup automatically installs the Pi wrapper for supported Pi 0.84.4. The package's
+`pi.extensions` entry also remains available for manual/legacy deployment; do not load
+both copies. It records input origins, durably records actual user `message_end` deliveries,
 then binds stable transcript entries after Pi appends them. Assistant failure does not
 discard delivered evidence. Input alone is not evidence. Ambiguous, detectably transformed, or
 extension-originated messages are quarantined rather than silently trusted. No
@@ -163,42 +173,44 @@ caller-owned resources. The port itself remains analysis-only.
 Research, explicit environment limits and acceptance evidence:
 [network design and review](outbound-network-design.md).
 
-## Interactive workbench
+## Interactive management
 
-Run **`common-memory`** in a terminal. The Chinese task menu leads to:
+Run **`common-memory show`** in a terminal. Already-configured `common-memory` opens
+the same menu; an unconfigured invocation enters the existing model form directly.
 
 | Menu | Tasks |
 | --- | --- |
-| 查看记忆 | Browse authorized documents with pagination; locate the Markdown files |
-| 导入 Markdown | Import local Markdown; offer an explicit permission form if needed, never auto-grant |
-| 连接 / 管理 AI 助手 | Pi's own manager; Codex/Work export summary and optional technical previews; MCP preview/export |
-| 项目与权限 | Register/view/remove projects; independently manage reads, writes and material types |
-| 模型与设置 | Model/API, independent key rotation, network/CA, synthetic connection test, individual advanced settings |
-| 处理未完成任务 | Job diagnostics and retry; readable session summaries; queue processing and handoff recovery |
-| 查看运行状态 | Local queue health; optional configuration and actual storage-path details |
+| Overview | Application/config/memory paths, data size, client presence (connection unverified) |
+| View Memory | Profile, Preferences and authorized registered projects; paginated read-only content |
+| Modify Memory | Submit a natural-language correction or forget request for personal memory |
 
-First-time setup asks for the API address, model, API type and optional key, then offers
-connection, permission and test steps that can be skipped. Advanced settings use menus
-and numeric fields rather than JSON editing; each confirmed edit preserves unrelated
-settings. The home menu remembers the last action. Saving a step is not undone by
-cancelling a later step.
+Modify Memory uses the configured Writer and Core. Input is an actual local user
+expression (`interactive`), not an imported document or another agent's summary.
+Authorization and sensitive-input checks precede admission. Enter submits after a
+short disclosure notice; cancellation after submission does not remove the durable
+request. A processed request may have been ignored: inspect the actual memory result.
+Idle leases, backoff, failures and cancellation are never reported as successful edits.
+There is no Markdown editor or Delete Memory button.
 
-Use arrows and Enter, Space for multi-select, and Back to return. Esc/Ctrl+C cancels a
-form; cancellation at Home exits. Pending work remains durable. No model call is made
-just by opening the workbench. A generated integration is **not** reported as installed,
-trusted or connected: Codex/Work/MCP config merging and hook trust stay in the host.
-Pi management invokes the official `pi` command on PATH only after confirmation.
+Use arrows and Enter; Esc returns one level and exits at Home. The home menu remembers
+the last action. Browsing and Overview do not call models, initialize absent storage,
+or open SQLite. Overview reports on-demand operation, not a fictitious running daemon.
+Installation-file checks do not prove a running client or host Hook trust.
 
-The interface requires both stdin and stdout to be TTYs. With no arguments outside a
-TTY it prints entry-point guidance and exits; direct `config` wizards fail explicitly
-rather than waiting for input. Scriptable commands and machine protocol entries remain
-available. The same operations serve both CLI and TUI; read-only MCP still never opens
-SQLite. See [design, entry-point inventory and limits](tui-workbench.md).
+The interface requires both stdin and stdout to be TTYs. No-argument non-TTY invocations
+print guidance; direct `config` wizards fail rather than waiting. `show` outside a TTY
+keeps its plain consumer output; `show --plain` forces plain output even in a terminal.
+Existing scriptable commands and machine protocol entries remain available.
+`common-memory uninstall` removes selected owned integrations or the exact global npm
+installation and related config. Memory Data is confirmed separately and retained by
+default, including durable SQLite. Source/npx ownership, unmanaged legacy references,
+unsafe deletion paths and active Writer leases fail closed. See
+[installation, removal and verification boundaries](tui-workbench.md).
 
 ## Commands
 
 These remain supported for automation and direct shortcuts; they are not prerequisites
-for using the workbench.
+for browsing or modifying personal memory.
 
 ```sh
 common-memory
@@ -206,7 +218,7 @@ common-memory config
 common-memory config --network
 common-memory status
 common-memory network-test
-common-memory show [--workspace /absolute/project/path]
+common-memory show [--plain | --workspace /absolute/project/path]
 common-memory import <file.md> [--workspace /absolute/project/path] [--author user|agent|third_party|mixed|unknown] [--label <text>] [--no-wait]
 common-memory flush
 common-memory session-drain [--home <absolute-path>]
@@ -217,9 +229,9 @@ common-memory project remove <id>
 common-memory mcp-config [--wsl] [--distro <name>] [--user <name>] [--workspace /absolute/project/path]...
 ```
 
-`show` prints the memory directory and exactly what consumers (MCP `memory_read`, Pi)
-receive for `global` plus the optional registered workspace, using the same
-authorization. The canonical files themselves are plain Markdown under
+Plain `show` output (`--plain`, non-TTY, or explicit `--workspace`) prints the memory
+directory and exactly what consumers (MCP `memory_read`, Pi) receive for `global` plus
+the optional registered workspace, using the same authorization. The canonical files themselves are plain Markdown under
 `<dataRoot>/memory/` and can be opened with any editor.
 
 ### Importing a Markdown file
@@ -262,15 +274,14 @@ code 1), never as success. Re-running `import` on the same file resumes pending 
 retrying parts (dead jobs need `common-memory retry <job-id>`); a quarantined part is
 final for that content and needs a changed file. `--no-wait` only queues. Enable the
 provenance first:
-`disclosure.allowedProvenance` must contain `document_import` (wizard option "Imported
-Markdown documents"), otherwise `IMPORT_DISABLED`. Text inside the file is data: memory
+`disclosure.allowedProvenance` in config.json must contain `document_import`, otherwise
+`IMPORT_DISABLED`. Text inside the file is data: memory
 commands, links and code in it are never executed or followed, and the import cannot
 forget, remove or replace Sections that user turns produced (see "What Init means").
 
 Project IDs are generated locally. Registry matching uses real paths and the longest
 ancestor, frozen at capture time. Registration alone grants no permission: separately
-authorize `project:<id>` under Projects & permissions in the workbench, or add it to
-`disclosure.allowedScopes` and `writableScopes` in config.
+add `project:<id>` to `disclosure.allowedScopes` and `writableScopes` in config.
 Removing a registration leaves its Markdown intact. `status` reports pending,
 quarantined, dead jobs and unbound deliveries without printing raw conversations.
 It also shows the config path and resolved storage paths (including symlink targets);
@@ -391,8 +402,8 @@ and `memory_status.retainedIn`, `common-memory show` and the Markdown files are 
 post-hoc review.
 
 Init is enabled only when the process was launched with `--capability init` **and**
-`disclosure.allowedProvenance` contains `agent_observation` (the wizard option
-"Agent-reported understanding"); otherwise `memory_init` returns `INIT_DISABLED`.
+`disclosure.allowedProvenance` in config.json contains `agent_observation`; otherwise
+`memory_init` returns `INIT_DISABLED`.
 
 ### Migrate selected, checkable material
 
@@ -659,8 +670,8 @@ Legacy relay/import shutdown does not launch a consumer. Session hooks/Pi quit d
 launch an independent consumer, which may outlive both the host and MCP. Existing recovery wins over cancellation
 once a durable commit has begun. Logs go to stderr; stdout is reserved for MCP.
 
-Full runtime diagnostics, retry, flush, configuration and project management are
-available in the default workbench and as CLI operations. Quotas, hot revocation,
+Full runtime diagnostics, retry, flush, configuration and project management remain
+available as CLI operations, separate from the three-task management TUI. Quotas, hot revocation,
 optional-Pi packaging and broader compatibility matrices remain deferred. No personal data or live models are needed
 for the MCP fake-provider protocol tests.
 
