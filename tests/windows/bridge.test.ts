@@ -55,6 +55,11 @@ it('generates parseable host config with fixed WSL argv, read/init isolation and
       'mcp', '--client-id', client === 'codex' ? 'codex-cli' : 'chatgpt-work', '--capability', 'read', '--global']);
     expect(config.mcp_servers.common_memory_init).toMatchObject(client === 'codex' ? { enabled: false } : { default_tools_approval_mode: 'approve' });
     expect(Object.keys(config.hooks)).toEqual(['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop', 'Interrupt', 'SessionEnd']);
+    for (const [event, entries] of Object.entries(config.hooks) as [string, any[]][]) {
+      const handler = entries[0].hooks[0];
+      if (['SessionStart', 'UserPromptSubmit', 'PostToolUse'].includes(event)) expect(handler.additionalContextLimit).toBe(0);
+      else expect(handler).not.toHaveProperty('additionalContextLimit');
+    }
     const command = config.hooks.SessionStart[0].hooks[0].command as string;
     expect(Buffer.from(command.split(' -EncodedCommand ')[1]!, 'base64').toString('utf16le'))
       .toBe(`& ${psQuote(path)} -Action ${client === 'codex' ? 'codex-hook' : 'work-hook'} -Client ${client}; exit $LASTEXITCODE`);

@@ -284,6 +284,49 @@ it('preserves BOM ownership bytes for Windows files without regressing BOM clien
  removeIntegrations(['chatgpt']);expect(readFileSync(join(desktop.root,'config.toml'),'utf8')).toBe(config);
 });
 
+it.each(['codex','chatgpt'] as const)('upgrades v0.3.6 shared hooks when retaining %s without changing unrelated configuration',id=>{
+ const targets=[target('codex'),target('chatgpt',true)];install(targets);
+ const path=join(targets[0]!.root,'hooks.json'),state=readInstallationState()!;
+ const document=JSON.parse(readFileSync(path,'utf8'));
+ // Reconstruct the exact v0.3.6 on-disk configuration and ownership record.
+ for(const resource of state.resources.filter(r=>r.path===path)) {
+  const entry=resource.value as {hooks:Record<string,unknown>[]};
+  entry.hooks[0]!.additionalContextLimit=0;
+  document.hooks[resource.keys![1]!]=[entry];
+ }
+ const unrelated={hooks:[{type:'command',command:'user-hook',timeout:9}]};
+ document.hooks.Stop.unshift(unrelated);
+ writeFileSync(path,JSON.stringify(document));
+ writeFileSync(join(home,'.installation/state.json'),JSON.stringify(state));
+ const configPath=join(targets[0]!.root,'config.toml'),config=readFileSync(configPath,'utf8');
+ const selected=targets.filter(t=>t.id===id);
+ reconcileIntegrations(selected,dataRoot,{home,expectedState:state});
+ const hooks=JSON.parse(readFileSync(path,'utf8')).hooks;
+ expect(Object.keys(hooks).sort()).toEqual(['SessionStart','UserPromptSubmit','PostToolUse','Stop','Interrupt','SessionEnd'].sort());
+ for(const [event,entries] of Object.entries(hooks) as [string,any[]][]) {
+  const managed=entries.filter(entry=>entry.hooks[0].command!=='user-hook');
+  expect(managed).toHaveLength(1);
+  if(['SessionStart','UserPromptSubmit','PostToolUse'].includes(event))expect(managed[0].hooks[0].additionalContextLimit).toBe(0);
+  else expect(managed[0].hooks[0]).not.toHaveProperty('additionalContextLimit');
+ }
+ expect(hooks.Stop[0]).toEqual(unrelated);expect(readFileSync(configPath,'utf8')).toBe(config);
+ const next=readInstallationState()!;expect(integrationHealth(next,id)).toBe(true);
+ expect(next.resources.every(r=>r.owners.length===1&&r.owners[0]===id)).toBe(true);
+ reconcileIntegrations(selected,dataRoot,{home,expectedState:next});expect(readInstallationState()).toEqual(next);
+ removeIntegrations([id]);expect(JSON.parse(readFileSync(path,'utf8'))).toEqual({hooks:{Stop:[unrelated]}});
+});
+
+it.each(['codex','chatgpt'] as const)('installs only context-capable %s hooks with additionalContextLimit',id=>{
+ const selected=target(id,true);install([selected]);
+ const hooks=JSON.parse(readFileSync(join(selected.root,'hooks.json'),'utf8')).hooks;
+ for(const [event,entries] of Object.entries(hooks) as [string,any[]][]) {
+  const handler=entries[0].hooks[0];
+  expect(handler).toMatchObject({type:'command',async:false,timeout:3});
+  if(['SessionStart','UserPromptSubmit','PostToolUse'].includes(event))expect(handler.additionalContextLimit).toBe(0);
+  else expect(handler).not.toHaveProperty('additionalContextLimit');
+ }
+});
+
 it('automatic Desktop capture leaves a separately configured manual init server unowned and unchanged',()=>{
  const desktop=target('chatgpt',true);mkdirSync(desktop.root);
  const manual='[mcp_servers.common_memory_init]\ncommand="manual-runtime"\nargs=["mcp","--capability","init"]\n';

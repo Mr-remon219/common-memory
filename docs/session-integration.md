@@ -124,6 +124,11 @@ SessionEnd 入队时关闭 activation 并删除 snapshot，不提前关闭待消
 无参数继续打印 profile。共用 host-launch 固定 Node、CLI、home 与 WSL distro/user。
 Work 的 read 和 init 分进程；init 保留 chatgpt-desktop identity，Codex profile 禁用 init。
 所有 Hook 均保留宿主信任机制，不写信任 store、不生成绕过选项。
+自动 JSON 与手动 TOML 共用事件配置：仅 SessionStart、UserPromptSubmit、PostToolUse 设置
+`additionalContextLimit = 0`，保持完整快照交付；Stop、Interrupt、SessionEnd 不写该字段，
+也不返回 additionalContext，避免 Codex host 的不支持事件告警（[0.154.0 discovery.rs](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/hooks/src/engine/discovery.rs#L539-L556)）。
+v0.3.6 升级到 v0.3.7 后，在 Agent Integration 保留原选择并按 Enter 应用，事务性替换旧受管理配置；
+共享 owner 与无关 Hook 保留。手动安装者需重新生成并审阅 bundle；仅升级 npm 包不会改写已有配置。
 
 Windows bridge 从原生祖先进程读取 PID/CreationDate，转换 cwd/transcript 路径，使用
 UTF-8 STDIO 并保留退出码；生成 ps1 含 UTF-8 BOM，兼容 Windows PowerShell 5.1。

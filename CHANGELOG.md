@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.7 — 2026-09-12
+
+- Fix ChatGPT Work and Codex hook configuration warnings: emit `additionalContextLimit = 0` only for SessionStart, UserPromptSubmit and PostToolUse, never Stop, Interrupt or SessionEnd.
+- Share event-aware command configuration between automatic JSON installation and manual TOML bundles on POSIX and Windows-through-WSL. Keep capture, refresh, timeouts and host trust unchanged.
+- Verify transactional upgrades from v0.3.6 shared hooks, preserving unrelated hooks, remaining owners and safe uninstall. After upgrading, reapply the existing Agent Integration selection; manual bundles must be regenerated and reviewed.
+- Add regressions for both clients, native bridge configuration and terminal events with pending refresh context.
+
 ## 0.3.6 — 2026-09-12
 
 - Default new configurations to ordinary OS networking: ignore application proxy environment variables while allowing system routing, VPNs and Clash TUN to handle traffic. Preserve explicitly configured and legacy network modes.

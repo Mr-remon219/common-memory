@@ -7,6 +7,7 @@ import { codexHook,refreshSession } from '../../src/cli/codex-hook.js';
 import { consumeCodexInbox } from '../../src/cli/codex-session.js';
 import { RuntimeStore } from '../../src/v2/runtime.js';
 import { renderHostConfig } from '../../src/cli/work-config.js';
+import { parse } from 'smol-toml';
 const roots:string[]=[];
 afterEach(()=>roots.splice(0).forEach(p=>rmSync(p,{recursive:true,force:true})));
 function fixture(){
@@ -64,9 +65,28 @@ it('unconfirmed item retains the inbox and cannot promote skill text',async()=>{
  const f=fixture();f.hook();f.hook('UserPromptSubmit');f.append({type:'task_started',turn_id:'t'});f.append({type:'item_completed',turn_id:'t',item:{type:'UserMessage',id:'skill',content:[{type:'text',text:'Skill injected instruction'}]}});f.hook('SessionEnd');
  await expect(consumeCodexInbox(f.config)).rejects.toThrow('CODEX_UNCONFIRMED_DELIVERY');f.inspect(s=>expect(s.db.prepare('SELECT body FROM codex_inbox ORDER BY id DESC LIMIT 1').get()!.body).toContain('Skill injected instruction'));
 });
+it.each(['codex','chatgpt-work'] as const)('terminal %s hooks never emit or consume a pending refresh',client=>{
+ const f=fixture();f.memory('A');f.hook('SessionStart','startup','s','','t',client);
+ f.memory('B');refreshSession(f.home,client,'host','s');
+ expect(f.hook('Stop','startup','s','','t',client)).toEqual({});
+ expect(f.hook('Interrupt','startup','s','','t',client)).toEqual({});
+ expect(body(f.hook('PostToolUse','startup','s','','t',client))).toContain('B');
+ f.memory('C');refreshSession(f.home,client,'host','s');
+ expect(f.hook('SessionEnd','startup','s','','t',client)).toEqual({});
+});
 it.skipIf(process.platform==='win32')('generates POSIX skills and isolated MCP identities without trust bypass',()=>{
  const env={...process.env,COMMON_MEMORY_HOME:'/tmp/memory home'};
  const work=renderHostConfig('chatgpt-work',{wsl:false},env);expect(work.config).toContain('chatgpt-desktop');expect(work.config).toContain('chatgpt-work');expect(work.policy).toContain('allow_implicit_invocation: false');expect(work.skill).toContain("'session-refresh' '--home' '/tmp/memory home' '--client' 'chatgpt-work'");
  const codex=renderHostConfig('codex',{wsl:false},env);expect(codex.config).toContain('[mcp_servers.common_memory_init]\nenabled = false');expect(codex.config).toContain('codex-cli');
  expect(work.config).not.toContain('bypass');
+ for(const bundle of [work,codex]) {
+  const hooks=parse(bundle.config).hooks as Record<string,{hooks:Record<string,unknown>[]}[]>;
+  expect(Object.keys(hooks)).toEqual(['SessionStart','UserPromptSubmit','PostToolUse','Stop','Interrupt','SessionEnd']);
+  for(const [event,entries] of Object.entries(hooks)) {
+   const handler=entries[0]!.hooks[0]!;
+   expect(handler).toMatchObject({type:'command',async:false,timeout:3});
+   if(['SessionStart','UserPromptSubmit','PostToolUse'].includes(event))expect(handler.additionalContextLimit).toBe(0);
+   else expect(handler).not.toHaveProperty('additionalContextLimit');
+  }
+ }
 });

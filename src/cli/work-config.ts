@@ -7,6 +7,13 @@ import { runtimeLaunch, shellQuote, type LaunchOptions } from './host-launch.js'
 import type { HostClient } from './codex-session.js';
 const psQuote=(s:string)=>"'"+s.replaceAll("'","''")+"'";
 
+export const HOST_HOOK_EVENTS = ['SessionStart','UserPromptSubmit','PostToolUse','Stop','Interrupt','SessionEnd'] as const;
+/** Codex host discovery warns on context limits for events that cannot emit context. */
+export function hostHookHandler(event:typeof HOST_HOOK_EVENTS[number],command:string) {
+  return {type:'command' as const,command,async:false,timeout:3,
+    ...(['SessionStart','UserPromptSubmit','PostToolUse'].includes(event)?{additionalContextLimit:0}:{})};
+}
+
 // Windows PowerShell 5.1 rewrites native argv (including trailing backslashes).
 // Use the Windows CRT quoting rules explicitly with ProcessStartInfo instead.
 // https://learn.microsoft.com/en-us/cpp/c-language/parsing-c-command-line-arguments
@@ -101,7 +108,10 @@ export function renderHostConfig(client:HostClient,options:LaunchOptions,env:Nod
   if(options.wsl&&(!bridgePath||!win32.isAbsolute(bridgePath)||/["\r\n]/.test(bridgePath)))throw new Error('--bridge-path requires the absolute Windows destination of the generated launcher');
   const command=(action:string)=>renderHostCommand(client,action,options,env,bridgePath);
   const lines=['# Review commands and establish host trust with /hooks. Regenerate after moving this runtime.','[features]','hooks = true',''];
-  for(const event of ['SessionStart','UserPromptSubmit','PostToolUse','Stop','Interrupt','SessionEnd'])lines.push(`[[hooks.${event}]]`,`[[hooks.${event}.hooks]]`,'type = "command"',`command = ${JSON.stringify(command(client==='codex'?'codex-hook':'work-hook'))}`,'async = false','timeout = 3','additionalContextLimit = 0','');
+  for(const event of HOST_HOOK_EVENTS) {
+    const handler=hostHookHandler(event,command(client==='codex'?'codex-hook':'work-hook'));
+    lines.push(`[[hooks.${event}]]`,`[[hooks.${event}.hooks]]`,...Object.entries(handler).map(([key,value])=>`${key} = ${JSON.stringify(value)}`),'');
+  }
   for(const [name,id,capability] of [['common_memory',client==='codex'?'codex-cli':'chatgpt-work','read'],['common_memory_init','chatgpt-desktop','init']]) {
     lines.push(`[mcp_servers.${name}]`);
     if(client==='codex'&&capability==='init'){lines.push('enabled = false','');continue;}

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { renderHostCommand, renderWindowsBridge } from './work-config.js';
+import { HOST_HOOK_EVENTS, hostHookHandler, renderHostCommand, renderWindowsBridge } from './work-config.js';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { userInfo } from 'node:os';
@@ -115,8 +115,8 @@ function desiredResources(target: IntegrationTarget, home: string, env: NodeJS.P
     if(launch.wsl&&(!nativeBridge||!win32.isAbsolute(nativeBridge)||! /^[A-Za-z]:\\/u.test(nativeBridge)))throw new Error('Windows bridge requires a native Windows config directory');
     if(launch.wsl)resources.push({kind:'file',path:bridge,content:'\ufeff'+renderWindowsBridge(launch,launchEnv),owners:owner});
     const hook = renderHostCommand('codex','codex-hook',launch,launchEnv,nativeBridge);
-    for (const event of ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop', 'Interrupt', 'SessionEnd']) {
-      resources.push({ kind: 'array', path: join(target.root, 'hooks.json'), keys: ['hooks', event], value: { hooks: [{ type: 'command', command: hook, async: false, timeout: 3, additionalContextLimit: 0 }] }, owners: owner });
+    for (const event of HOST_HOOK_EVENTS) {
+      resources.push({ kind: 'array', path: join(target.root, 'hooks.json'), keys: ['hooks', event], value: { hooks: [hostHookHandler(event,hook)] }, owners: owner });
     }
     const refresh = renderHostCommand('codex','session-refresh',launch,launchEnv,nativeBridge);
     resources.push({ kind: 'file', path: join(target.root, 'skills/memory-refresh/SKILL.md'), content: `---\nname: memory-refresh\ndescription: Explicitly refresh the current Common Memory snapshot.\n---\n\nWhen the user invokes this skill, run:\n\n\`\`\`sh\n${refresh}\n\`\`\`\n\nReport failures. Do not reset memory or session state.\n`, owners: owner },

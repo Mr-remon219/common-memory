@@ -20,7 +20,7 @@ Memory runs inside WSL and the ChatGPT/Codex desktop app reaches it through `wsl
 
 ## Setup
 
-Requires Node.js 22.19+ (22.x) or 24+. Installation: `npm install -g common-memory-core@0.3.6`.
+Requires Node.js 22.19+ (22.x) or 24+. Installation: `npm install -g common-memory-core@0.3.7`.
 The following TUI describes the current source. Source contributors use
 `npm ci && npm run build`, then `node dist/cli/main.js`.
 **`common-memory` is the single entry for interactive management.** First run selects
