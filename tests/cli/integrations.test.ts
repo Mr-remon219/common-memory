@@ -1,10 +1,10 @@
 import { stubInstalledBuild } from '../helpers/installation-build.js';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parse } from 'smol-toml';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { installIntegrations, integrationHealth, readInstallationState, removeIntegrations } from '../../src/cli/integrations.js';
+import { installIntegrations, integrationHealth, readInstallationState, reconcileIntegrations, removeIntegrations } from '../../src/cli/integrations.js';
 import { installationTransaction, readInstallationFile, writeInstallationFile } from '../../src/cli/installation-files.js';
 import { scanIntegrationTargets, type IntegrationTarget } from '../../src/cli/integration-targets.js';
 
@@ -123,4 +123,84 @@ it('discovers native Windows Desktop from an explicit app probe, not merely WSL 
   installIntegrations([desktop!], dataRoot, { home, env: base.env });
   const body = readInstallationFile(join(desktop!.root, 'config.toml'))!;
   expect(body).toContain('wsl.exe'); expect(body).toContain('Synthetic'); expect(body).toContain('COMMON_MEMORY_HOME=');
+});
+
+it('reconciles Pi + Codex to Pi + ChatGPT atomically while retaining shared MCP and unchanged Pi files', () => {
+  const pi = target('pi'), codex = target('codex'), chatgpt = target('chatgpt');
+  install([pi, codex]);
+  const wrapper = join(home, 'integrations/pi/common-memory.js'), mcp = join(codex.root, 'config.toml');
+  const piBefore = statSync(wrapper), mcpBefore = statSync(mcp), mcpContent = readFileSync(mcp, 'utf8');
+  const change = reconcileIntegrations([pi, chatgpt], dataRoot, { home, expectedState: readInstallationState() });
+  expect(change).toEqual({ installed: ['chatgpt'], removed: ['codex'], retained: ['pi'] });
+  const state = readInstallationState()!;
+  expect(state.targets.map(t => t.id)).toEqual(['pi', 'chatgpt']);
+  expect(state.resources.find(r => r.kind === 'toml')!.owners).toEqual(['chatgpt']);
+  expect(integrationHealth(state, 'pi')).toBe(true); expect(integrationHealth(state, 'chatgpt')).toBe(true);
+  expect(existsSync(join(codex.root, 'hooks.json'))).toBe(false);
+  expect(existsSync(join(codex.root, 'skills/memory-refresh/SKILL.md'))).toBe(false);
+  expect(readFileSync(mcp, 'utf8')).toBe(mcpContent);
+  expect(statSync(wrapper).ino).toBe(piBefore.ino); expect(statSync(wrapper).mtimeMs).toBe(piBefore.mtimeMs);
+  expect(statSync(mcp).ino).toBe(mcpBefore.ino); expect(statSync(mcp).mtimeMs).toBe(mcpBefore.mtimeMs);
+});
+it('does not remove deselected integrations if an added client fails preflight', () => {
+  const pi = target('pi'), codex = target('codex'); install([pi]);
+  const before = readInstallationState();
+  mkdirSync(codex.root); writeFileSync(join(codex.root, 'config.toml'), '[mcp_servers.common_memory]\ncommand="user-owned"\n');
+  expect(() => reconcileIntegrations([codex], dataRoot, { home, expectedState: before })).toThrow('未归属');
+  expect(readInstallationState()).toEqual(before); expect(integrationHealth(before!, 'pi')).toBe(true);
+  expect(existsSync(join(codex.root, 'hooks.json'))).toBe(false);
+});
+it('does not install added clients if removing a deselected client fails ownership validation', () => {
+  const pi = target('pi'), codex = target('codex'); install([pi]);
+  const before = readInstallationState(), wrapper = join(home, 'integrations/pi/common-memory.js');
+  writeFileSync(wrapper, 'external edit');
+  expect(() => reconcileIntegrations([codex], dataRoot, { home, expectedState: before })).toThrow('已被修改');
+  expect(readInstallationState()).toEqual(before); expect(readFileSync(wrapper, 'utf8')).toBe('external edit');
+  expect(existsSync(join(codex.root, 'config.toml'))).toBe(false);
+  expect(existsSync(join(codex.root, 'hooks.json'))).toBe(false);
+});
+it('treats unchanged selection as a no-op even when the current installed client is no longer discoverable', () => {
+  const pi = target('pi'); install([pi]);
+  const before = readInstallationState(), path = join(home, '.installation/state.json'), metadata = statSync(path);
+  stubInstalledBuild(false);
+  expect(reconcileIntegrations([pi], dataRoot, { home, expectedState: before })).toEqual({ installed: [], removed: [], retained: ['pi'] });
+  expect(readInstallationState()).toEqual(before);
+  expect(statSync(path).ino).toBe(metadata.ino); expect(statSync(path).mtimeMs).toBe(metadata.mtimeMs);
+});
+it('rejects a selection based on stale installation ownership before applying any differences', () => {
+  const pi = target('pi'), codex = target('codex'); install([pi]);
+  const before = readInstallationState(); install([codex]); const concurrent = readInstallationState();
+  expect(() => reconcileIntegrations([], dataRoot, { home, expectedState: before })).toThrow('接入状态已被其他操作修改');
+  expect(readInstallationState()).toEqual(concurrent);
+  expect(integrationHealth(concurrent!, 'pi')).toBe(true); expect(integrationHealth(concurrent!, 'codex')).toBe(true);
+});
+it('checks explicitly disabled hooks even when switching from a shared read-only ChatGPT integration', () => {
+  const chatgpt = target('chatgpt'), codex = target('codex'); install([chatgpt]);
+  const path = join(codex.root, 'config.toml');
+  writeFileSync(path, readFileSync(path, 'utf8') + '\n[features]\nhooks=false\n');
+  const before = readInstallationState();
+  expect(() => reconcileIntegrations([codex], dataRoot, { home, expectedState: before })).toThrow('禁用 Hooks');
+  expect(readInstallationState()).toEqual(before); expect(existsSync(join(codex.root, 'hooks.json'))).toBe(false);
+  expect(integrationHealth(before!, 'chatgpt')).toBe(true);
+});
+it.each(['missing', 'modified'])('rejects a %s retained integration before committing additions or removals', failure => {
+  const pi = target('pi'), codex = target('codex'), chatgpt = target('chatgpt'); install([pi, codex]);
+  const before = readInstallationState(), wrapper = join(home, 'integrations/pi/common-memory.js');
+  if (failure === 'missing') rmSync(wrapper);
+  else writeFileSync(wrapper, 'external edit');
+  expect(() => reconcileIntegrations([pi, chatgpt], dataRoot, { home, expectedState: before })).toThrow('接入文件缺失或已变更');
+  expect(readInstallationState()).toEqual(before);
+  expect(integrationHealth(before!, 'codex')).toBe(true);
+  expect(readInstallationState()!.resources.find(r => r.kind === 'toml')!.owners).toEqual(['codex']);
+  if (failure === 'missing') expect(existsSync(wrapper)).toBe(false);
+  else expect(readFileSync(wrapper, 'utf8')).toBe('external edit');
+});
+it('preserves both owners when a shared MCP resource was modified before removing one integration', () => {
+  const codex = target('codex'), chatgpt = target('chatgpt'); install([codex, chatgpt]);
+  const before = readInstallationState(), path = join(codex.root, 'config.toml');
+  writeFileSync(path, '[mcp_servers.common_memory]\ncommand="external"\n');
+  expect(() => removeIntegrations(['codex'])).toThrow('共享接入文件缺失或已变更');
+  expect(readInstallationState()).toEqual(before);
+  expect(existsSync(join(codex.root, 'hooks.json'))).toBe(true);
+  expect(readFileSync(path, 'utf8')).toBe('[mcp_servers.common_memory]\ncommand="external"\n');
 });

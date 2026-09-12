@@ -6,7 +6,7 @@ import { defaultConfig, saveConfig } from 'common-memory-core';
 const root = process.cwd(), home = join(root, 'automatic-home');
 process.env.COMMON_MEMORY_HOME = home;
 const packageRoot = new URL('../', import.meta.resolve('common-memory-core'));
-const { installIntegrations, removeIntegrations, readInstallationState } = await import(new URL('dist/cli/integrations.js', packageRoot));
+const { installIntegrations, removeIntegrations, readInstallationState, reconcileIntegrations } = await import(new URL('dist/cli/integrations.js', packageRoot));
 const config = defaultConfig(); config.remote.model = 'synthetic'; saveConfig(config);
 const pi = { id: 'pi', name: 'Pi', root: join(root, 'automatic-pi'), mode: 'posix', hooks: true };
 const codex = { id: 'codex', name: 'Codex CLI', root: join(root, 'automatic-codex'), mode: 'posix', hooks: false };
@@ -22,4 +22,23 @@ assert.equal(readInstallationState().targets.length, 2);
 removeIntegrations(['pi', 'codex']);
 assert.deepEqual(JSON.parse(readFileSync(join(pi.root, 'settings.json'), 'utf8')), { theme: 'preserved' });
 assert.equal(existsSync(settings.extensions[0]), false); assert.equal(existsSync(join(config.dataRoot, 'runtime.sqlite')), false);
-console.log('Packaged automatic integration installation, actual Pi wrapper registration and ownership-safe removal passed.');
+// Exercise the TUI's final-state reconciliation against the actual installed package resources.
+const capturingCodex = { ...codex, hooks: true }, chatgpt = { ...codex, id: 'chatgpt', name: 'ChatGPT' };
+installIntegrations([pi, capturingCodex], config.dataRoot);
+const mcpPath = join(codex.root, 'config.toml'), hooksPath = join(codex.root, 'hooks.json');
+const mcpBefore = readFileSync(mcpPath, 'utf8'), wrapperBefore = readFileSync(settings.extensions[0], 'utf8');
+assert.equal(existsSync(hooksPath), true);
+assert.deepEqual(reconcileIntegrations([pi, chatgpt], config.dataRoot, { expectedState: readInstallationState() }), {
+  installed: ['chatgpt'], removed: ['codex'], retained: ['pi'],
+});
+const reconciled = readInstallationState();
+assert.deepEqual(reconciled.targets.map(target => target.id), ['pi', 'chatgpt']);
+assert.deepEqual(reconciled.resources.find(resource => resource.kind === 'toml').owners, ['chatgpt']);
+assert.equal(readFileSync(mcpPath, 'utf8'), mcpBefore);
+assert.equal(readFileSync(settings.extensions[0], 'utf8'), wrapperBefore);
+assert.equal(existsSync(hooksPath), false);
+assert.equal(existsSync(join(codex.root, 'skills/memory-refresh/SKILL.md')), false);
+removeIntegrations(['pi', 'chatgpt']);
+assert.deepEqual(JSON.parse(readFileSync(join(pi.root, 'settings.json'), 'utf8')), { theme: 'preserved' });
+assert.equal(existsSync(mcpPath), false); assert.equal(existsSync(join(config.dataRoot, 'runtime.sqlite')), false);
+console.log('Packaged automatic installation, actual Pi wrapper registration, mixed Agent reconciliation and ownership-safe removal passed.');

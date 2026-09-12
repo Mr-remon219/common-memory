@@ -115,92 +115,156 @@ function desiredResources(target: IntegrationTarget, home: string, env: NodeJS.P
   return resources;
 }
 
-/** Semantic JSON additions and exact TOML fragments preserve unrelated settings and TOML comments. */
+interface IntegrationPlan {
+  get: (path: string) => string | null;
+  put: (path: string, after: string | null) => void;
+  changes: Map<string, FileChange>;
+}
+function integrationPlan(): IntegrationPlan {
+  const changes = new Map<string, FileChange>();
+  const get = (path: string): string | null => {
+    if (!changes.has(path)) {
+      const before = readInstallationFile(path);
+      changes.set(path, { path, before, after: before });
+    }
+    return changes.get(path)!.after;
+  };
+  return { changes, get, put: (path, after) => {
+    get(path); const change = changes.get(path)!; change.after = after;
+    // Finalize state last, after its client resources, while preserving the first-read baseline.
+    changes.delete(path); changes.set(path, change);
+  } };
+}
+
+/** Stage semantic JSON additions and exact TOML fragments without changing unrelated settings. */
+function stageInstall(state: InstallationState, targets: IntegrationTarget[], home: string, env: NodeJS.ProcessEnv, plan: IntegrationPlan): void {
+  const { get, put } = plan;
+  for (const target of targets) {
+    const desired = desiredResources(target, home, env);
+    // Different runtimes cannot share a client config: do not break a native/WSL installation.
+    if (state.targets.some(t => t.root === target.root && t.mode !== target.mode) || targets.some(t => t.root === target.root && t.mode !== target.mode)) throw new Error('Windows 与 WSL 客户端正在共用配置目录，无法安全自动合并。');
+    for (const resource of desired) {
+      const owned = state.resources.find(r => sameResource(r, resource));
+      const raw = get(resource.path);
+      if (resource.kind === 'toml' && target.hooks) {
+        const parsed = parseToml(raw ?? '', { integersAsBigInt: true });
+        if (object(parsed.features) && parsed.features.hooks === false) throw new Error('客户端已明确禁用 Hooks，未改变该安全设置。');
+      }
+      if (owned) {
+        if (!resourcePresent(owned, raw)) throw new Error(`已安装的 Common Memory 配置被修改，未覆盖：${resource.path}`);
+        if (!owned.owners.includes(target.id)) owned.owners.push(target.id);
+        continue;
+      }
+      if (resource.kind === 'file') {
+        if (raw !== null) throw new Error(`目标文件已存在且不属于本次安装：${resource.path}`);
+        put(resource.path, resource.content!);
+      } else if (resource.kind === 'toml') {
+        const parsed = parseToml(raw ?? '', { integersAsBigInt: true });
+        if (object(parsed.mcp_servers) && Object.hasOwn(parsed.mcp_servers, 'common_memory')) throw new Error('已有未归属的 common_memory MCP 配置，未覆盖。');
+        const next = (raw ?? '') + resource.content!;
+        parseToml(next, { integersAsBigInt: true }); put(resource.path, next);
+      } else {
+        const document = parseJson(raw), array = arrayAt(document, resource.keys!, true)!;
+        if (array.some(value => isDeepStrictEqual(value, resource.value))) throw new Error('已有同名未归属接入项，未重复安装。');
+        if (target.id === 'pi' && JSON.stringify(document).includes('common-memory-core')) throw new Error('Pi 已有手动安装的 Common Memory 包，未重复加载。');
+        array.push(resource.value); put(resource.path, JSON.stringify(document, null, 2) + '\n');
+      }
+      state.resources.push({ ...resource, owners: [...resource.owners] });
+    }
+    state.targets = [...state.targets.filter(t => t.id !== target.id), target];
+  }
+}
+
+function stageRemove(state: InstallationState, ids: IntegrationId[], home: string, plan: IntegrationPlan): void {
+  const { get, put } = plan;
+  for (const resource of state.resources) {
+    if (!resource.owners.some(id => ids.includes(id))) continue;
+    resource.owners = resource.owners.filter(id => !ids.includes(id));
+    if (resource.owners.length) {
+      if (!resourcePresent(resource, get(resource.path))) throw new Error(`共享接入文件缺失或已变更，未修改任何接入：${resource.path}`);
+      continue;
+    }
+    const raw = get(resource.path);
+    if (raw === null) continue;
+    let next: string | null;
+    if (resource.kind === 'file') {
+      if (raw !== resource.content) throw new Error(`安装文件已被修改，未删除：${resource.path}`);
+      next = null;
+    } else if (resource.kind === 'toml') {
+      if (!raw.includes(resource.content!)) throw new Error(`MCP 配置块已被修改，未删除：${resource.path}`);
+      next = raw.replace(resource.content!, ''); parseToml(next, { integersAsBigInt: true });
+      if (!next.length) next = null;
+    } else {
+      const document = parseJson(raw), array = arrayAt(document, resource.keys!, false);
+      const index = array?.findIndex(value => isDeepStrictEqual(value, resource.value)) ?? -1;
+      if (index >= 0) array!.splice(index, 1);
+      else if (raw.includes(home)) throw new Error(`接入项已被修改，未删除：${resource.path}`);
+      else continue; // Already manually removed.
+      // Remove now-empty managed containers, never unrelated values.
+      for (let depth = resource.keys!.length; depth > 0; depth--) {
+        let parent = document;
+        for (const key of resource.keys!.slice(0, depth - 1)) parent = parent[key] as Record<string, unknown>;
+        const key = resource.keys![depth - 1]!, value = parent[key];
+        if (Array.isArray(value) ? value.length === 0 : object(value) && Object.keys(value).length === 0) delete parent[key];
+        else break;
+      }
+      next = Object.keys(document).length ? JSON.stringify(document, null, 2) + '\n' : null;
+    }
+    put(resource.path, next);
+  }
+  state.resources = state.resources.filter(r => r.owners.length);
+  state.targets = state.targets.filter(t => !ids.includes(t.id));
+}
+
+/** Additive API retained for package consumers and explicit installation operations. */
 export function installIntegrations(targets: IntegrationTarget[], dataRoot: string, options: { home?: string; env?: NodeJS.ProcessEnv } = {}): void {
   const home = resolve(options.home ?? configDirectory()), env = options.env ?? process.env;
   installationTransaction(home, commit => {
+    const plan = integrationPlan(); plan.get(statePath(home));
     const state = readInstallationState(home) ?? emptyState();
-    const changes = new Map<string, FileChange>();
-    const get = (path: string) => changes.get(path)?.after ?? readInstallationFile(path);
-    const put = (path: string, after: string) => changes.set(path, { path, before: changes.has(path) ? changes.get(path)!.before : readInstallationFile(path), after });
-    for (const target of targets) {
-      const desired = desiredResources(target, home, env);
-      // Different runtimes cannot share a client config: do not break a native/WSL installation.
-      if (state.targets.some(t => t.root === target.root && t.mode !== target.mode) || targets.some(t => t.root === target.root && t.mode !== target.mode)) throw new Error('Windows 与 WSL 客户端正在共用配置目录，无法安全自动合并。');
-      for (const resource of desired) {
-        const owned = state.resources.find(r => sameResource(r, resource));
-        const raw = get(resource.path);
-        if (owned) {
-          if (!resourcePresent(owned, raw)) throw new Error(`已安装的 Common Memory 配置被修改，未覆盖：${resource.path}`);
-          if (!owned.owners.includes(target.id)) owned.owners.push(target.id);
-          continue;
-        }
-        if (resource.kind === 'file') {
-          if (raw !== null) throw new Error(`目标文件已存在且不属于本次安装：${resource.path}`);
-          put(resource.path, resource.content!);
-        } else if (resource.kind === 'toml') {
-          const parsed = parseToml(raw ?? '', { integersAsBigInt: true });
-          if (object(parsed.mcp_servers) && Object.hasOwn(parsed.mcp_servers, 'common_memory')) throw new Error('已有未归属的 common_memory MCP 配置，未覆盖。');
-          if (target.hooks && object(parsed.features) && parsed.features.hooks === false) throw new Error('客户端已明确禁用 Hooks，未改变该安全设置。');
-          const next = (raw ?? '') + resource.content!;
-          parseToml(next, { integersAsBigInt: true }); put(resource.path, next);
-        } else {
-          const document = parseJson(raw), array = arrayAt(document, resource.keys!, true)!;
-          if (array.some(value => isDeepStrictEqual(value, resource.value))) throw new Error('已有同名未归属接入项，未重复安装。');
-          if (target.id === 'pi' && JSON.stringify(document).includes('common-memory-core')) throw new Error('Pi 已有手动安装的 Common Memory 包，未重复加载。');
-          array.push(resource.value); put(resource.path, JSON.stringify(document, null, 2) + '\n');
-        }
-        state.resources.push({ ...resource, owners: [...resource.owners] });
-      }
-      state.targets = [...state.targets.filter(t => t.id !== target.id), target];
-    }
+    stageInstall(state, targets, home, env, plan);
     state.setupComplete = true; state.dataRoot = dataRoot;
-    changes.set(statePath(home), { path: statePath(home), before: readInstallationFile(statePath(home)), after: JSON.stringify(state, null, 2) + '\n' });
-    commit([...changes.values()]);
+    plan.put(statePath(home), JSON.stringify(state, null, 2) + '\n');
+    commit([...plan.changes.values()]);
   });
 }
 
 export function removeIntegrations(ids: IntegrationId[], home = configDirectory()): void {
   installationTransaction(home, commit => {
+    const plan = integrationPlan(); plan.get(statePath(home));
     const state = readInstallationState(home);
     if (!state) return;
-    const changes = new Map<string, FileChange>();
-    const get = (path: string) => changes.has(path) ? changes.get(path)!.after : readInstallationFile(path);
-    for (const resource of state.resources) {
-      if (!resource.owners.some(id => ids.includes(id))) continue;
-      resource.owners = resource.owners.filter(id => !ids.includes(id));
-      if (resource.owners.length) continue;
-      const raw = get(resource.path);
-      if (raw === null) continue;
-      let next: string | null;
-      if (resource.kind === 'file') {
-        if (raw !== resource.content) throw new Error(`安装文件已被修改，未删除：${resource.path}`);
-        next = null;
-      } else if (resource.kind === 'toml') {
-        if (!raw.includes(resource.content!)) throw new Error(`MCP 配置块已被修改，未删除：${resource.path}`);
-        next = raw.replace(resource.content!, ''); parseToml(next, { integersAsBigInt: true });
-        if (!next.length) next = null;
-      } else {
-        const document = parseJson(raw), array = arrayAt(document, resource.keys!, false);
-        const index = array?.findIndex(value => isDeepStrictEqual(value, resource.value)) ?? -1;
-        if (index >= 0) array!.splice(index, 1);
-        else if (raw.includes(home)) throw new Error(`接入项已被修改，未删除：${resource.path}`);
-        else continue; // Already manually removed.
-        // Remove now-empty managed containers, never unrelated values.
-        for (let depth = resource.keys!.length; depth > 0; depth--) {
-          let parent = document;
-          for (const key of resource.keys!.slice(0, depth - 1)) parent = parent[key] as Record<string, unknown>;
-          const key = resource.keys![depth - 1]!, value = parent[key];
-          if (Array.isArray(value) ? value.length === 0 : object(value) && Object.keys(value).length === 0) delete parent[key];
-          else break;
-        }
-        next = Object.keys(document).length ? JSON.stringify(document, null, 2) + '\n' : null;
-      }
-      changes.set(resource.path, { path: resource.path, before: changes.has(resource.path) ? changes.get(resource.path)!.before : readInstallationFile(resource.path), after: next });
+    stageRemove(state, ids, home, plan);
+    plan.put(statePath(home), JSON.stringify(state, null, 2) + '\n');
+    commit([...plan.changes.values()]);
+  });
+}
+
+export interface IntegrationChanges { installed: IntegrationId[]; removed: IntegrationId[]; retained: IntegrationId[] }
+
+/** Apply the final selected state in one recoverable transaction, keeping unchanged integrations intact. */
+export function reconcileIntegrations(targets: IntegrationTarget[], dataRoot: string, options: {
+  home?: string; env?: NodeJS.ProcessEnv; expectedState?: InstallationState | null;
+} = {}): IntegrationChanges {
+  const home = resolve(options.home ?? configDirectory()), env = options.env ?? process.env;
+  return installationTransaction(home, commit => {
+    const plan = integrationPlan(); plan.get(statePath(home));
+    const previous = readInstallationState(home);
+    if (options.expectedState !== undefined && !isDeepStrictEqual(previous, options.expectedState)) throw new Error('Agent 接入状态已被其他操作修改，请重新打开页面后再试。');
+    const state = previous ?? emptyState();
+    if (new Set(targets.map(t => t.id)).size !== targets.length) throw new Error('Agent 选择包含重复项。');
+    const removed = state.targets.filter(t => !targets.some(selected => selected.id === t.id)).map(t => t.id);
+    const added = targets.filter(t => !state.targets.some(installed => installed.id === t.id));
+    const retained = targets.filter(t => state.targets.some(installed => installed.id === t.id)).map(t => t.id);
+    for (const id of retained) {
+      if (!integrationHealth(state, id)) throw new Error(`${id} 的接入文件缺失或已变更，未修改任何接入。请先恢复被修改的文件；仅缺失文件的接入可取消选择移除。`);
     }
-    state.resources = state.resources.filter(r => r.owners.length);
-    state.targets = state.targets.filter(t => !ids.includes(t.id));
-    changes.set(statePath(home), { path: statePath(home), before: readInstallationFile(statePath(home)), after: JSON.stringify(state, null, 2) + '\n' });
-    commit([...changes.values()]);
+    // Transfer shared ownership before removing old owners so a Codex → ChatGPT switch keeps its MCP block.
+    stageInstall(state, added, home, env, plan);
+    stageRemove(state, removed, home, plan);
+    state.setupComplete = true; state.dataRoot = dataRoot;
+    plan.put(statePath(home), JSON.stringify(state, null, 2) + '\n');
+    commit([...plan.changes.values()]);
+    return { installed: added.map(t => t.id), removed, retained };
   });
 }

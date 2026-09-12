@@ -34,7 +34,7 @@ async function apiKey(): Promise<string> {
   return unwrap(await clack.password({ message: 'API Key', validate: value => value?.trim() && !/[\r\n\0]/u.test(value) ? undefined : '请填写非空、单行的 API Key' })).trim();
 }
 
-/** Provider → key → fresh discovery → Enter saves. Custom never calls discovery. */
+/** Provider → Base URL → key → fresh discovery → Enter saves. Custom never calls discovery. */
 export async function configureModel(existing?: CommonMemoryConfig | null, options: { setup?: boolean } = {}): Promise<CommonMemoryConfig> {
   requireInteractive();
   recoverPendingInstallation(configDirectory());
@@ -73,30 +73,31 @@ export async function configureModel(existing?: CommonMemoryConfig | null, optio
 }
 
 async function configureProvider(provider: ProviderPreset, current: CommonMemoryConfig) {
-  let baseUrl: string = provider.baseUrl;
+  const sameProvider = providerFor(current.remote.baseUrl, current.remote.preset).id === provider.id;
+  let baseUrl: string = sameProvider ? current.remote.baseUrl : provider.baseUrl;
   let key = '';
-  let step = provider.id === 'custom' ? 0 : 1;
+  let step = 0;
   for (;;) {
     try {
       if (step === 0) {
-        baseUrl = normalizeOpenAICompatibleBaseUrl(unwrap(await clack.text({ message: 'Base URL', initialValue: current.remote.preset === 'custom' ? current.remote.baseUrl : '', validate: value => {
+        baseUrl = normalizeOpenAICompatibleBaseUrl(unwrap(await clack.text({ message: 'Base URL', initialValue: baseUrl, validate: value => {
           try { normalizeOpenAICompatibleBaseUrl(value ?? ''); } catch { return '请填写有效的 HTTP / HTTPS Base URL'; }
         } })));
         step = 1;
       } else if (step === 1) { key = await apiKey(); step = 2; }
       else if (provider.id === 'custom') {
-        const model = await text('Model Name', current.remote.preset === 'custom' ? current.remote.model : '');
+        const model = await text('Model Name', sameProvider ? current.remote.model : '');
         return { key, remote: { baseUrl, model, api: 'chat_completions' as const } };
       } else {
         log('Discovering models… Esc Back');
-        const models = await cancellable(signal => discoverModels(provider, key, current, { signal }));
+        const models = await cancellable(signal => discoverModels({ ...provider, baseUrl }, key, current, { signal }));
         note('↑↓ Navigate · Enter Select · Esc Back', provider.name);
         const model = await menu('Model Configuration', models.map(m => ({ value: m.id, label: m.id })), models.some(m => m.id === current.remote.model) ? current.remote.model : undefined);
         return { key, remote: { baseUrl, model, api: models.find(m => m.id === model)!.api } };
       }
     } catch (error) {
       if (!(error instanceof UserCancelled) || error.exit) throw error;
-      if (step === 0 || step === 1 && provider.id !== 'custom') throw error;
+      if (step === 0) throw error;
       step--;
     }
   }

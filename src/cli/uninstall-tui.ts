@@ -5,6 +5,22 @@ import { recoverPendingInstallation } from './installation-files.js';
 import { npmInstallation, uninstallCompletely } from './uninstall.js';
 import { attempt, confirm, menu, note, requireInteractive, unwrap } from './tui-prompts.js';
 
+/** Shared by the unified configuration column and the legacy uninstall shortcut. */
+export async function runCompleteUninstall(): Promise<boolean> {
+  requireInteractive();
+  recoverPendingInstallation(configDirectory());
+  const config = loadConfig();
+  if (!config) throw new Error('未找到有效配置，无法确认 Memory 数据归属。');
+  const installation = npmInstallation();
+  note(`Application   ${installation.packageRoot}\nIntegrations  全部由此安装器管理的接入\nMemory Data   ${config.dataRoot}\n\n先关闭所有已接入客户端和 Common Memory 后台任务。`, 'Remove Common Memory completely');
+  if (!await confirm('已停止上述程序，继续卸载 Application 和 Integrations？')) return false;
+  const deleteMemory = await confirm('同时永久删除 Memory Data？默认保留；删除包含记忆及所有未完成请求。');
+  const result = await uninstallCompletely({ config, deleteMemory, clientsStopped: true, installation });
+  clack.log.success('Application and integrations removed');
+  note(result.retained ? `Memory Data 已保留：${result.retained}` : '已按确认删除 Memory Data。', 'Memory Data');
+  return true;
+}
+
 export async function runUninstallTui(): Promise<void> {
   requireInteractive();
   recoverPendingInstallation(configDirectory());
@@ -28,16 +44,7 @@ export async function runUninstallTui(): Promise<void> {
         done = true;
         return;
       }
-      const config = loadConfig();
-      if (!config) throw new Error('未找到有效配置，无法确认 Memory 数据归属。可以单独移除接入。');
-      const installation = npmInstallation();
-      note(`Application   ${installation.packageRoot}\nIntegrations  全部由此安装器管理的接入\nMemory Data   ${config.dataRoot}\n\n先关闭所有已接入客户端和 Common Memory 后台任务。`, 'Remove Common Memory completely');
-      if (!await confirm('已停止上述程序，继续卸载 Application 和 Integrations？')) return;
-      const deleteMemory = await confirm('同时永久删除 Memory Data？默认保留；删除包含记忆及所有未完成请求。');
-      const result = await uninstallCompletely({ config, deleteMemory, clientsStopped: true, installation });
-      clack.log.success('Application and integrations removed');
-      note(result.retained ? `Memory Data 已保留：${result.retained}` : '已按确认删除 Memory Data。', 'Memory Data');
-      done = true;
+      done = await runCompleteUninstall();
     });
     if (done) break;
   }

@@ -24,6 +24,8 @@ beforeEach(() => {
   Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: true }); Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
   vi.mocked(discoverModels).mockResolvedValue([{ id: 'model-a', api: 'chat_completions' }, { id: 'model-b', api: 'chat_completions' }]);
   vi.mocked(clack.password).mockResolvedValue('synthetic-private-key'); vi.mocked(scanIntegrationTargets).mockReturnValue([]);
+  vi.mocked(clack.text).mockImplementation(async options => options.initialValue ?? '');
+  vi.mocked(clack.multiselect).mockResolvedValue([]);
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -40,14 +42,39 @@ function choices(...values: (string | symbol)[]) {
 }
 const displayed = () => JSON.stringify([...vi.mocked(clack.note).mock.calls, ...vi.mocked(clack.log.info).mock.calls, ...vi.mocked(clack.log.error).mock.calls]);
 
-it('uses Provider → hidden key → discovered single-select model, and Enter saves without more questions', async () => {
+it('uses Provider → Base URL → hidden key → discovered single-select model, and Enter saves without more questions', async () => {
   const done = choices('deepseek', 'model-b');
+  vi.mocked(clack.text).mockImplementation(async options => {
+    expect(options.message).toBe('Base URL'); expect(options.initialValue).toBe('https://api.deepseek.com/v1');
+    expect(discoverModels).not.toHaveBeenCalled(); expect(clack.password).not.toHaveBeenCalled();
+    if (typeof options.validate !== 'function') throw new Error('Expected Base URL validator');
+    expect(options.validate('https://user:secret@example.test/v1')).toBeTypeOf('string');
+    expect(options.validate('https://example.test/v1?key=secret')).toBeTypeOf('string');
+    expect(options.validate('not-a-url')).toBeTypeOf('string');
+    return options.initialValue!;
+  });
+  vi.mocked(clack.password).mockImplementation(async () => { expect(discoverModels).not.toHaveBeenCalled(); return 'synthetic-private-key'; });
   expect(discoverModels).not.toHaveBeenCalled();
   const config = await configureModel(); done();
   expect(config.remote).toMatchObject({ preset: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', model: 'model-b', api: 'chat_completions' });
-  expect(clack.text).not.toHaveBeenCalled(); expect(clack.multiselect).not.toHaveBeenCalled(); expect(clack.confirm).not.toHaveBeenCalled();
+  expect(clack.text).toHaveBeenCalledTimes(1); expect(clack.multiselect).not.toHaveBeenCalled(); expect(clack.confirm).not.toHaveBeenCalled();
   expect(readFileSync(join(home, '.env'), 'utf8')).toContain('synthetic-private-key'); expect(displayed()).not.toContain('synthetic-private-key');
   expect(existsSync(config.dataRoot)).toBe(false);
+});
+it('discovers and saves an edited preset endpoint while retaining the selected model protocol', async () => {
+  choices('opencode-go', 'gpt-selected');
+  vi.mocked(clack.text).mockResolvedValue('https://gateway.test/custom/v1/');
+  vi.mocked(discoverModels).mockResolvedValue([{ id: 'gpt-selected', api: 'responses' }]);
+  const config = await configureModel();
+  expect(discoverModels).toHaveBeenCalledWith(expect.objectContaining({ id: 'opencode-go', baseUrl: 'https://gateway.test/custom/v1' }), 'synthetic-private-key', expect.anything(), expect.objectContaining({ signal: expect.any(AbortSignal) }));
+  expect(config.remote).toMatchObject({ preset: 'opencode-go', baseUrl: 'https://gateway.test/custom/v1', api: 'responses', model: 'gpt-selected' });
+});
+it('reopening a configured provider retains its edited Base URL', async () => {
+  const config = defaultConfig(); config.remote.model = 'previous'; config.remote.preset = 'deepseek'; config.remote.baseUrl = 'https://gateway.test/deepseek/v1'; saveConfig(config);
+  choices('deepseek', 'model-a');
+  const next = await configureModel(loadConfig());
+  expect(clack.text).toHaveBeenCalledWith(expect.objectContaining({ message: 'Base URL', initialValue: config.remote.baseUrl }));
+  expect(next.remote.baseUrl).toBe(config.remote.baseUrl);
 });
 it('re-entering model selection refreshes the list, without persisting a cancelled model or key', async () => {
   vi.mocked(discoverModels).mockResolvedValueOnce([{ id: 'old-model', api: 'chat_completions' }]).mockResolvedValueOnce([{ id: 'new-model', api: 'chat_completions' }]);
@@ -66,6 +93,14 @@ it('Esc moves back through custom fields without saving', async () => {
   vi.mocked(clack.password).mockResolvedValueOnce('secret-not-saved').mockResolvedValueOnce(Symbol('key back'));
   await expect(configureModel()).rejects.toBeInstanceOf(UserCancelled);
   expect(loadConfig()).toBeNull(); expect(existsSync(join(home, '.env'))).toBe(false);
+});
+it('Esc from a preset key returns to its edited URL, then Provider, without discovery or saving', async () => {
+  const done = choices('deepseek', Symbol('exit'));
+  vi.mocked(clack.text).mockResolvedValueOnce('https://gateway.test/v1').mockResolvedValueOnce(Symbol('URL back'));
+  vi.mocked(clack.password).mockResolvedValueOnce(Symbol('key back'));
+  await expect(configureModel()).rejects.toBeInstanceOf(UserCancelled); done();
+  expect(vi.mocked(clack.text).mock.calls[1]![0].initialValue).toBe('https://gateway.test/v1');
+  expect(discoverModels).not.toHaveBeenCalled(); expect(loadConfig()).toBeNull(); expect(existsSync(join(home, '.env'))).toBe(false);
 });
 it('discovery failure never saves a key and allows choosing another provider', async () => {
   choices('deepseek', Symbol('exit')); vi.mocked(discoverModels).mockRejectedValue(new Error('模型发现失败'));

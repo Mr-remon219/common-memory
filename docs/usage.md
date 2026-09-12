@@ -20,14 +20,18 @@ Memory runs inside WSL and the ChatGPT/Codex desktop app reaches it through `wsl
 
 ## Setup
 
-Requires Node.js 24. Installation: `npm install -g common-memory-core@0.3.0`.
-The following TUI describes the v0.3.0 Setup, management and uninstall flow.
-Source contributors use `npm ci && npm run build`, then `node dist/cli/main.js`.
-First-run `common-memory` selects Provider → API Key → live model list, then scans
-clients for multi-select automatic installation and exits. Custom asks URL/Key/Model
-without discovery. Model discovery never runs on ordinary startup or in runtime.
-`common-memory config` explicitly reopens model configuration.
-See [TUI flow and integration limits](tui-workbench.md).
+Requires Node.js 24. Installation: `npm install -g common-memory-core@0.3.1`.
+The following TUI describes the current source. Source contributors use
+`npm ci && npm run build`, then `node dist/cli/main.js`.
+**`common-memory` is the single entry for interactive management.** First run selects
+Provider → Base URL → hidden API Key → Model, then offers Pi, Codex and ChatGPT for
+multi-select automatic integration and exits. Presets prefill an editable URL and
+load the model list from that URL; Custom asks for the model name without discovery.
+Space toggles Agent selections; Enter applies them. Later launches open the main TUI
+without repeating setup. An interrupted setup resumes its pending integration step.
+Model discovery runs only when entering model selection, never on ordinary configured
+startup or in runtime. Model & Configuration → Change Model / Provider reopens the
+same model flow. See [TUI flow and integration limits](tui-workbench.md).
 The wizard commits `~/.common-memory/config.json` and private `.env` credentials
 recoverably (`COMMON_MEMORY_HOME` overrides this location). Presets choose supported
 protocols; Custom uses Chat Completions. Technical configuration may set `remote.api`
@@ -39,12 +43,13 @@ V2 requires configuration `schemaVersion: 2`; pre-V2 configuration/data is not m
 or automatically deleted. Existing V2 configurations remain valid; the V2 jobs table
 receives an idempotent, transactional nullable diagnostic column when opened.
 
-Advanced fields in `remote` remain technical `config.json` options, not management
-pages. The new wizard requests a key explicitly and records `apiKeySource: "private-env"`
+Current Configuration displays the full configuration without revealing secrets;
+advanced fields in `remote` remain technical `config.json` options for editing.
+The wizard requests a key explicitly and records `apiKeySource: "private-env"`
 with a generated credential name, preventing inherited provider keys from replacing it.
 Absent that marker, legacy configurations keep process-environment key precedence.
 The wizard preserves unrelated configuration and clears incompatible thinking/effort
-options when choosing a model. The following fields remain available outside the TUI:
+options when choosing a model. The following fields remain available for technical configuration:
 
 | Field | Accepted values / effect |
 | --- | --- |
@@ -63,7 +68,8 @@ Current provider evidence and the reusable verification procedure are recorded i
 [Provider verification](provider-verification.md); earlier experiments remain in
 [Init v0.1 closeout verification](init-v0.1-closeout.md).
 
-Setup automatically installs the Pi wrapper for supported Pi 0.84.4. The package's
+Selecting Pi during setup or in Agent Integration automatically installs the Pi
+wrapper for supported Pi 0.84.4. The package's
 `pi.extensions` entry also remains available for manual/legacy deployment; do not load
 both copies. It records input origins, durably records actual user `message_end` deliveries,
 then binds stable transcript entries after Pi appends them. Assistant failure does not
@@ -109,8 +115,10 @@ Old configurations remain valid and do not acquire `conversation_context` permis
 ## Model network configuration
 
 Common Memory owns one outbound client per configured model, shared by the CLI, MCP
-and Pi paths. Run `common-memory config --network` to select a route. This changes
-model calls only; it does not configure the host's other network clients.
+and Pi paths. Open Model & Configuration from `common-memory`, then choose network
+settings to select a route. `common-memory config --network` remains a compatibility
+shortcut. This changes model calls only; it does not configure the host's other
+network clients.
 
 | Mode | Request route |
 | --- | --- |
@@ -158,9 +166,11 @@ own visible environment and reachable proxy address; Common Memory does not gues
 Windows host address or copy Windows proxy settings. OS VPN/TUN routing still applies
 in every mode. PAC/WPAD, SOCKS4 and NTLM/Kerberos are unsupported.
 
-`status` describes configuration, selection/bypass reason and actual storage paths;
-it does not open network connections. `network-test` explicitly sends a small synthetic
-model API request without opening SQLite or writing memory. Its success does not prove
+Current Configuration describes configuration, selection/bypass reason and actual
+storage paths without opening network connections; the `status` command retains
+technical diagnostics. The model connection test in Model & Configuration (also
+available as `network-test`) explicitly sends a small synthetic model API request
+without opening SQLite or writing memory. Its success does not prove
 Writer commits. Proxy authentication (`PROXY_AUTHENTICATION`, `proxyStatus:407`) is
 separate from provider API key authentication (`AUTHENTICATION`, `httpStatus:401/403`).
 Errors expose controlled stages/reasons, not proxy credentials or provider bodies.
@@ -175,47 +185,77 @@ Research, explicit environment limits and acceptance evidence:
 
 ## Interactive management
 
-Run **`common-memory show`** in a terminal. Already-configured `common-memory` opens
-the same menu; an unconfigured invocation enters the existing model form directly.
+Run **`common-memory`** in a terminal. First run completes model configuration and
+Agent selection; once initialized, each launch opens these three columns:
 
 | Menu | Tasks |
 | --- | --- |
-| Overview | Application/config/memory paths, data size, client presence (connection unverified) |
-| View Memory | Profile, Preferences and authorized registered projects; paginated read-only content |
-| Modify Memory | Submit a natural-language correction or forget request for personal memory |
+| Agent Integration | Pi, Codex and ChatGPT availability and managed selection; Space toggles, Enter applies installation/removal differences |
+| Memory Control | Search / View Memory, Adjust Memory, and processing status with continuation/retry for pending requests |
+| Model & Configuration | Current Configuration, Change Model / Provider, network settings, model connection test, and complete uninstall |
 
-Modify Memory uses the configured Writer and Core. Input is an actual local user
-expression (`interactive`), not an imported document or another agent's summary.
-Authorization and sensitive-input checks precede admission. Enter submits after a
-short disclosure notice; cancellation after submission does not remove the durable
-request. A processed request may have been ignored: inspect the actual memory result.
-Idle leases, backoff, failures and cancellation are never reported as successful edits.
-There is no Markdown editor or Delete Memory button.
+Agent Integration starts from the current managed installation state. Checking a new
+Agent installs its integration; unchecking an installed Agent removes that owned
+integration; keeping a selection retains it. For example, changing Pi + Codex to
+Pi + ChatGPT keeps Pi, removes Codex and installs ChatGPT. Esc cancels uncommitted
+selection changes. Unavailable clients remain visible with their limits. The installer
+does not take over unmanaged entries. Codex and ChatGPT may share one owned MCP
+resource, which remains installed while either needs it. Installation-file checks
+do not prove a running client or host Hook trust.
 
-Use arrows and Enter; Esc returns one level and exits at Home. The home menu remembers
-the last action. Browsing and Overview do not call models, initialize absent storage,
-or open SQLite. Overview reports on-demand operation, not a fictitious running daemon.
-Installation-file checks do not prove a running client or host Hook trust.
+Search / View Memory reads the current authorized Profile, Preferences and registered
+project Markdown. Keyword search performs local text matching and lets the user open
+matching documents; it adds no model call, retrieval ranking or index. Browsing is
+paginated and read-only. Empty memory and no-match results have explicit empty states.
+Search, browsing and Current Configuration neither initialize absent storage nor
+open SQLite. Current Configuration shows paths, data size, provider/model, key status,
+network information and the complete configuration with secrets concealed.
 
-The interface requires both stdin and stdout to be TTYs. No-argument non-TTY invocations
-print guidance; direct `config` wizards fail rather than waiting. `show` outside a TTY
-keeps its plain consumer output; `show --plain` forces plain output even in a terminal.
-Existing scriptable commands and machine protocol entries remain available.
-`common-memory uninstall` removes selected owned integrations or the exact global npm
-installation and related config. Memory Data is confirmed separately and retained by
-default, including durable SQLite. Source/npx ownership, unmanaged legacy references,
-unsafe deletion paths and active Writer leases fail closed. See
-[installation, removal and verification boundaries](tui-workbench.md).
+Adjust Memory accepts natural-language corrections, forget requests and changes such
+as promoting a project preference to global scope. Users can choose personal memory
+or a registered project authorized for reading and writing before submitting. The same configured Writer
+and Core interpret and validate each request, including the existing rules for
+promotion; selecting a project grants no new read or write permissions. Input is an
+actual local user expression (`interactive`), not an imported document or another
+agent's summary. Authorization and sensitive-input checks precede admission. Enter
+submits after a short disclosure notice; cancellation after submission does not
+remove the durable request. A processed request may have been ignored: inspect the
+actual memory result. Idle leases, backoff, failures and cancellation are never
+reported as successful edits. Processing status, continuation and failed-job retry
+remain available under Memory Control → Adjust Memory → Processing Status, so incomplete requests do not require a new
+command or duplicate submission. Quarantine and existing leases are not bypassed.
+There is no Markdown editor or separate Delete Memory button.
+
+Change Model / Provider reuses the setup model form and returns to management after
+saving; it does not repeat Agent installation. Use arrows and Enter; Esc returns one
+level and exits at Home. The home menu remembers the last action.
+
+Complete uninstall is available in Model & Configuration. It removes owned
+integrations, the exact global npm installation and related config. Memory Data is
+confirmed separately and retained by default, including durable SQLite. Source/npx
+ownership, unmanaged legacy references, unsafe deletion paths and active Writer
+leases fail closed. Individual Agent removals use Agent Integration checkboxes.
+See [installation, removal and verification boundaries](tui-workbench.md).
+
+The interface requires both stdin and stdout to be TTYs. No-argument non-TTY
+invocations print guidance; direct `config` wizards fail rather than waiting. The
+`show`, `config` and `uninstall` commands remain compatibility shortcuts. `show`
+outside a TTY keeps its plain consumer output; `show --plain` forces plain output
+even in a terminal. Existing scriptable commands and machine protocol entries remain
+available.
 
 ## Commands
 
-These remain supported for automation and direct shortcuts; they are not prerequisites
-for browsing or modifying personal memory.
+These remain supported for automation, protocol launch and compatibility shortcuts.
+Interactive Agent, memory and model management use `common-memory`; users do not need
+the other commands for those tasks. The integration sections below also document
+manual deployment for unsupported or separately managed hosts.
 
 ```sh
 common-memory
 common-memory config
 common-memory config --network
+common-memory uninstall
 common-memory status
 common-memory network-test
 common-memory show [--plain | --workspace /absolute/project/path]
@@ -464,7 +504,7 @@ directory, dataRoot, node binary and CLI entry, so the host cannot land on anoth
 
 Then, in a chat that can use that host's MCP servers, ask: “把本次实际可见、已选定的既有理解导入
 Common Memory；保留来源、时间、条件和不确定性，列明无法访问的材料，排除本次迁移执行状态。” The agent should call `memory_init`, then `memory_status` with the same
-`importId` to report what was retained. Use `common-memory show` locally to review.
+`importId` to report what was retained. Use `common-memory` → Memory Control locally to review.
 ChatGPT web and the desktop **Chat** mode do not read this configuration; use the
 selected Markdown workflow above for this version. A remote HTTPS connector
 is outside this version and would not guarantee access to more source material.
@@ -670,8 +710,10 @@ Legacy relay/import shutdown does not launch a consumer. Session hooks/Pi quit d
 launch an independent consumer, which may outlive both the host and MCP. Existing recovery wins over cancellation
 once a durable commit has begun. Logs go to stderr; stdout is reserved for MCP.
 
-Full runtime diagnostics, retry, flush, configuration and project management remain
-available as CLI operations, separate from the three-task management TUI. Quotas, hot revocation,
+Full runtime diagnostics, retry, flush, configuration and project management retain
+CLI interfaces for automation. The TUI exposes day-to-day model configuration,
+Agent integration, memory adjustment and pending-request handling through its three
+main columns. Quotas, hot revocation,
 optional-Pi packaging and broader compatibility matrices remain deferred. No personal data or live models are needed
 for the MCP fake-provider protocol tests.
 

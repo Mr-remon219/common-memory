@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.3.1 — 2026-09-12
+
+### Unified interactive management
+
+- Use `common-memory` for first-time setup and all everyday management. Initialized
+  launches open Agent Integration, Memory Control, and Model & Configuration.
+- Share one Agent multiselect between setup and management. Apply installation and
+  removal differences in a single recoverable transaction, preserve shared MCP
+  resources, and reject stale ownership or damaged retained integrations.
+- Configure Provider → editable Base URL → hidden API Key → Model during setup or
+  later model changes. Display complete configuration, key presence, network route,
+  storage paths and installation health without revealing private credentials.
+- Search authorized canonical Markdown by literal keyword, browse complete memory,
+  and submit natural-language personal or authorized project adjustments through the
+  existing Writer/Core. Manage durable pending and failed requests inside the TUI.
+- Keep network configuration, connection testing and complete uninstall accessible
+  from the workbench. Preserve scriptable commands and existing compatibility shortcuts.
+- Cover unified navigation, scope authorization, model configuration and transactional
+  Agent changes with offline tests, packaged consumer checks and a Linux PTY journey.
+
+### Boundaries
+
+- No changes to memory authority, queue schema, maintenance protocol, provenance
+  permissions or host trust. Local text matching adds no retrieval index or model call.
+- Existing V2 configurations remain compatible. ChatGPT integration is for supported
+  local Work/Desktop hosts; ordinary Chat and automatic Desktop capture remain outside
+  this integration. Real host trust and model semantics require separate validation.
+
 ## 0.3.0 — 2026-09-11
 
 ### Minimal setup and management

@@ -56,7 +56,7 @@ export async function modifyMemory(
     const outcome = writer.store.observationOutcome(requestId, entryId)!;
     return { requestId, complete: outcome.state === 'processed', outcome, cancelled: signal.aborted };
   } catch (error) {
-    if (admitted) throw new Error('请求已提交，但未能确认处理结果。请先用 common-memory status 检查，再用 common-memory flush 继续；不要重复提交。', { cause: error });
+    if (admitted) throw new Error('请求已提交，但未能确认处理结果。请在 Memory Control → Adjust Memory → Processing Status 检查并继续处理；不要重复提交。', { cause: error });
     throw error;
   } finally {
     process.off('SIGINT', cancel); process.off('SIGTERM', cancel);
