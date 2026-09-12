@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.5 — 2026-09-12
+
+- Remove Pi's exact-version discovery gate and use a `*` host peer dependency. Installed Pi versions are selectable without launching the agent; 0.84.4 remains an event-contract validation baseline, not a version requirement or a claim of universal runtime verification.
+- Fix WSL discovery of Windows ChatGPT Desktop when its display name is ChatGPT but its Appx package remains `OpenAI.Codex`. Use a read-only Start menu fallback without treating a Codex-only installation as ChatGPT.
+- Share client presence and installation discovery. Check both macOS Applications directories and reject same-named ordinary files.
+- Add test-first regressions for Pi admission, macOS discovery, package metadata and the actual PowerShell discovery script. Preserve Codex's existing capture-format restrictions and Desktop read-only scope.
+
 ## 0.3.4 — 2026-09-12
 
 - Split verification by deployment: Linux and macOS retain full Node 22.19 / 24 gates and isolated npm installs; native Windows runs a small PowerShell bridge suite instead of the entire Core suite.

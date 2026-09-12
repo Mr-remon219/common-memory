@@ -40,4 +40,6 @@ it('requires repository metadata and keeps the package lock identity aligned', (
   expect(lock.name).toBe(pkg.name); expect(lock.version).toBe(pkg.version);
   expect(lock.packages[''].dependencies).toEqual(pkg.dependencies);
   expect(lock.packages[''].peerDependencies).toEqual(pkg.peerDependencies);
+  // npm must not reintroduce the exact-version gate removed from discovery.
+  expect(pkg.peerDependencies['@earendil-works/pi-coding-agent']).toBe('*');
 });

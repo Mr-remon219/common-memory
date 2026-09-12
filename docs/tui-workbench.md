@@ -78,13 +78,17 @@ Qwen、Kimi、Zhipu 使用上表的中国区普通 API；其他区域、Coding P
 
 | 客户端 | 自动安装内容 | 当前边界 |
 | --- | --- | --- |
-| Pi 0.84.4 | 用户级 `settings.json` 中的 Extension wrapper | 同一 Linux/macOS/WSL 环境；其他版本不假定 API 兼容 |
+| Pi（不限制版本号） | 用户级 `settings.json` 中的 Extension wrapper | 同一 Linux/macOS/WSL 环境；发现可执行文件即可选择，事件兼容性不等于所有历史版本均已验证 |
 | Codex CLI | 用户级只读 MCP；0.153.4 另装 Hooks 和显式 refresh skill | 其他版本仅读取，不宣称自动会话维护 |
 | ChatGPT | Desktop 本地 Work / Codex 的用户级只读 MCP | 不是普通 Chat 或网页版；不自动捕获 Desktop 会话 |
 
 路径来自 PATH、标准用户目录、`CODEX_HOME` 和 `PI_CODING_AGENT_DIR`。
-macOS 检查 ChatGPT.app；WSL 通过只读 Windows Appx 探测确认桌面程序和用户目录，写入固定 WSL 启动配置。
+macOS 检查 `/Applications/ChatGPT.app` 和 `~/Applications/ChatGPT.app` 目录；WSL 通过只读 PowerShell 探测 Windows Appx 和开始菜单应用，确认桌面程序与 Windows 用户目录后写入固定 WSL 启动配置。
+Windows 优先检查 `*ChatGPT*` 包，未命中时用 `Get-StartApps` 查显示名 `ChatGPT`，兼容包名仍为 `OpenAI.Codex` 的桌面版；只有 Codex 而没有 ChatGPT 显示名不会被当成 ChatGPT。
 **不会只因存在 WSL 就推断 Windows Desktop 已安装或使用 WSL agent。**
+探测依据：[Microsoft Get-StartApps](https://learn.microsoft.com/en-us/powershell/module/startlayout/get-startapps?view=windowsserver2025-ps)
+返回当前用户已安装应用的显示名与 AppID；[Pi 包规范](https://pi.dev/docs/latest/packages) 建议宿主 peer 使用 `*`。
+这些是发现与包安装依据，不是所有宿主版本的运行时兼容性保证。
 
 安装后的客户端需要重启/重新加载以读取配置。Hooks 仍须宿主信任；安装器不设置信任凭据，不改审批或沙箱策略，
 也不覆盖显式禁用 Hooks 的设置。已安装 ≠ 正在运行、已获信任或真实宿主连接验收通过。

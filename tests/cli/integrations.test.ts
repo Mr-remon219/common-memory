@@ -113,7 +113,22 @@ it('compares files again at commit instead of overwriting a concurrent client ed
 it('discovers supported POSIX clients and distinguishes incompatible capture versions', () => {
   const base = { home: root, env: { PATH: '', CODEX_HOME: join(root, 'custom-codex'), PI_CODING_AGENT_DIR: join(root, 'custom-pi') }, platform: 'linux' as const, executable: (name: string) => name === 'chatgpt' ? undefined : name, version: (path: string) => path === 'pi' ? '0.84.4' : 'codex-cli 0.154.0' };
   expect(scanIntegrationTargets(base)).toMatchObject([{ id: 'codex', root: join(root, 'custom-codex'), hooks: false }, { id: 'pi', root: join(root, 'custom-pi'), hooks: true }]);
-  expect(scanIntegrationTargets({ ...base, version: () => 'unknown' }).map(t => t.id)).toEqual(['codex']);
+  expect(scanIntegrationTargets({ ...base, version: () => 'unknown' }).map(t => t.id)).toEqual(['codex', 'pi']);
+});
+it('allows installed Pi without launching it or using its version as an installation gate', () => {
+  const version = vi.fn(() => { throw new Error('Pi must not be launched during discovery'); });
+  const [pi] = scanIntegrationTargets({ home: root, env: { PATH: '' }, platform: 'linux', executable: name => name === 'pi' ? name : undefined, version });
+  expect(pi).toMatchObject({ id: 'pi', root: join(root, '.pi/agent'), hooks: true });
+  expect(version).not.toHaveBeenCalled();
+});
+it.each(['system', 'user'])('discovers macOS Desktop in the %s Applications directory without a CLI', location => {
+  const applications = [join(root, 'Applications'), join(home, 'Applications')];
+  const app = join(applications[location === 'system' ? 0 : 1]!, 'ChatGPT.app');
+  mkdirSync(app, { recursive: true });
+  const options = { home, env: { PATH: '' }, platform: 'darwin' as const, executable: () => undefined, applications };
+  expect(scanIntegrationTargets(options)).toMatchObject([{ id: 'chatgpt', root: join(home, '.codex'), mode: 'posix', hooks: false }]);
+  rmSync(app, { recursive: true }); writeFileSync(app, 'not an application directory');
+  expect(scanIntegrationTargets(options)).toEqual([]);
 });
 it('discovers native Windows Desktop from an explicit app probe, not merely WSL presence', () => {
   const base = { home: root, env: { PATH: '', WSL_DISTRO_NAME: 'Synthetic' }, platform: 'linux' as const, executable: () => undefined };

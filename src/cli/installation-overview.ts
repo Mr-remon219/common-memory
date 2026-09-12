@@ -1,42 +1,21 @@
-import { constants } from 'node:fs';
-import { access, lstat, readdir, stat } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { lstat, readdir } from 'node:fs/promises';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { configDirectory, type CommonMemoryConfig } from '../config/config.js';
 import { providerFor } from '../config/providers.js';
 import { integrationHealth, readInstallationState } from './integrations.js';
-import type { IntegrationId } from './integration-targets.js';
+import { scanIntegrationTargets, type DiscoveryEnvironment, type IntegrationId } from './integration-targets.js';
 
 export interface ClientPresence { name: string; detected: boolean; connection: 'unverified' }
 
 /** Discovery is not installation, authentication, hook trust, or a live connection check. */
-export async function discoverClients(options: {
-  env?: NodeJS.ProcessEnv;
-  platform?: NodeJS.Platform;
-  applications?: string[];
-} = {}): Promise<ClientPresence[]> {
-  const env = options.env ?? process.env, platform = options.platform ?? process.platform;
-  const executable = async (name: string): Promise<boolean> => {
-    for (const directory of (env.PATH ?? '').split(platform === 'win32' ? ';' : delimiter).filter(Boolean)) {
-      for (const suffix of platform === 'win32' ? ['.exe', '.cmd', '.bat'] : ['']) {
-        const path = join(directory, name + suffix);
-        try { await access(path, constants.X_OK); if ((await stat(path)).isFile()) return true; }
-        catch (error) { if (!['ENOENT', 'ENOTDIR', 'EACCES'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error; }
-      }
-    }
-    return false;
-  };
-  let desktop = false;
-  // WSL does not establish where a Windows desktop agent executes. Do not guess its config path.
-  if (platform === 'darwin') for (const directory of options.applications ?? ['/Applications', join(homedir(), 'Applications')]) {
-    try { desktop ||= (await lstat(join(directory, 'ChatGPT.app'))).isDirectory(); }
-    catch (error) { if (!['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error; }
-  }
+export async function discoverClients(options: DiscoveryEnvironment = {}): Promise<ClientPresence[]> {
+  // Presence uses the installation probe, but never starts an agent for --version.
+  const targets = scanIntegrationTargets({ ...options, version: () => '' });
   return [
-    { name: 'Codex CLI', detected: await executable('codex'), connection: 'unverified' },
-    { name: 'ChatGPT Desktop', detected: desktop, connection: 'unverified' },
-    { name: 'Pi', detected: await executable('pi'), connection: 'unverified' },
+    { name: 'Codex CLI', detected: targets.some(t => t.id === 'codex'), connection: 'unverified' },
+    { name: 'ChatGPT Desktop', detected: targets.some(t => t.id === 'chatgpt'), connection: 'unverified' },
+    { name: 'Pi', detected: targets.some(t => t.id === 'pi'), connection: 'unverified' },
   ];
 }
 

@@ -10,7 +10,7 @@ Common Memory 把长期内容保存在本机的 Markdown 中，通过 Pi 扩展�
 会话接入和本地 MCP，让助手读取获授权的个人偏好、背景与项目上下文。模型提出维护决定，
 本地 Core 校验后写入；你可以直接查看和编辑文件。
 
-**v0.3.4** · npm 包名 `common-memory-core` · 命令 `common-memory` · MIT 许可证。
+**v0.3.5** · npm 包名 `common-memory-core` · 命令 `common-memory` · MIT 许可证。
 这是早期版本；安装可用不等于所有真实宿主和模型行为均已验证，具体边界见下文。
 
 ## 一行安装
@@ -18,7 +18,7 @@ Common Memory 把长期内容保存在本机的 Markdown 中，通过 Pi 扩展�
 在 **Linux、macOS 或 Windows 的 WSL 终端**中执行（需已安装 **Node.js 22.19+（22.x）或 24+**，包含 npm）：
 
 ```sh
-npm install -g common-memory-core@0.3.4
+npm install -g common-memory-core@0.3.5
 ```
 
 安装后运行 `common-memory` 开始配置。无需克隆仓库、手动构建或先启动 Pi。
@@ -30,8 +30,8 @@ npm install -g common-memory-core@0.3.4
   安装，或用现有版本管理器切换。上面的一行命令安装 Common Memory，**不会安装 Node 或 WSL**。
 - Windows 用户在 WSL 内安装，不要在原生 PowerShell 中安装另一份 Core。
 - 如遇全局安装权限错误，使用用户级 Node 版本管理器；不建议 `sudo npm install`。
-- 不想全局安装？可用 `npx --yes common-memory-core@0.3.4` 运行已发布版本。
-- 本版仍有必需的 Pi **0.84.4** peer 依赖：仅使用 CLI/MCP 也会安装该依赖树，但不会自动启动或配置 Pi。
+- 不想全局安装？可用 `npx --yes common-memory-core@0.3.5` 运行已发布版本。
+- 本版仍有必需的 Pi peer 依赖（`*`，不锁宿主版本）：仅使用 CLI/MCP 也会安装该依赖树，但不会自动启动或配置 Pi。
 
 ## 第一次使用与日常管理
 
@@ -103,7 +103,7 @@ common-memory --help                    # 入口说明；自动化命令见使�
 | --- | --- |
 | Linux / macOS | Node 22.19+（22.x）或 24+；相同 npm 安装命令。CI 覆盖 Core 和安装消费，不能代替真实 Desktop UI 验收 |
 | Windows | Core 运行在 WSL；原生 Windows 桌面宿主通过生成的 WSL 桥接访问同一存储 |
-| Pi | **0.84.4**；在同一 POSIX / WSL 环境运行，使用相同 `COMMON_MEMORY_HOME` |
+| Pi | 不按版本号限制接入；在同一 POSIX / WSL 环境运行，使用相同 `COMMON_MEMORY_HOME`。事件契约以 0.84.4 为验证基线，不代表所有历史版本均已实测 |
 | Codex / ChatGPT Work 会话捕获 | rollout 仅支持 **Codex 0.153.4**；未知格式拒绝，不猜测用户交付 |
 | 其他本地 MCP 宿主 | **stdio only**；`read`、`init`、`relay` 能力在启动时固定 |
 

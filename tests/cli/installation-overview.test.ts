@@ -41,8 +41,10 @@ it.skipIf(process.platform === 'win32')('detects executable presence without run
   expect(clients.find(c => c.name === 'Pi')!.detected).toBe(false);
   expect(clients.every(c => c.connection === 'unverified')).toBe(true); expect(existsSync(marker)).toBe(false);
 });
-it('detects macOS app presence but does not infer Windows execution from WSL', async () => {
+it('uses the same Desktop presence probe without inferring installation from WSL alone', async () => {
   mkdirSync(join(home, 'ChatGPT.app'));
   expect((await discoverClients({ env: { PATH: '' }, platform: 'darwin', applications: [home] })).find(c => c.name === 'ChatGPT Desktop')!.detected).toBe(true);
-  expect((await discoverClients({ env: { PATH: '', WSL_DISTRO_NAME: 'Synthetic' }, platform: 'linux', applications: [home] })).find(c => c.name === 'ChatGPT Desktop')!.detected).toBe(false);
+  const wsl = { env: { PATH: '', WSL_DISTRO_NAME: 'Synthetic' }, platform: 'linux' as const, applications: [home] };
+  expect((await discoverClients({ ...wsl, windowsHome: () => undefined })).find(c => c.name === 'ChatGPT Desktop')!.detected).toBe(false);
+  expect((await discoverClients({ ...wsl, windowsHome: () => home })).find(c => c.name === 'ChatGPT Desktop')).toEqual({ name: 'ChatGPT Desktop', detected: true, connection: 'unverified' });
 });

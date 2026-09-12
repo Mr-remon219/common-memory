@@ -20,7 +20,7 @@ Memory runs inside WSL and the ChatGPT/Codex desktop app reaches it through `wsl
 
 ## Setup
 
-Requires Node.js 22.19+ (22.x) or 24+. Installation: `npm install -g common-memory-core@0.3.4`.
+Requires Node.js 22.19+ (22.x) or 24+. Installation: `npm install -g common-memory-core@0.3.5`.
 The following TUI describes the current source. Source contributors use
 `npm ci && npm run build`, then `node dist/cli/main.js`.
 **`common-memory` is the single entry for interactive management.** First run selects
@@ -69,7 +69,7 @@ Current provider evidence and the reusable verification procedure are recorded i
 [Init v0.1 closeout verification](init-v0.1-closeout.md).
 
 Selecting Pi during setup or in Agent Integration automatically installs the Pi
-wrapper for supported Pi 0.84.4. The package's
+wrapper for any discovered Pi version, without a version-number gate. The package's
 `pi.extensions` entry also remains available for manual/legacy deployment; do not load
 both copies. It records input origins, durably records actual user `message_end` deliveries,
 then binds stable transcript entries after Pi appends them. Assistant failure does not
@@ -874,5 +874,6 @@ are conservatively cleared in the recoverable receipt; current Markdown and othe
 documents are not deleted. This avoids retaining orphan evidence after a manual
 rename followed by forget, at the cost of that document's short-term evidence buffer.
 Advanced library configuration exposes `documentSoftBytes`, `documentHardBytes`,
-`retentionMs`, `deadlineMs` and `maxRequestBytes` on Writer. Pi compatibility is pinned
-to 0.84.4, whose callback/queue ordering was inspected for this implementation.
+`retentionMs`, `deadlineMs` and `maxRequestBytes` on Writer. Pi discovery and the `*`
+peer dependency do not restrict host versions. Callback/queue ordering was inspected
+against 0.84.4; this baseline is not a claim that every historical version has been verified.

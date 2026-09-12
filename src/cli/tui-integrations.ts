@@ -7,7 +7,7 @@ import { checkConfigUnchanged, hasApiKey } from './tui-settings.js';
 import { log, note, terminalText, unwrap } from './tui-prompts.js';
 
 const clients: { id: IntegrationId; name: string; unavailable: string }[] = [
-  { id: 'pi', name: 'Pi', unavailable: '未发现支持的 Pi 0.84.4，暂不可接入' },
+  { id: 'pi', name: 'Pi', unavailable: '未发现当前环境中的 Pi，暂不可接入' },
   { id: 'codex', name: 'Codex', unavailable: '未发现当前环境中的 Codex，暂不可接入' },
   { id: 'chatgpt', name: 'ChatGPT', unavailable: '未发现可接入的本地 Work / Desktop，暂不可接入' },
 ];

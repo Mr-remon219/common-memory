@@ -41,7 +41,7 @@ import 不混批，模型输出仍是 memory_maintenance_v2。
 
 ## 宿主适配
 
-Pi 0.84.4：`src/pi-extension/` 保留来源候选匹配、变换/混合来源隔离、稳定 Entry
+Pi（事件契约验证基线 0.84.4；安装与发现不按版本号限制）：`src/pi-extension/` 保留来源候选匹配、变换/混合来源隔离、稳定 Entry
 绑定。最终 agent_settled 封口；tool loop、retry、compact 不计数。真实 quit 才 end，
 reload/new/resume/fork 的 extension shutdown 只关闭本地资源。进程随机身份与附加
 记忆块通过 globalThis 保留跨 reload 状态；数据Root＋session 冻结附加块，每轮与

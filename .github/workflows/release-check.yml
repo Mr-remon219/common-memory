@@ -5,9 +5,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Exact npm version to verify (for example 0.3.4)
+        description: Exact npm version to verify (for example 0.3.5)
         required: true
-        default: '0.3.4'
+        default: '0.3.5'
 permissions:
   contents: read
 jobs:
