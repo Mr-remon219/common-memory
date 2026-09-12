@@ -1,13 +1,17 @@
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync, readdirSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { nodeProcess } from '../helpers/node-process.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CanonicalStore, digest } from '../../src/v2/canonical.js';
 import { ProjectRegistry } from '../../src/v2/registry.js';
 const directories: string[] = [];
+const processes: ReturnType<typeof nodeProcess>[] = [];
 function setup() { const root = mkdtempSync(join(tmpdir(), 'cm-v2-')); directories.push(root); return { root, store: new CanonicalStore(root) }; }
-afterEach(() => { for (const root of directories.splice(0)) rmSync(root, { recursive: true, force: true }); });
+afterEach(async () => {
+  for (const managed of processes.splice(0)) await managed.stop();
+  for (const root of directories.splice(0)) rmSync(root, { recursive: true, force: true });
+});
 describe('Markdown canonical', () => {
   it('preserves untouched bytes, commits receipts, and rejects stale full read sets', () => {
     const { root, store } = setup(); const original = '# Profile\n\n## Existing\n  exact bytes\n\n## State\nA\n'; writeFileSync(join(root, 'memory/profile.md'), original);
@@ -41,7 +45,7 @@ describe('Markdown canonical', () => {
     expect(readFileSync(join(root, 'memory/profile.md'), 'utf8')).toBe(manual);
     expect(new CanonicalStore(root).receipts()).toEqual([]);
   });
-  it.each(['staged', 'commit-marker', 'target:memory/profile.md', 'target:memory/preferences.md', 'target:runtime/receipts/killed.json', 'before-cleanup'])('recovers a multi-document transaction after subprocess exit at %s', phase => {
+  it.each(['staged', 'commit-marker', 'target:memory/profile.md', 'target:memory/preferences.md', 'target:runtime/receipts/killed.json', 'before-cleanup'])('recovers a multi-document transaction after subprocess exit at %s', async phase => {
     const { root, store } = setup();
     const before = ['# Profile\n\n## State\nOld profile\n', '# Preferences\n\n## State\nOld preference\n'];
     const after = ['# Profile\n\n## State\nNew profile\n', '# Preferences\n\n## State\nNew preference\n'];
@@ -51,8 +55,9 @@ describe('Markdown canonical', () => {
     const script = `import { CanonicalStore } from ${JSON.stringify(moduleUrl)};
       const store = new CanonicalStore(${JSON.stringify(root)}, { checkpoint: phase => { if (phase === ${JSON.stringify(phase)}) process.exit(73); } });
       store.commit(store.snapshot(), new Map(${JSON.stringify(targets.map((target, i) => [target, after[i]]))}), { id: 'killed' });`;
-    const child = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 10000 });
-    expect(child.status, child.stderr).toBe(73);
+    const managed = nodeProcess(['--input-type=module', '-e', script]); processes.push(managed);
+    const child = await managed.result;
+    expect(child.code, `signal=${child.signal}\n${child.stdout}\n${child.stderr}`).toBe(73);
     // Prove the fixture really stopped between replacements, not merely before/after the transaction.
     if (phase === 'target:memory/profile.md') expect(store.snapshot().map(d => d.content)).toEqual([after[0], before[1]]);
     const recovered = new CanonicalStore(root);
@@ -61,7 +66,7 @@ describe('Markdown canonical', () => {
     expect(recovered.snapshot().map(d => d.content)).toEqual(phase === 'staged' ? before : after);
     expect(recovered.receipts()).toEqual(phase === 'staged' ? [] : [{ id: 'killed' }]);
     expect(readdirSync(join(root, 'runtime/transactions'))).toEqual([]);
-  });
+  }, 40_000);
   it('rejects symlinks and path traversal without modifying external data', () => {
     const { root, store } = setup(); const external = join(root, 'external'); writeFileSync(external, 'private'); symlinkSync(external, join(root, 'memory/profile.md')); expect(() => store.snapshot()).toThrow('Unsafe file'); expect(readFileSync(external, 'utf8')).toBe('private');
     rmSync(join(root, 'memory/profile.md')); expect(() => store.snapshot(['../../escape'])).toThrow('Invalid target');

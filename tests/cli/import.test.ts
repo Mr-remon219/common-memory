@@ -1,6 +1,5 @@
 import { createServer } from 'node:http';
 import { once } from 'node:events';
-import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -8,18 +7,17 @@ import { pathToFileURL } from 'node:url';
 import { afterEach, expect, it } from 'vitest';
 import { defaultConfig } from '../../src/config/config.js';
 import { RuntimeStore } from '../../src/v2/runtime.js';
+import { nodeProcess } from '../helpers/node-process.js';
 
 const cleanup: (() => unknown | Promise<unknown>)[] = [];
 afterEach(async () => { for (const fn of cleanup.splice(0).reverse()) await fn(); });
 const entry = ['--import', pathToFileURL(resolve('tests/mcp/fixtures/source-loader.mjs')).href, resolve('src/cli/main.ts')];
 
 function cli(args: string[], env: Record<string, string>, cwd?: string) {
-  return new Promise<{ code: number | null; stdout: string; stderr: string }>((done) => {
-    const child = spawn(process.execPath, [...entry, ...args], { env, stdio: ['ignore', 'pipe', 'pipe'], cwd });
-    let stdout = '', stderr = '';
-    child.stdout.on('data', b => { stdout += b; }); child.stderr.on('data', b => { stderr += b; });
-    child.on('exit', code => done({ code, stdout, stderr }));
-  });
+  const managed = nodeProcess([...entry, ...args], { env, ...(cwd ? { cwd } : {}) });
+  // Registered after fixture creation, so reverse teardown reaps the child first.
+  cleanup.push(managed.stop);
+  return managed.result;
 }
 function fixture(baseUrl: string, provenance: string[] = ['user_explicit', 'document_import'], turnThreshold = 6) {
   const home = mkdtempSync(join(tmpdir(), 'cm-import-'));
@@ -213,10 +211,10 @@ it.each(['flush','import'])('%s SIGINT cancels inflight work with exit 1 and a d
  config.remote.proxy={mode:'direct'};writeFileSync(join(home,'config.json'),JSON.stringify(config));
  const file=join(home,'cancel.md');writeFileSync(file,'# Synthetic\n\nOrdinary imported fixture.\n');
  if(command==='flush'){const store=new RuntimeStore(config.dataRoot);store.enqueue({sessionId:'s',entryId:'e',text:'Ordinary fixture',scope:'global',source:'interactive',observedAt:new Date().toISOString()});store.close();}
- const child=spawn(process.execPath,[...entry,...(command === 'flush' ? ['flush'] : ['import',file])],{env,stdio:['ignore','pipe','pipe']});
- const exited=once(child,'exit');let stdout='';child.stdout.on('data',b=>{stdout+=b;});child.stderr.resume();
- cleanup.push(()=>{if(child.exitCode===null)child.kill('SIGKILL');});await received;child.kill('SIGINT');
- expect((await exited)[0]).toBe(1);expect(stdout).toContain('"reason":"CANCELLED"');
+ const managed=nodeProcess([...entry,...(command === 'flush' ? ['flush'] : ['import',file])],{env});
+ cleanup.push(managed.stop);await received;managed.child.kill('SIGINT');
+ const result=await managed.result;
+ expect(result.code,result.stderr).toBe(1);expect(result.stdout).toContain('"reason":"CANCELLED"');
  const reopened=new RuntimeStore(config.dataRoot);try{expect(reopened.status().jobs[0]).toMatchObject({issue:'CANCELLED',diagnostic:{reason:'cancelled'}});}finally{reopened.close();}
 },15000);
 
@@ -228,7 +226,7 @@ it('an explicit Chat configuration imports through the real HTTP adapter, Core a
  const store=new RuntimeStore(config.dataRoot);try{expect(store.db.prepare('SELECT COUNT(*) AS n FROM receipts').get()!.n).toBe(1);}finally{store.close();}
  expect(readFileSync(join(config.dataRoot,'memory/profile.md'),'utf8')).toContain('Imported from chat.md');
  expect((await cli(['show'],env)).stdout).toContain('An attributed synthetic fixture.');
-},15000);
+},75000); // Two source-loaded CLI boots, including durable writes, on Windows CI.
 
 it('network-test is explicit, distinguishes API authentication and opens no memory storage',async()=>{
  let calls=0;

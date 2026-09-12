@@ -107,6 +107,16 @@ npm 发布成功并完成本地 registry 检查后，创建 GitHub Release `v0.3
 保留日志、定位原因并修复；网络失败也不能标成通过。Linux CI 不代表 WSL 桌面宿主，macOS
 CI 也不代表真实 Desktop UI 信任和事件组合已验收。
 
+创建 tag 还会通过 `push` 额外触发一次 `core-ci`。发布收尾时按 commit SHA 列出全部运行，
+同时检查候选分支、main、tag 和 Release；不能只检查 main 后就报告全部通过：
+
+```sh
+gh run list --commit <release-commit-sha> --limit 100 --json databaseId,workflowName,headBranch,status,conclusion,url
+```
+
+同一提交也可能因 runner 负载而暴露测试超时。保留首次失败记录，修复测试生命周期与资源
+预算；重跑成功仅证明本次重跑通过。已发布 tag 不移动，后续 CI 修复提交到 main。
+
 未来如需自动发布，可以在 npm 包设置中配置 GitHub Actions trusted publisher；工作流
 身份必须与设置一致。目前没有自动发布工作流，也不依赖未配置的 OIDC 权限。
 参考：[npm 生命周期](https://docs.npmjs.com/cli/v11/using-npm/scripts)、
