@@ -1,3 +1,4 @@
+import { stubInstalledBuild } from '../helpers/installation-build.js';
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -8,7 +9,6 @@ import { defaultConfig, saveConfig } from '../../src/config/config.js';
 import { installIntegrations, readInstallationState, type InstallationState } from '../../src/cli/integrations.js';
 import { probeReadIntegration } from '../../src/cli/integration-probe.js';
 import type { IntegrationTarget } from '../../src/cli/integration-targets.js';
-import { stubInstalledBuild } from '../helpers/installation-build.js';
 
 let home: string, state: InstallationState, target: IntegrationTarget;
 beforeEach(() => {

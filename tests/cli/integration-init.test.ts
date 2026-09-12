@@ -1,3 +1,4 @@
+import { stubInstalledBuild } from '../helpers/installation-build.js';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,7 +7,6 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { defaultConfig, loadConfig, saveConfig } from '../../src/config/config.js';
 import { installIntegrations, integrationHealth, readInstallationState, reconcileIntegrations, removeIntegrations } from '../../src/cli/integrations.js';
 import { scanIntegrationTargets, type IntegrationTarget } from '../../src/cli/integration-targets.js';
-import { stubInstalledBuild } from '../helpers/installation-build.js';
 
 let home: string;
 const target = (id: 'codex' | 'chatgpt', init = false): IntegrationTarget => ({ id, name: id, root: join(home, 'codex'), mode: 'posix', hooks: false, ...(init ? { init: true } : {}) });
