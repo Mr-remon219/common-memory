@@ -1,4 +1,4 @@
-import { isIP } from 'node:net';
+import { BlockList, isIP } from 'node:net';
 import { MemoryModelError } from '../contracts/errors.js';
 
 export type ProxyConfig = { mode: 'direct' | 'env' } | { mode: 'custom'; urlEnv: string; noProxy?: string };
@@ -15,7 +15,7 @@ export interface RouteDescription {
 /** A private URL must never be included in status, errors or persisted diagnostics. */
 export type ResolvedRoute = { description: RouteDescription; proxyUrl?: string };
 export function networkConfigError(reason: 'proxy_config_invalid' | 'ca_config_invalid' | 'no_proxy_invalid' = 'proxy_config_invalid'): MemoryModelError {
-  return new MemoryModelError('CONFIGURATION', reason === 'ca_config_invalid' ? 'Invalid local CA configuration' : reason === 'no_proxy_invalid' ? 'Invalid NO_PROXY list; CIDR and arbitrary wildcard patterns are unsupported' : 'Invalid proxy configuration', false, {stage:'network_config',reason,retryable:false});
+  return new MemoryModelError('CONFIGURATION', reason === 'ca_config_invalid' ? 'Invalid local CA configuration' : reason === 'no_proxy_invalid' ? 'Invalid NO_PROXY list; use hosts, IP literals or IP CIDRs; arbitrary wildcards are unsupported' : 'Invalid proxy configuration', false, {stage:'network_config',reason,retryable:false});
 }
 const envName = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 export function validateProxyConfig(value: unknown): ProxyConfig {
@@ -70,7 +70,7 @@ function proxyUri(value: string | undefined): {url:string;protocol:'http'|'https
   try { decodeURIComponent(u.username); decodeURIComponent(u.password); } catch { throw networkConfigError(); }
   return {url:u.href,protocol:u.protocol === 'http:' ? 'http' : u.protocol === 'https:' ? 'https' : 'socks5'};
 }
-interface Bypass { host: string; ip: boolean; port?: number; all?: boolean }
+type Bypass = { host: string; ip: boolean; port?: number; all?: boolean } | { subnet: BlockList; family: 4 | 6 };
 function host(value: string): {host:string;ip:boolean} {
   let normalized: string;
   try {
@@ -88,7 +88,17 @@ function parseBypass(value: string): Bypass[] {
 function parseBypassRules(value: string): Bypass[] {
   return value.split(/[,\s]+/u).filter(Boolean).map(token => {
     if (token === '*') return {host:'',ip:false,all:true};
-    if (/[\/@?#]/u.test(token)) throw networkConfigError();
+    if (token.includes('/')) {
+      const parts = /^([^/%]+)\/(\d+)$/u.exec(token);
+      const family = parts ? isIP(parts[1]!) : 0;
+      if (!parts || (family !== 4 && family !== 6)) throw networkConfigError();
+      const prefix = Number(parts[2]);
+      if (!Number.isSafeInteger(prefix) || prefix > (family === 4 ? 32 : 128)) throw networkConfigError();
+      const subnet = new BlockList();
+      subnet.addSubnet(parts[1]!, prefix, family === 4 ? 'ipv4' : 'ipv6');
+      return {subnet, family};
+    }
+    if (/[@?#]/u.test(token)) throw networkConfigError();
     let name = token, port: number | undefined;
     const bracket = /^\[([^\]]+)\](?::(\d+))?$/u.exec(token);
     if (bracket) { name = bracket[1]!; if (isIP(name) !== 6) throw networkConfigError(); if (bracket[2] !== undefined) port = Number(bracket[2]); }
@@ -103,5 +113,5 @@ function parseBypassRules(value: string): Bypass[] {
 }
 export function bypasses(endpoint: URL, value: string): boolean {
   const target = host(endpoint.hostname), port = Number(endpoint.port || (endpoint.protocol === 'https:' ? 443 : 80));
-  return parseBypass(value).some(rule => rule.all || ((rule.port === undefined || rule.port === port) && (target.host === rule.host || (!target.ip && !rule.ip && target.host.endsWith(`.${rule.host}`)))));
+  return parseBypass(value).some(rule => 'subnet' in rule ? isIP(target.host) === rule.family && rule.subnet.check(target.host, rule.family === 4 ? 'ipv4' : 'ipv6') : rule.all || ((rule.port === undefined || rule.port === port) && (target.host === rule.host || (!target.ip && !rule.ip && target.host.endsWith(`.${rule.host}`)))));
 }

@@ -29,7 +29,7 @@ it.each([
   ['http://example.com','example.com:80',true],['http://example.com:81','example.com:80',false],['http://example.com','*',true],
   ['https://example.com','localhost, * ',true],['http://example.com','foo.test\nexample.com\tbar.test',true],['http://example.com','',false],
 ])('NO_PROXY contract: %s / %s -> %s', (url,list,expected) => expect(bypasses(new URL(url),list)).toBe(expected));
-it.each(['127.0.0.0/8','https://example.com','foo*bar','example.com:0','example.com:65536','[::1]:x','[localhost]','example.com/path','@example.com'])('rejects unsupported bypass syntax: %s', list => {
+it.each(['https://example.com','foo*bar','example.com:0','example.com:65536','[::1]:x','[localhost]','example.com/path','@example.com'])('rejects unsupported bypass syntax: %s', list => {
   expect(() => bypasses(new URL('https://example.com'),list)).toThrow('Invalid NO_PROXY list');
 });
 it('custom ignores host NO_PROXY and validates its own URI even for bypass', () => {
@@ -50,4 +50,23 @@ it.each(['socks4://p','file:///secret','http://p/a','http://p?secret','http://p#
 it('validates exact keys and supported protocol levels', () => {
   for (const value of [{mode:'direct',urlEnv:'X'},{mode:'env',noProxy:'*'},{mode:'custom',url:'secret'},{mode:'custom',urlEnv:'BAD-NAME'},{mode:'auto'}]) expect(() => validateProxyConfig(value)).toThrow();
   expect(resolveRoute('http://endpoint.test',envMode,{ALL_PROXY:'socks5://p:1080'}).description.protocol).toBe('socks5');
+});
+
+it.each([
+ ['http://10.23.4.5','10.0.0.0/8',true],['http://11.0.0.1','10.0.0.0/8',false],
+ ['http://10.127.1.2','10.0.0.0/9',true],['http://10.128.1.2','10.0.0.0/9',false],
+ ['https://[2001:0db8:0:0::1]','2001:db8::/32',true],['http://[2001:db9::1]','2001:db8::/32',false],
+ ['http://127.0.0.1','::/0',false],['http://[::1]','0.0.0.0/0',false],
+ ['http://example.test','0.0.0.0/0,::/0',false],['http://127.0.0.1','0.0.0.0/0',true],
+ ['http://127.0.0.1','127.0.0.1/32',true],['http://127.0.0.2','127.0.0.1/32',false],
+ ['http://[::1]','::1/128',true],['http://[::2]','::1/128',false],
+])('IP-literal CIDR: %s %s -> %s',(url,list,expected)=>expect(bypasses(new URL(url),list)).toBe(expected));
+it('mixed private CIDRs keep public hostnames on the selected proxy',()=>{
+ const env={HTTPS_PROXY:'http://proxy.test',NO_PROXY:'localhost,127.0.0.1,*.internal.test,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16'};
+ expect(resolveRoute('https://provider.test',envMode,env).description.route).toBe('proxy');
+ expect(resolveRoute('https://172.20.1.2',envMode,env).description.reason).toBe('no_proxy_match');
+});
+it.each(['example.com/8','10.0.0.0/33','::/129','10.0.0.0/-1','10.0.0.0/1.5','10.0.0.0/','10.0.0.0/8/1','[fd00::]/8','10.0.0.0/8:443','fe80::1%eth0/64','https://10.0.0.0/8'])('malformed CIDR stays redacted: %s',value=>{
+ try {bypasses(new URL('https://provider.test'),value);throw new Error('missing rejection');}
+ catch(error){expect(error).toMatchObject({code:'CONFIGURATION',diagnostic:{stage:'network_config',reason:'no_proxy_invalid',retryable:false}});expect(JSON.stringify(error)).not.toContain(value);}
 });

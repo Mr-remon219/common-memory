@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.6 — 2026-09-12
+
+- Default new configurations to ordinary OS networking: ignore application proxy environment variables while allowing system routing, VPNs and Clash TUN to handle traffic. Preserve explicitly configured and legacy network modes.
+- Support IPv4/IPv6 CIDR exclusions in opt-in proxy modes, matching IP-literal endpoints only; malformed settings still fail closed without silent direct fallback.
+- Keep Pi's authenticated local capture durable when maintenance network initialization fails. Defer transport construction and report bounded, redacted, actionable diagnostics instead of repeated generic capture warnings.
+- Accept numeric Codex host versions >=0.153.4 without an upper bound. Validate known rollout structures from the 0.153.4/0.154.0 contracts, including retained context, while preserving candidate matching and rejecting unknown structures.
+- Install automatic ChatGPT Desktop Work capture and explicit refresh on POSIX and Windows-through-WSL. Share a single stable Codex-host capture pipeline when Codex and Work share a configuration root; do not guess frontend identity or install new import capabilities.
+- Reconcile retained managed integrations so existing read-only installations gain capture when reapplied. Preserve unrelated configuration, shared ownership, host trust requirements and safe removal.
+- Add test-first network, real Pi SDK, newer-rollout, installation-upgrade and shared-owner regressions; extend the real WSL smoke to exercise automatically installed capture resources.
+
 ## 0.3.5 — 2026-09-12
 
 - Remove Pi's exact-version discovery gate and use a `*` host peer dependency. Installed Pi versions are selectable without launching the agent; 0.84.4 remains an event-contract validation baseline, not a version requirement or a claim of universal runtime verification.

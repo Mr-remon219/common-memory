@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { stubInstalledBuild } from '../helpers/installation-build.js';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -8,8 +9,9 @@ import { installIntegrations, integrationHealth, readInstallationState, reconcil
 import { installationTransaction, readInstallationFile, writeInstallationFile } from '../../src/cli/installation-files.js';
 import { scanIntegrationTargets, type IntegrationTarget } from '../../src/cli/integration-targets.js';
 
+vi.mock('node:child_process', async importOriginal => {const actual=await importOriginal<typeof import('node:child_process')>();return {...actual,execFileSync:vi.fn(actual.execFileSync)};});
 let root: string, home: string, dataRoot: string;
-beforeEach(() => { root = realpathSync(mkdtempSync(join(tmpdir(), 'cm-integrations-'))); home = join(root, 'common-memory'); dataRoot = join(home, 'data'); vi.stubEnv('COMMON_MEMORY_HOME', home); stubInstalledBuild(); });
+beforeEach(() => { root = realpathSync(mkdtempSync(join(tmpdir(), 'cm-integrations-'))); home = join(root, 'common-memory'); dataRoot = join(home, 'data'); vi.stubEnv('COMMON_MEMORY_HOME', home); stubInstalledBuild();vi.mocked(execFileSync).mockImplementation((()=> 'C:\\Synthetic\\common-memory-bridge.ps1') as unknown as typeof execFileSync); });
 afterEach(() => { vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }); });
 function target(id: 'codex' | 'chatgpt' | 'pi', hooks = id !== 'chatgpt'): IntegrationTarget { return { id, name: id, root: join(root, id === 'pi' ? 'pi' : 'codex'), mode: 'posix', hooks }; }
 const install = (targets: IntegrationTarget[]) => installIntegrations(targets, dataRoot, { home });
@@ -112,7 +114,7 @@ it('compares files again at commit instead of overwriting a concurrent client ed
 });
 it('discovers supported POSIX clients and distinguishes incompatible capture versions', () => {
   const base = { home: root, env: { PATH: '', CODEX_HOME: join(root, 'custom-codex'), PI_CODING_AGENT_DIR: join(root, 'custom-pi') }, platform: 'linux' as const, executable: (name: string) => name === 'chatgpt' ? undefined : name, version: (path: string) => path === 'pi' ? '0.84.4' : 'codex-cli 0.154.0' };
-  expect(scanIntegrationTargets(base)).toMatchObject([{ id: 'codex', root: join(root, 'custom-codex'), hooks: false }, { id: 'pi', root: join(root, 'custom-pi'), hooks: true }]);
+  expect(scanIntegrationTargets(base)).toMatchObject([{ id: 'codex', root: join(root, 'custom-codex'), hooks: true }, { id: 'pi', root: join(root, 'custom-pi'), hooks: true }]);
   expect(scanIntegrationTargets({ ...base, version: () => 'unknown' }).map(t => t.id)).toEqual(['codex', 'pi']);
 });
 it('allows installed Pi without launching it or using its version as an installation gate', () => {
@@ -126,7 +128,7 @@ it.each(['system', 'user'])('discovers macOS Desktop in the %s Applications dire
   const app = join(applications[location === 'system' ? 0 : 1]!, 'ChatGPT.app');
   mkdirSync(app, { recursive: true });
   const options = { home, env: { PATH: '' }, platform: 'darwin' as const, executable: () => undefined, applications };
-  expect(scanIntegrationTargets(options)).toMatchObject([{ id: 'chatgpt', root: join(home, '.codex'), mode: 'posix', hooks: false }]);
+  expect(scanIntegrationTargets(options)).toMatchObject([{ id: 'chatgpt', root: join(home, '.codex'), mode: 'posix', hooks: true }]);
   rmSync(app, { recursive: true }); writeFileSync(app, 'not an application directory');
   expect(scanIntegrationTargets(options)).toEqual([]);
 });
@@ -134,10 +136,17 @@ it('discovers native Windows Desktop from an explicit app probe, not merely WSL 
   const base = { home: root, env: { PATH: '', WSL_DISTRO_NAME: 'Synthetic' }, platform: 'linux' as const, executable: () => undefined };
   expect(scanIntegrationTargets({ ...base, windowsHome: () => undefined })).toEqual([]);
   const [desktop] = scanIntegrationTargets({ ...base, windowsHome: () => join(root, 'windows') });
-  expect(desktop).toMatchObject({ id: 'chatgpt', mode: 'windows-wsl', hooks: false });
+  expect(desktop).toMatchObject({ id: 'chatgpt', mode: 'windows-wsl', hooks: true });
   installIntegrations([desktop!], dataRoot, { home, env: base.env });
   const body = readInstallationFile(join(desktop!.root, 'config.toml'))!;
   expect(body).toContain('wsl.exe'); expect(body).toContain('Synthetic'); expect(body).toContain('COMMON_MEMORY_HOME=');
+  const bridge=join(desktop!.root,'common-memory-bridge.ps1');
+  expect(readFileSync(bridge).subarray(0,3)).toEqual(Buffer.from([0xef,0xbb,0xbf]));
+  expect(readFileSync(bridge,'utf8')).toContain('CreationDate');expect(body).not.toContain('common_memory_init');expect(body).not.toContain('chatgpt-desktop');
+  const hooks=JSON.parse(readFileSync(join(desktop!.root,'hooks.json'),'utf8')).hooks;
+  for(const entries of Object.values(hooks) as any[])expect(Buffer.from(entries[0].hooks[0].command.split(' -EncodedCommand ')[1],'base64').toString('utf16le')).toContain('-Action codex-hook -Client codex');
+  expect(integrationHealth(readInstallationState()!,'chatgpt')).toBe(true);
+  installIntegrations([desktop!],dataRoot,{home,env:base.env});removeIntegrations(['chatgpt']);expect(existsSync(bridge)).toBe(false);
 });
 
 it('reconciles Pi + Codex to Pi + ChatGPT atomically while retaining shared MCP and unchanged Pi files', () => {
@@ -218,4 +227,63 @@ it('preserves both owners when a shared MCP resource was modified before removin
   expect(readInstallationState()).toEqual(before);
   expect(existsSync(join(codex.root, 'hooks.json'))).toBe(true);
   expect(readFileSync(path, 'utf8')).toBe('[mcp_servers.common_memory]\ncommand="external"\n');
+});
+
+it.each(['codex','chatgpt'] as const)('one shared host pipeline survives removing %s without adding import capability',removed=>{
+ const codex=target('codex'),chatgpt=target('chatgpt',true);install([codex,chatgpt]);
+ const hooksPath=join(codex.root,'hooks.json'),skillPath=join(codex.root,'skills/memory-refresh/SKILL.md');
+ const hooks=readFileSync(hooksPath,'utf8'),skill=readFileSync(skillPath,'utf8');
+ for(const entries of Object.values(JSON.parse(hooks).hooks) as any[]) {expect(entries).toHaveLength(1);expect(entries[0].hooks[0].command).toContain('codex-hook');}
+ expect(skill).toContain("'codex'");
+ const mcp=parse(readFileSync(join(codex.root,'config.toml'),'utf8')).mcp_servers as any;
+ expect(Object.keys(mcp)).toEqual(['common_memory']);expect(mcp.common_memory.args).toContain('read');expect(mcp.common_memory.enabled_tools).toEqual(['memory_read','memory_status']);
+ removeIntegrations([removed]);expect(readFileSync(hooksPath,'utf8')).toBe(hooks);expect(readFileSync(skillPath,'utf8')).toBe(skill);
+ const remaining=removed==='codex'?'chatgpt':'codex';expect(integrationHealth(readInstallationState()!,remaining)).toBe(true);
+ expect(parse(readFileSync(join(codex.root,'config.toml'),'utf8')).mcp_servers).not.toHaveProperty('common_memory_init');
+ removeIntegrations([remaining]);expect(existsSync(hooksPath)).toBe(false);expect(existsSync(skillPath)).toBe(false);
+});
+it.each(['codex','chatgpt'] as const)('reselecting a managed v0.3.5 read-only %s upgrades the desired graph transactionally',id=>{
+ const prior=target(id,false);install([prior]);const before=readInstallationState()!,read=before.resources[0]!.content!;
+ const selected={...prior,hooks:true,hint:'new capture support'};
+ reconcileIntegrations([selected],dataRoot,{home,expectedState:before});
+ expect(readInstallationState()!.targets).toEqual([selected]);expect(readFileSync(join(prior.root,'config.toml'),'utf8')).toBe(read);
+ expect(Object.keys(JSON.parse(readFileSync(join(prior.root,'hooks.json'),'utf8')).hooks)).toHaveLength(6);
+ expect(existsSync(join(prior.root,'skills/memory-refresh/agents/openai.yaml'))).toBe(true);
+ const next=readInstallationState();reconcileIntegrations([selected],dataRoot,{home,expectedState:next});expect(readInstallationState()).toEqual(next);
+});
+it('retained Desktop upgrade refuses disabled hooks and modified owned resources with no partial changes',()=>{
+ const prior=target('chatgpt',false);install([prior]);const path=join(prior.root,'config.toml'),body=readFileSync(path,'utf8'),before=readInstallationState();
+ writeFileSync(path,body+'\n[features]\nhooks=false\n');expect(()=>reconcileIntegrations([{...prior,hooks:true}],dataRoot,{home})).toThrow('禁用 Hooks');
+ expect(readInstallationState()).toEqual(before);expect(existsSync(join(prior.root,'hooks.json'))).toBe(false);
+ writeFileSync(path,body.replace('common_memory','external_edit'));expect(()=>reconcileIntegrations([{...prior,hooks:true}],dataRoot,{home})).toThrow();expect(readInstallationState()).toEqual(before);
+});
+it('unowned host capture definitions are never duplicated across JSON and inline TOML',()=>{
+ const desktop=target('chatgpt',true);mkdirSync(desktop.root);
+ writeFileSync(join(desktop.root,'config.toml'),'[[hooks.Stop]]\n[[hooks.Stop.hooks]]\ntype="command"\ncommand="common-memory work-hook"\n');
+ expect(()=>install([desktop])).toThrow('未归属');expect(readInstallationState()).toBeNull();
+});
+it('managed Windows read-only Desktop upgrades without changing its exact read block',()=>{
+ const desktop={...target('chatgpt',false),mode:'windows-wsl' as const};const env={WSL_DISTRO_NAME:'Synthetic'};
+ installIntegrations([desktop],dataRoot,{home,env});const before=readInstallationState()!,read=before.resources[0]!.content!;
+ reconcileIntegrations([{...desktop,hooks:true}],dataRoot,{home,env,expectedState:before});
+ expect(readFileSync(join(desktop.root,'config.toml'),'utf8')).toContain(read);expect(integrationHealth(readInstallationState()!,'chatgpt')).toBe(true);
+ expect(readFileSync(join(desktop.root,'common-memory-bridge.ps1')).subarray(0,3)).toEqual(Buffer.from([0xef,0xbb,0xbf]));
+ const state=readInstallationState();reconcileIntegrations([{...desktop,hooks:true}],dataRoot,{home,env,expectedState:state});expect(readInstallationState()).toEqual(state);
+});
+it('ordinary Linux/WSL executables and web browser presence never identify Desktop',()=>{
+ expect(scanIntegrationTargets({home:root,platform:'linux',env:{WSL_DISTRO_NAME:'Synthetic'},executable:name=>['chatgpt','browser'].includes(name)?name:undefined,windowsHome:()=>undefined})).toEqual([]);
+});
+it('preserves BOM ownership bytes for Windows files without regressing BOM client config parsing',()=>{
+ const desktop=target('chatgpt',true);mkdirSync(desktop.root);const config='\ufeff# Windows editor\nmodel="synthetic"\n';writeFileSync(join(desktop.root,'config.toml'),config);writeFileSync(join(desktop.root,'hooks.json'),'\ufeff{"hooks":{}}');
+ install([desktop]);expect(readFileSync(join(desktop.root,'config.toml'),'utf8')).toContain(config);expect(integrationHealth(readInstallationState()!,'chatgpt')).toBe(true);
+ removeIntegrations(['chatgpt']);expect(readFileSync(join(desktop.root,'config.toml'),'utf8')).toBe(config);
+});
+
+it('automatic Desktop capture leaves a separately configured manual init server unowned and unchanged',()=>{
+ const desktop=target('chatgpt',true);mkdirSync(desktop.root);
+ const manual='[mcp_servers.common_memory_init]\ncommand="manual-runtime"\nargs=["mcp","--capability","init"]\n';
+ const path=join(desktop.root,'config.toml');writeFileSync(path,manual);
+ install([desktop]);expect(readFileSync(path,'utf8')).toContain(manual);
+ expect(readInstallationState()!.resources.some(r=>r.content?.includes('common_memory_init'))).toBe(false);
+ removeIntegrations(['chatgpt']);expect(readFileSync(path,'utf8')).toBe(manual);
 });

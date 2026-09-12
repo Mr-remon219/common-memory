@@ -20,7 +20,7 @@ Memory runs inside WSL and the ChatGPT/Codex desktop app reaches it through `wsl
 
 ## Setup
 
-Requires Node.js 22.19+ (22.x) or 24+. Installation: `npm install -g common-memory-core@0.3.5`.
+Requires Node.js 22.19+ (22.x) or 24+. Installation: `npm install -g common-memory-core@0.3.6`.
 The following TUI describes the current source. Source contributors use
 `npm ci && npm run build`, then `node dist/cli/main.js`.
 **`common-memory` is the single entry for interactive management.** First run selects
@@ -122,12 +122,12 @@ network clients.
 
 | Mode | Request route |
 | --- | --- |
-| `direct` | Independent direct Agent; ignores HTTP/ALL proxy variables and the host global dispatcher |
+| `direct` | Normal system/network route via an independent Agent; ignores application proxy variables and the host global dispatcher; OS VPN/TUN still applies |
 | `env` | HTTPS: HTTPS_PROXY → HTTP_PROXY → ALL_PROXY; HTTP: HTTP_PROXY → ALL_PROXY; honors the supported NO_PROXY rules |
 | `custom` | Explicit HTTP/HTTPS proxy; optional own bypass list, independent of host NO_PROXY; SOCKS5 is experimental |
 | Old config without `remote.proxy` | Legacy host route, whose actual behavior is unknown to Common Memory; preserved until network settings are explicitly saved |
 
-New installations default to `remote.proxy: {"mode":"env"}`. Existing schemaVersion 2
+New installations default to `remote.proxy: {"mode":"direct"}` (recommended normal system route). Existing schemaVersion 2
 files retain field absence on load/save and ordinary API configuration, so upgrading
 alone does not change their route. Legacy borrows the fetch captured at client creation
 and preserves historic private environment loading, except for newly reserved network
@@ -139,7 +139,11 @@ process source wins before checking lowercase/uppercase spelling; lowercase wins
 within that source. A present empty value clears that group. No new-mode loading
 changes `process.env`, global fetch, global dispatchers or global certificate trust.
 The route and connections are fixed for the client's lifetime, including retries;
-restart active MCP/Pi clients after changing configuration.
+restart active MCP/Pi clients after changing configuration. Configured Writers defer route,
+CA and dispatcher construction until the first maintenance request, while snapshotting
+routing inputs at construction. Durable capture below threshold needs no network client;
+a later admission failure retains work with a controlled diagnostic for explicit repair/retry.
+Explicit model/network probes remain eager. Pi deduplicates bounded actionable diagnostics.
 
 The wizard saves a custom proxy URL only as private `COMMON_MEMORY_PROXY_URL`, with
 `remote.proxy: {"mode":"custom","urlEnv":"COMMON_MEMORY_PROXY_URL"}` in JSON. URL
@@ -155,10 +159,11 @@ NO_PROXY (or custom `noProxy`) accepts comma/whitespace-separated hostnames,
 IPv6, optional ports and standalone `*` anywhere in the list. IPv6 ports require
 brackets. Matching normalizes case, IDNA, trailing dots and IP spelling; it compares
 effective ports, so HTTPS with omitted port matches `:443`. It performs no DNS lookup:
-`localhost` does not imply `127.0.0.1` or `::1`. **CIDR ranges, URL/path entries and other
-wildcards are rejected** with `no_proxy_invalid`; they are not silently ignored.
-An environment containing CIDR entries needs an explicit supported bypass list or a
-custom route. A failing selected proxy never falls back to direct.
+`localhost` does not imply `127.0.0.1` or `::1`. IP-literal CIDRs such as `10.0.0.0/8`
+and `2001:db8::/32` match only same-family literal endpoints, never DNS-resolved hostnames.
+Prefixes are 0–32 (IPv4) or 0–128 (IPv6); CIDRs cannot have brackets, ports or zone IDs.
+Malformed CIDRs, URL/path entries and arbitrary wildcards fail with redacted
+`no_proxy_invalid`; none are silently ignored. `0.0.0.0/0` is not global `*`. A failing selected proxy never falls back to direct.
 
 Windows/macOS GUI processes can inherit different environment variables from terminals;
 configure the private settings when that is the desired common source. WSL uses its
@@ -561,7 +566,8 @@ for validation and remaining real-UI limitations.
 
 ### Codex CLI (session hooks and read-only MCP)
 
-For automatic injection, build Common Memory and run `common-memory codex-config`
+The TUI installs these resources automatically for supported Codex versions. For manual
+configuration, build Common Memory and run `common-memory codex-config`
 (or `node dist/cli/main.js codex-config`). Save its stdout as
 `common-memory.config.toml` under the **actual Codex CLI `CODEX_HOME`**
 (default `~/.codex`). Inspect and merge any existing file with that name; do not
@@ -589,10 +595,14 @@ output remains bounded to 64 KiB and hook input to 1 MiB. Automatic snapshots ar
 frozen; call MCP `memory_read` for an independent current read, or explicitly invoke `/memory-refresh` to replace the frozen slot. Read failure returns
 a controlled unavailable block. Ingress/protocol/capacity failures exit nonzero.
 
-The rollout parser is isolated at `src/cli/codex/transcript-0.153.4.ts`; it accepts
-only Codex CLI 0.153.4 metadata. User delivery requires `user_message` or `item_completed/UserMessage` events matching the separately recorded
+The rollout parser is isolated at `src/cli/codex/transcript-codex-host.ts`; it admits
+strict numeric versions >=0.153.4 with no upper bound (no prerelease/build suffix).
+The 0.153.4/0.154.0 tagged sources establish known discriminants; new discriminants
+fail closed. `retained_context` is known non-evidence. User delivery requires `user_message` or `item_completed/UserMessage` events matching the separately recorded
 UserPromptSubmit candidate for that turn, never arbitrary `response_item` user content, hook context, environment messages or
-compaction summaries. `task_complete` / `turn_aborted` seal interactions. Stop starts
+compaction summaries. The source-defined legacy `user_message` has no turn ID and
+requires an explicitly started active turn; any supplied ID must match. Item delivery
+and terminal records require matching nonempty IDs and valid timestamps. `task_complete` / `turn_aborted` seal interactions. Stop starts
 completion reconciliation immediately; a delayed final record needs no next prompt.
 Unconfirmed completion keeps its durable watch for a later `session-drain` retry;
 a reconciliation attempt is bounded to 60 seconds. Unknown formats do not advance
@@ -633,6 +643,28 @@ memory-reader`, or pass `-c mcp_servers.common_memory_init.enabled=false`. Disab
 Codex's own local memories (`features.memories = false`) when you need to prove that
 an answer came from Common Memory. `common-memory mcp-config` prints this block with the
 paths of the runtime you are actually using.
+
+### Automatic ChatGPT Desktop Work collection
+
+Select ChatGPT in **Agent Integration** on macOS or from WSL after local Desktop discovery.
+The installer writes six hooks and an explicit refresh skill while preserving the existing
+read MCP capability. It does not install `memory_init` or other import capabilities.
+Native Windows receives a BOM PowerShell bridge with fixed
+WSL distro/user/Node/CLI/home and native process identity; it converts only cwd/transcript paths.
+No web Chat or ordinary Chat capture, trust-store changes or bypass flags are installed.
+Restart the host and review/trust commands using its Hooks interface. Unknown rollout
+structures remain fail-closed even on newer admitted versions.
+
+Codex and Work sharing a config root share one physical hook set, skill and bridge.
+Automatic capture/refresh uses internal `client=codex` to identify the host protocol, not
+an authenticated frontend product (the hook envelope provides none).
+Adding/removing an owner never changes capture identity. Existing exact managed read-only
+installations upgrade by confirming the same selection. Modified/unowned resources,
+unsafe paths, incompatible roots/modes and explicit `hooks=false` abort transactionally.
+Manual `work-config` retains its explicit `chatgpt-work` identity and existing separate
+init configuration with approval and disclosure requirements. Automatic installation does
+not take ownership of separately configured init servers. Do not layer duplicate manual
+and automatic hooks in the same root.
 
 ### Windows / WSL deployment
 

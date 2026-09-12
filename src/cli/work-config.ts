@@ -86,16 +86,20 @@ if($Action -eq 'session-refresh') {
 exit $result.Code
 `;
 }
+/** Shared automatic/manual launch rendering; frontend product identity is not inferred from hook input. */
+export function renderHostCommand(client:HostClient,action:string,options:LaunchOptions,env:NodeJS.ProcessEnv=process.env,bridgePath?:string):string {
+  const r=runtimeLaunch(options,env);
+  if(options.wsl&&(!bridgePath||!win32.isAbsolute(bridgePath)||/["\r\n]/u.test(bridgePath)))throw new Error('--bridge-path requires the absolute Windows destination of the generated launcher');
+  if(!options.wsl)return [r.node,r.cli,action,'--home',r.home,...(action==='session-refresh'?['--client',client]:[])].map(shellQuote).join(' ');
+  // Encode the PowerShell expression so neither cmd nor PowerShell expands path metacharacters.
+  const expression=`& ${psQuote(bridgePath!)} -Action ${action} -Client ${client}; exit $LASTEXITCODE`;
+  return `C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -EncodedCommand ${Buffer.from(expression,'utf16le').toString('base64')}`;
+}
 export function renderHostConfig(client:HostClient,options:LaunchOptions,env:NodeJS.ProcessEnv=process.env,bridgePath?:string):{config:string;skill:string;policy:string;bridge?:string} {
   if(!options.wsl&&!['linux','darwin'].includes(process.platform))throw new Error('Select a supported POSIX runtime or Windows-to-WSL mode');
   const r=runtimeLaunch(options,env);
   if(options.wsl&&(!bridgePath||!win32.isAbsolute(bridgePath)||/["\r\n]/.test(bridgePath)))throw new Error('--bridge-path requires the absolute Windows destination of the generated launcher');
-  const command=(action:string)=> {
-    if(!options.wsl)return [r.node,r.cli,action,'--home',r.home,...(action==='session-refresh'?['--client',client]:[])].map(shellQuote).join(' ');
-    // Encode the PowerShell expression so neither cmd nor PowerShell expands path metacharacters.
-    const expression=`& ${psQuote(bridgePath!)} -Action ${action} -Client ${client}; exit $LASTEXITCODE`;
-    return `C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -EncodedCommand ${Buffer.from(expression,'utf16le').toString('base64')}`;
-  };
+  const command=(action:string)=>renderHostCommand(client,action,options,env,bridgePath);
   const lines=['# Review commands and establish host trust with /hooks. Regenerate after moving this runtime.','[features]','hooks = true',''];
   for(const event of ['SessionStart','UserPromptSubmit','PostToolUse','Stop','Interrupt','SessionEnd'])lines.push(`[[hooks.${event}]]`,`[[hooks.${event}.hooks]]`,'type = "command"',`command = ${JSON.stringify(command(client==='codex'?'codex-hook':'work-hook'))}`,'async = false','timeout = 3','additionalContextLimit = 0','');
   for(const [name,id,capability] of [['common_memory',client==='codex'?'codex-cli':'chatgpt-work','read'],['common_memory_init','chatgpt-desktop','init']]) {

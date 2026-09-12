@@ -11,8 +11,8 @@ import { PRIVATE_PROXY_KEY, PRIVATE_CA_KEY, networkSecret } from '../../src/memo
 const roots: string[]=[];
 const root=()=>{const value=mkdtempSync(join(tmpdir(),'cm-network-config-'));roots.push(value);return value;};
 afterEach(()=>{vi.unstubAllEnvs();vi.unstubAllGlobals();for(const path of roots.splice(0))rmSync(path,{recursive:true,force:true});});
-it('new installs use env while old schemaVersion 2 retains absence until explicit migration', () => {
-  const home=root(),config=defaultConfig({COMMON_MEMORY_HOME:home});config.remote.model='fake';expect(config.remote.proxy).toEqual({mode:'env'});
+it('new installs use direct while old schemaVersion 2 retains absence until explicit migration', () => {
+  const home=root(),config=defaultConfig({COMMON_MEMORY_HOME:home});config.remote.model='fake';expect(config.remote.proxy).toEqual({mode:'direct'});
   delete config.remote.proxy;const path=join(home,'config.json');saveConfig(config,path);
   const old=loadConfig(path)!;expect(old.remote).not.toHaveProperty('proxy');expect(describeConfiguredNetwork(old,{}).route).toBe('host');
   old.remote.model='updated';saveConfig(old,path);expect(loadConfig(path)!.remote).not.toHaveProperty('proxy');
@@ -57,7 +57,7 @@ it('explicit setup credentials cannot be replaced by an inherited provider key',
 });
 it('status is local, redacted and does not create absent homes or data roots', () => {
   const home=join(root(),'missing'),config=defaultConfig({COMMON_MEMORY_HOME:home});config.remote.model='fake';
-  expect(describeConfiguredNetwork(config,{COMMON_MEMORY_HOME:home,ALL_PROXY:'http://name:password@proxy.invalid'})).toEqual({mode:'env',route:'proxy',reason:'all_proxy',protocol:'http'});
+  config.remote.proxy={mode:'env'};expect(describeConfiguredNetwork(config,{COMMON_MEMORY_HOME:home,ALL_PROXY:'http://name:password@proxy.invalid'})).toEqual({mode:'env',route:'proxy',reason:'all_proxy',protocol:'http'});
   expect(existsSync(home)).toBe(false);
 });
 it('legacy factory preserves host env-dispatcher routing after old private NO_PROXY loading', async () => {
@@ -91,4 +91,68 @@ it('configured Writer close aborts active work before closing SQLite and blocks 
   const closing=writer.close();expect(writer.close()).toBe(closing);
   expect(await run).toMatchObject({outcome:'cancelled',reason:'CANCELLED'});await closing;
   expect(()=>writer.store.status()).toThrow();await expect(writer.run()).rejects.toThrow('CANCELLED');
+});
+
+it('new default reaches a synthetic origin despite hostile ambient routing', async () => {
+  let hits=0;const origin=createServer((_q,r)=>{hits++;r.writeHead(401);r.end('{}');});
+  await new Promise<void>(resolve=>origin.listen(0,'127.0.0.1',resolve));
+  const config=defaultConfig({COMMON_MEMORY_HOME:root()});config.remote.model='fake';config.remote.baseUrl=`http://127.0.0.1:${(origin.address() as {port:number}).port}`;
+  const hostile=vi.fn(()=>{throw new Error('host global fetch used');});vi.stubGlobal('fetch',hostile);
+  let model:ReturnType<typeof createConfiguredMemoryModel>|undefined;
+  try {
+    model=createConfiguredMemoryModel(config,{OPENAI_API_KEY:'synthetic',HTTP_PROXY:'bad-secret',NO_PROXY:'private.invalid/8'});
+    await expect(model.analyze({projection:{},schema:{},prompt:'synthetic'},{requestId:'r',deadlineMs:2000})).rejects.toMatchObject({code:'AUTHENTICATION'});
+    expect(hits).toBe(1);expect(hostile).not.toHaveBeenCalled();
+  } finally {await model?.close();origin.closeAllConnections();await new Promise<void>(resolve=>origin.close(()=>resolve()));}
+});
+it('Writer durably queues before malformed ambient network admission and freezes the failure', async () => {
+  const home=root();vi.stubEnv('COMMON_MEMORY_HOME',home);vi.stubEnv('OPENAI_API_KEY','synthetic');vi.stubEnv('HTTPS_PROXY','http://proxy.invalid');vi.stubEnv('https_proxy',undefined);vi.stubEnv('NO_PROXY','private.invalid/8');vi.stubEnv('no_proxy',undefined);
+  const config=defaultConfig({COMMON_MEMORY_HOME:home});config.remote.model='fake';config.remote.proxy={mode:'env'};
+  const writer=createConfiguredWriter(config);
+  try {
+    writer.store.enqueue({sessionId:'s',entryId:'e',source:'interactive',scope:'global',text:'Synthetic preference',observedAt:new Date().toISOString()});
+    // The environment is frozen at construction, not read again on the first request.
+    vi.stubEnv('NO_PROXY','*');
+    expect(await writer.run({force:true})).toMatchObject({outcome:'failed',reason:'CONFIGURATION'});
+    expect(writer.store.db.prepare('SELECT text,state FROM observations').get()).toMatchObject({text:'Synthetic preference'});
+    expect(JSON.stringify(writer.store.status())).not.toContain('private.invalid');
+  } finally {await writer.close();}
+});
+it('closing an unused Writer never initializes CA or transport', async () => {
+  const home=root();vi.stubEnv('COMMON_MEMORY_HOME',home);vi.stubEnv('OPENAI_API_KEY','synthetic');vi.stubEnv('CM_CA','/missing/synthetic-ca');
+  const config=defaultConfig({COMMON_MEMORY_HOME:home});config.remote.model='fake';config.remote.caFileEnv='CM_CA';
+  const writer=createConfiguredWriter(config);await writer.close();expect(()=>writer.store.status()).toThrow();
+});
+it.each(['env','custom'] as const)('deferred %s transport honors literal CIDRs and never drops explicit proxy routing',async mode=>{
+ const home=root();vi.stubEnv('COMMON_MEMORY_HOME',home);vi.stubEnv('OPENAI_API_KEY','synthetic');vi.stubEnv('http_proxy',undefined);vi.stubEnv('no_proxy',undefined);
+ let originHits=0,proxyHits=0;
+ const origin=createServer((_q,r)=>{originHits++;r.writeHead(401);r.end('{}');}),proxy=createServer((_q,r)=>{proxyHits++;r.writeHead(401);r.end('{}');});
+ await new Promise<void>(resolve=>origin.listen(0,'127.0.0.1',resolve));await new Promise<void>(resolve=>proxy.listen(0,'127.0.0.1',resolve));
+ const proxyUrl=`http://127.0.0.1:${(proxy.address() as {port:number}).port}`;
+ vi.stubEnv('HTTP_PROXY',proxyUrl);vi.stubEnv('SYNTHETIC_PROXY',proxyUrl);
+ try {
+  for(const [n,list] of ['10.0.0.0/8','127.0.0.0/8'].entries()) {
+   vi.stubEnv('NO_PROXY',list);
+   const config=defaultConfig({COMMON_MEMORY_HOME:home});config.dataRoot=join(home,`data${n}`);config.remote.model='fake';config.remote.baseUrl=`http://127.0.0.1:${(origin.address() as {port:number}).port}`;
+   config.remote.proxy=mode==='env'?{mode}:{mode,urlEnv:'SYNTHETIC_PROXY',noProxy:list};
+   const writer=createConfiguredWriter(config);
+   try {expect(originHits+proxyHits).toBe(n);writer.store.enqueue({sessionId:'s',entryId:'e',source:'interactive',scope:'global',text:'Synthetic preference',observedAt:new Date().toISOString()});expect(await writer.run({force:true})).toMatchObject({outcome:'failed',reason:'AUTHENTICATION'});}
+   finally {await writer.close();}
+  }
+  expect(originHits).toBe(1);expect(proxyHits).toBe(1);
+ } finally {origin.closeAllConnections();proxy.closeAllConnections();await Promise.all([new Promise<void>(resolve=>origin.close(()=>resolve())),new Promise<void>(resolve=>proxy.close(()=>resolve()))]);}
+});
+it('close during the first real lazy request aborts work and closes SQLite idempotently',async()=>{
+ const home=root();vi.stubEnv('COMMON_MEMORY_HOME',home);vi.stubEnv('OPENAI_API_KEY','synthetic');
+ const reached=Promise.withResolvers<void>();const server=createServer(()=>reached.resolve());await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
+ const config=defaultConfig({COMMON_MEMORY_HOME:home});config.remote.model='fake';config.remote.baseUrl=`http://127.0.0.1:${(server.address() as {port:number}).port}`;
+ const writer=createConfiguredWriter(config);
+ try {writer.store.enqueue({sessionId:'s',entryId:'e',source:'interactive',scope:'global',text:'Synthetic preference',observedAt:new Date().toISOString()});const run=writer.run({force:true});await reached.promise;const closing=writer.close();expect(writer.close()).toBe(closing);expect(await run).toMatchObject({outcome:'cancelled'});await closing;expect(()=>writer.store.status()).toThrow();}
+ finally {await writer.close();server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}
+});
+it('legacy Writer captures its borrowed fetch at construction rather than first request',async()=>{
+ const home=root();vi.stubEnv('COMMON_MEMORY_HOME',home);vi.stubEnv('OPENAI_API_KEY','synthetic');const original=vi.fn(async()=>new Response('{}',{status:401}));vi.stubGlobal('fetch',original);
+ const config=defaultConfig({COMMON_MEMORY_HOME:home});config.remote.model='fake';delete config.remote.proxy;
+ const writer=createConfiguredWriter(config),replacement=vi.fn(async()=>new Response('{}',{status:401}));vi.stubGlobal('fetch',replacement);
+ try{writer.store.enqueue({sessionId:'s',entryId:'e',source:'interactive',scope:'global',text:'Synthetic preference',observedAt:new Date().toISOString()});await writer.run({force:true});expect(original).toHaveBeenCalledOnce();expect(replacement).not.toHaveBeenCalled();}finally{await writer.close();}
 });

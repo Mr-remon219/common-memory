@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-v0.3 使用所有者确认的 MIT 许可证。npm 版本是 **0.3.5**，GitHub tag 是 **v0.3.5**，
+v0.3 使用所有者确认的 MIT 许可证。npm 版本是 **0.3.6**，GitHub tag 是 **v0.3.6**，
 包名 `common-memory-core`，可执行命令 `common-memory`，默认发布标签 `latest`。
 这是面向早期使用者的版本，不声称已经完成全部真实客户端验收。
 
@@ -11,7 +11,7 @@ v0.3 使用所有者确认的 MIT 许可证。npm 版本是 **0.3.5**，GitHub t
 Linux、macOS 和 WSL 在 Node 22.19+（22.x）或 24+ 环境使用同一行安装命令：
 
 ```sh
-npm install -g common-memory-core@0.3.5
+npm install -g common-memory-core@0.3.6
 ```
 
 安装 Node / WSL 是前置要求，不包含在这个 npm 命令中。详细说明见 [README](../README.md)。
@@ -22,7 +22,7 @@ npm install -g common-memory-core@0.3.5
 | --- | --- |
 | Core、CLI、stdio MCP | Node **22.19+（22.x）或 24+**；Linux / macOS CI 覆盖完整 gate 和真实 tarball 隔离安装 |
 | Pi | peer 为 `*`，发现与安装不限制版本号；**0.84.4** 是事件契约验证基线，不等于所有历史版本和真实交互组合已验证 |
-| Codex / Work 会话捕获 | rollout 仅接受 **Codex 0.153.4**；未知版本拒绝而非猜测；真实 UI Hook 信任仍需验收 |
+| Codex / Work 会话捕获 | rollout 接受 **Codex >=0.153.4** 的三段数字版本，无上限；未知结构拒绝而非猜测；真实 UI Hook 信任仍需验收 |
 | Windows 用户 | 产品部署在 WSL；原生 Windows 是薄桥接，不是第二套 Core 部署。Windows CI 结果应单独查看 |
 | macOS | 与 Linux 共用 npm 安装入口；macOS CI 覆盖代码及安装消费，真实 Desktop UI 验收仍独立 |
 | 模型 | Responses 或 Chat Completions，必须满足所选协议；假模型测试不证明实际模型的记忆判断质量 |
@@ -81,7 +81,7 @@ PowerShell 遵循系统脚本策略；不添加 ExecutionPolicy Bypass。
 npm run test:windows           # 原生 Windows，或具备 PowerShell interop 的 WSL
 npm run test:wsl               # 真实 WSL；先构建，Node 22.19 / 24 分别运行
 # 发布后也可对确切 registry 产物验证：
-npm run test:wsl -- --registry-version 0.3.5
+npm run test:wsl -- --registry-version 0.3.6
 ```
 
 WSL 冒烟使用真实的原生合成宿主进程，通过生成的 Hook 调用 Core；验证宿主身份、路径转换、
@@ -114,14 +114,14 @@ Release/tag 都要由维护者在对应服务上完成。本文和本地验证�
 发布后从一个新目录安装并核对 registry 中的版本：
 
 ```sh
-npm view common-memory-core@0.3.5 version dist.integrity
-npm install -g common-memory-core@0.3.5
+npm view common-memory-core@0.3.6 version dist.integrity
+npm install -g common-memory-core@0.3.6
 common-memory --version
 common-memory --help
 npm run test:published
 ```
 
-npm 发布成功并完成本地 registry 检查后，创建 GitHub Release `v0.3.5`。它会触发
+npm 发布成功并完成本地 registry 检查后，创建 GitHub Release `v0.3.6`。它会触发
 `published-package` 工作流：Ubuntu / macOS 实际执行上述一行全局安装，核对 CLI 版本，
 然后从 npm 下载 tarball 验证类型导出、Writer 提交/重启、Pi 模块和无 Key 的只读 MCP。
 也可通过 Actions 的 Run workflow 输入精确版本手动重跑。这个工作流**不发布包**，只有

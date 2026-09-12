@@ -1,11 +1,13 @@
+import { isAbsolute } from 'node:path';
 import { realpathSync } from 'node:fs';
 import { userInfo } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { configDirectory } from '../config/config.js';
 export const shellQuote=(value:string)=>"'"+value.replaceAll("'","'\"'\"'")+"'";
-export interface LaunchOptions { wsl:boolean; distro?:string|undefined; user?:string|undefined; wslExe?:string|undefined; workspaces?:string[] }
+export interface LaunchOptions { wsl:boolean; cli?:string; distro?:string|undefined; user?:string|undefined; wslExe?:string|undefined; workspaces?:string[] }
 export function runtimeLaunch(options:LaunchOptions,env:NodeJS.ProcessEnv=process.env) {
-  const node=realpathSync(process.execPath),cli=realpathSync(process.argv[1]??fileURLToPath(new URL('./main.js',import.meta.url))),home=configDirectory(env);
+  const node=realpathSync(process.execPath),cli=options.cli ?? realpathSync(process.argv[1]??fileURLToPath(new URL('./main.js',import.meta.url))),home=configDirectory(env);
+  if (!isAbsolute(cli)) throw new Error('CLI launch path must be absolute');
   const distro=options.distro??env.WSL_DISTRO_NAME,user=options.user??userInfo().username;
   if(options.wsl&&(process.platform!=='linux'||!distro))throw new Error('--wsl requires a Linux runtime and a fixed --distro');
   const wslExe=options.wslExe??'C:\\Windows\\System32\\wsl.exe';

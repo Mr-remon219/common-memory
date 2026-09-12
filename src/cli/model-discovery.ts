@@ -18,7 +18,7 @@ export async function discoverModels(provider: ProviderPreset, key: string, conf
   const signal = AbortSignal.any([AbortSignal.timeout(20_000), ...(options.signal ? [options.signal] : [])]);
   try {
     const privateEnv = readPrivateEnv(envFilePath());
-    const route = resolveRoute(provider.baseUrl, config.remote.proxy ?? { mode: 'env' }, process.env, privateEnv);
+    const route = resolveRoute(provider.baseUrl, config.remote.proxy, process.env, privateEnv);
     const ca = config.remote.caFileEnv ? networkSecret(config.remote.caFileEnv, process.env, privateEnv) : undefined;
     network = options.fetch ? undefined : new NetworkClient(provider.baseUrl, route, ca);
     const response = await (options.fetch ?? network!.fetch)(`${provider.baseUrl}/models`, {

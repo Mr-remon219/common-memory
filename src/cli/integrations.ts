@@ -1,12 +1,14 @@
+import { execFileSync } from 'node:child_process';
+import { renderHostCommand, renderWindowsBridge } from './work-config.js';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { userInfo } from 'node:os';
-import { isAbsolute, join, resolve } from 'node:path';
+import { isAbsolute, join, resolve, win32 } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
-import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
+import { parse as parseTomlDocument, stringify as stringifyToml } from 'smol-toml';
 import { configDirectory } from '../config/config.js';
-import { shellQuote } from './host-launch.js';
+import type { LaunchOptions } from './host-launch.js';
 import { installationTransaction, readInstallationFile, type FileChange } from './installation-files.js';
 import type { IntegrationId, IntegrationTarget } from './integration-targets.js';
 
@@ -29,12 +31,14 @@ export interface InstallationState {
 const statePath = (home: string) => join(home, '.installation/state.json');
 const emptyState = (): InstallationState => ({ version: 1, setupComplete: false, targets: [], resources: [] });
 const integrationIds = ['codex', 'chatgpt', 'pi'];
+// Preserve exact BOM bytes for ownership/rollback; ignore the marker only for semantic parsing.
+const parseToml = (body:string,options?:Parameters<typeof parseTomlDocument>[1]) => parseTomlDocument(body.replace(/^\ufeff/u,''),options);
 const object = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === 'object' && !Array.isArray(value));
 
 export function readInstallationState(home = configDirectory()): InstallationState | null {
   const raw = readInstallationFile(statePath(home));
   if (raw === null) return null;
-  const value: unknown = JSON.parse(raw);
+  const value: unknown = JSON.parse(raw.replace(/^\ufeff/u,''));
   if (!object(value) || value.version !== 1 || typeof value.setupComplete !== 'boolean' || !Array.isArray(value.targets) || !Array.isArray(value.resources)
     || value.dataRoot !== undefined && (typeof value.dataRoot !== 'string' || !isAbsolute(value.dataRoot))) throw new Error('安装记录损坏，未修改任何客户端。');
   for (const target of value.targets) if (!object(target) || !integrationIds.includes(String(target.id)) || typeof target.name !== 'string' || typeof target.root !== 'string' || !isAbsolute(target.root) || !['posix', 'windows-wsl'].includes(String(target.mode)) || typeof target.hooks !== 'boolean') throw new Error('客户端安装记录损坏。');
@@ -47,7 +51,7 @@ export function readInstallationState(home = configDirectory()): InstallationSta
 }
 
 function parseJson(raw: string | null): Record<string, unknown> {
-  const value: unknown = raw === null ? {} : JSON.parse(raw);
+  const value: unknown = raw === null ? {} : JSON.parse(raw.replace(/^\ufeff/u,''));
   if (!object(value)) throw new Error('客户端配置不是 JSON 对象，未覆盖。');
   return value;
 }
@@ -80,7 +84,6 @@ export function integrationHealth(state: InstallationState, id: IntegrationId): 
 
 function desiredResources(target: IntegrationTarget, home: string, env: NodeJS.ProcessEnv): Resource[] {
   const owner = [target.id], cli = join(applicationRoot, 'dist/cli/main.js');
-  if (!existsSync(cli)) throw new Error('缺少构建产物，请安装完整的 Common Memory 包。');
   if (target.id === 'pi') {
     const wrapper = join(home, 'integrations/pi/common-memory.js');
     const extension = pathToFileURL(join(applicationRoot, 'dist/pi-extension/index.js')).href;
@@ -104,15 +107,31 @@ function desiredResources(target: IntegrationTarget, home: string, env: NodeJS.P
   const config = stringifyToml({ mcp_servers: { common_memory: { command, args, ...(environment ? { env: environment } : {}), enabled_tools: ['memory_read', 'memory_status'] } } });
   const resources: Resource[] = [{ kind: 'toml', path: join(target.root, 'config.toml'), content: `\n# common-memory:${tag}:begin\n${config}# common-memory:${tag}:end\n`, owners: owner }];
   if (target.hooks) {
-    const hook = [process.execPath, cli, 'codex-hook', '--home', home].map(shellQuote).join(' ');
+    const launch:LaunchOptions={wsl:target.mode==='windows-wsl',cli};
+    const launchEnv={...env,COMMON_MEMORY_HOME:home};
+    const bridge=join(target.root,'common-memory-bridge.ps1');
+    const nativeBridge=launch.wsl?execFileSync('/usr/bin/wslpath',['-w',bridge],{encoding:'utf8',timeout:3000}).trim():undefined;
+    // Native scripts must live on a Windows drive, not an arbitrary WSL UNC path.
+    if(launch.wsl&&(!nativeBridge||!win32.isAbsolute(nativeBridge)||! /^[A-Za-z]:\\/u.test(nativeBridge)))throw new Error('Windows bridge requires a native Windows config directory');
+    if(launch.wsl)resources.push({kind:'file',path:bridge,content:'\ufeff'+renderWindowsBridge(launch,launchEnv),owners:owner});
+    const hook = renderHostCommand('codex','codex-hook',launch,launchEnv,nativeBridge);
     for (const event of ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop', 'Interrupt', 'SessionEnd']) {
       resources.push({ kind: 'array', path: join(target.root, 'hooks.json'), keys: ['hooks', event], value: { hooks: [{ type: 'command', command: hook, async: false, timeout: 3, additionalContextLimit: 0 }] }, owners: owner });
     }
-    const refresh = [process.execPath, cli, 'session-refresh', '--home', home, '--client', 'codex'].map(shellQuote).join(' ');
+    const refresh = renderHostCommand('codex','session-refresh',launch,launchEnv,nativeBridge);
     resources.push({ kind: 'file', path: join(target.root, 'skills/memory-refresh/SKILL.md'), content: `---\nname: memory-refresh\ndescription: Explicitly refresh the current Common Memory snapshot.\n---\n\nWhen the user invokes this skill, run:\n\n\`\`\`sh\n${refresh}\n\`\`\`\n\nReport failures. Do not reset memory or session state.\n`, owners: owner },
       { kind: 'file', path: join(target.root, 'skills/memory-refresh/agents/openai.yaml'), content: 'policy:\n  allow_implicit_invocation: false\n', owners: owner });
   }
   return resources;
+}
+
+function hasCaptureCommand(value:unknown):boolean {
+  if(typeof value==='string') {
+    if(/(?:codex-hook|work-hook|common-memory)/u.test(value))return true;
+    const encoded=/-EncodedCommand ([A-Za-z0-9+/=]+)/iu.exec(value)?.[1];
+    return encoded!==undefined && /(?:codex-hook|work-hook|common-memory)/u.test(Buffer.from(encoded,'base64').toString('utf16le'));
+  }
+  return Array.isArray(value)?value.some(hasCaptureCommand):object(value)&&Object.values(value).some(hasCaptureCommand);
 }
 
 interface IntegrationPlan {
@@ -141,6 +160,20 @@ function stageInstall(state: InstallationState, targets: IntegrationTarget[], ho
   const { get, put } = plan;
   for (const target of targets) {
     const desired = desiredResources(target, home, env);
+    if (!existsSync(join(applicationRoot,'dist/cli/main.js')) && desired.some(r=>!state.resources.some(owned=>sameResource(owned,r)))) throw new Error('缺少构建产物，请安装完整的 Common Memory 包。');
+    if(target.hooks && target.id!=='pi') {
+      const config=parseToml(get(join(target.root,'config.toml'))??'',{integersAsBigInt:true});
+      const hooks=parseJson(get(join(target.root,'hooks.json')));
+      const check=(value:unknown,path:string,keys:string[])=>{
+        if (!Array.isArray(value)) return;
+        for(const entry of value) {
+          if(state.resources.some(r=>r.path===path&&r.kind==='array'&&isDeepStrictEqual(r.keys,keys)&&isDeepStrictEqual(r.value,entry)))continue;
+          if(hasCaptureCommand(entry))throw new Error('已有未归属的 Common Memory Hook，未重复安装。');
+        }
+      };
+      for(const [document,path] of [[config,join(target.root,'config.toml')],[hooks,join(target.root,'hooks.json')]] as const)
+        if(object(document.hooks))for(const [event,entries] of Object.entries(document.hooks))check(entries,path,['hooks',event]);
+    }
     // Different runtimes cannot share a client config: do not break a native/WSL installation.
     if (state.targets.some(t => t.root === target.root && t.mode !== target.mode) || targets.some(t => t.root === target.root && t.mode !== target.mode)) throw new Error('Windows 与 WSL 客户端正在共用配置目录，无法安全自动合并。');
     for (const resource of desired) {
@@ -160,7 +193,7 @@ function stageInstall(state: InstallationState, targets: IntegrationTarget[], ho
         put(resource.path, resource.content!);
       } else if (resource.kind === 'toml') {
         const parsed = parseToml(raw ?? '', { integersAsBigInt: true });
-        if (object(parsed.mcp_servers) && Object.hasOwn(parsed.mcp_servers, 'common_memory')) throw new Error('已有未归属的 common_memory MCP 配置，未覆盖。');
+        if (object(parsed.mcp_servers) && Object.keys(parseToml(resource.content!).mcp_servers as object).some(name=>Object.hasOwn(parsed.mcp_servers as object,name))) throw new Error('已有未归属的 common_memory MCP 配置，未覆盖。');
         const next = (raw ?? '') + resource.content!;
         parseToml(next, { integersAsBigInt: true }); put(resource.path, next);
       } else {
@@ -260,8 +293,17 @@ export function reconcileIntegrations(targets: IntegrationTarget[], dataRoot: st
       if (!integrationHealth(state, id)) throw new Error(`${id} 的接入文件缺失或已变更，未修改任何接入。请先恢复被修改的文件；仅缺失文件的接入可取消选择移除。`);
     }
     // Transfer shared ownership before removing old owners so a Codex → ChatGPT switch keeps its MCP block.
-    stageInstall(state, added, home, env, plan);
+    const desired=targets.flatMap(target=>desiredResources(target,home,env));
+    for(const resource of [...state.resources]) {
+      if(desired.some(wanted=>sameResource(resource,wanted)))continue;
+      // Final-owner removal uses the same exact-content safeguards as uninstall.
+      stageRemove({...state,resources:[{...resource,owners:[...resource.owners]}]},resource.owners,home,plan);
+      state.resources=state.resources.filter(r=>r!==resource);
+    }
+    // Reconcile retained metadata and missing resources, not just newly selected products.
+    stageInstall(state, targets, home, env, plan);
     stageRemove(state, removed, home, plan);
+    for(const resource of state.resources)resource.owners=resource.owners.filter(id=>desired.some(r=>r.owners.includes(id)&&sameResource(r,resource)));
     state.setupComplete = true; state.dataRoot = dataRoot;
     plan.put(statePath(home), JSON.stringify(state, null, 2) + '\n');
     commit([...plan.changes.values()]);

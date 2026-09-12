@@ -7,7 +7,7 @@ import {PiCaptureRuntime} from '../../src/pi-extension/extraction-runtime.js';
 import {branchUsers} from '../../src/pi-extension/index.js';
 const cleanup:(()=>void | Promise<void>)[]=[];
 afterEach(async()=>{for(const fn of cleanup.splice(0))await fn();vi.useRealTimers();});
-function fixture(){const root=mkdtempSync(join(tmpdir(),'pi-v2-'));const store=new RuntimeStore(root);const run=vi.fn(async()=>({outcome:'idle'}));const close=vi.fn(()=>store.close());const runtime=new PiCaptureRuntime({store,run,close});cleanup.push(async()=>{await runtime.shutdown();rmSync(root,{recursive:true,force:true});});return {store,runtime,run,close};}
+function fixture(){const root=mkdtempSync(join(tmpdir(),'pi-v2-'));const store=new RuntimeStore(root);const run=vi.fn(async()=>({outcome:'idle'}));const close=vi.fn(()=>store.close());const runtime=new PiCaptureRuntime({store,run,close});cleanup.push(async()=>{await runtime.shutdown();rmSync(root,{recursive:true,force:true});});return {root,store,runtime,run,close};}
 it('binds delivered corrections after assistant interruption, not pending inputs',()=>{
   const {store,runtime}=fixture();runtime.input({sessionId:'s',text:'Actually use B',source:'interactive',scope:'global'});
   expect(store.pending()).toHaveLength(0);runtime.delivered('s','Actually use B',1);
@@ -124,4 +124,56 @@ it('Pi explicit refresh replaces the frozen block and subsequent canonical edits
  writeFileSync(path,'# Profile\n\n## Synthetic\nSNAPSHOT_A');const h=host(root,['global']);expect(h.before(root)?.systemPrompt).toContain('SNAPSHOT_A');
  writeFileSync(path,'# Profile\n\n## Synthetic\nSNAPSHOT_B');await h.refresh(root);writeFileSync(path,'# Profile\n\n## Synthetic\nSNAPSHOT_C');expect(h.before(root)?.systemPrompt).toContain('SNAPSHOT_B');expect(h.before(root)?.systemPrompt).not.toContain('SNAPSHOT_C');
  rmSync(path);mkdirSync(path);await expect(h.refresh(root)).rejects.toThrow();expect(h.before(root)?.systemPrompt).toContain('SNAPSHOT_B');
+});
+
+// Pi 0.84.4 emits message_end before persisting the stable branch entry.
+function captureHost(config:ReturnType<typeof defaultConfig>,runtimeFactory?:()=>PiCaptureRuntime){
+ const handlers=new Map<string,(event:unknown,ctx:unknown)=>unknown>();const branch:unknown[]=[];
+ const pi={on:(name:string,fn:(event:unknown,ctx:unknown)=>unknown)=>handlers.set(name,fn),registerCommand:()=>{},registerTool:()=>{}} as unknown as ExtensionAPI;
+ createCommonMemoryPiExtension({configFactory:()=>config,...(runtimeFactory?{runtimeFactory}:{})})(pi);
+ const ctx={cwd:config.dataRoot,sessionManager:{getSessionId:()=>'synthetic-event-session',getBranch:()=>branch,getLeafId:()=>null},hasPendingMessages:()=>false};
+ const emit=async(name:string,event:unknown={})=>{await handlers.get(name)!(event,ctx);};
+ const turn=async(n:number,source='interactive',text=`Synthetic preference ${n}`,delivered=text)=>{
+  await emit('input',{source,text});await emit('agent_start');
+  const message={role:'user',content:[{type:'text',text:delivered}],timestamp:n*1000};
+  await emit('message_end',{message});branch.push({type:'message',id:`u${n}`,message});
+  await new Promise<void>(resolve=>setImmediate(resolve));await emit('agent_settled');
+ };
+ return {emit,turn,branch};
+}
+it('actual Pi adapter order confirms ten turns and seals a quit tail without branch-only trust',async()=>{
+ const {root,store,runtime}=fixture();const config={...defaultConfig(),dataRoot:root};
+ const h=captureHost(config,()=>runtime);await h.emit('session_start',{reason:'startup'});
+ for(let n=1;n<=10;n++)await h.turn(n);
+ expect(store.db.prepare('SELECT count(*) AS n FROM observations').get()!.n).toBe(10);
+ expect(store.db.prepare('SELECT count(*) AS n FROM session_batches').get()!.n).toBe(1);
+ await h.turn(11);runtime.end('synthetic-event-session');
+ expect(store.db.prepare('SELECT count(*) AS n FROM session_batches').get()!.n).toBe(2);
+ await h.emit('session_shutdown',{reason:'reload'});
+});
+it('actual Pi adapter durably captures under malformed network configuration',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'pi-network-'));const config=defaultConfig({COMMON_MEMORY_HOME:root});config.remote.model='fake';config.remote.proxy={mode:'env'};
+ vi.stubEnv('COMMON_MEMORY_HOME',root);vi.stubEnv('OPENAI_API_KEY','synthetic');vi.stubEnv('HTTPS_PROXY','http://proxy.invalid');vi.stubEnv('https_proxy',undefined);vi.stubEnv('NO_PROXY','secret.invalid/8');vi.stubEnv('no_proxy',undefined);
+ const diagnostic=vi.spyOn(process.stderr,'write').mockImplementation(()=>true);
+ const h=captureHost(config);
+ try {
+  await h.emit('session_start',{reason:'startup'});await h.turn(1);
+  const store=new RuntimeStore(config.dataRoot);
+  try {expect(store.db.prepare('SELECT text,state FROM observations').all()).toEqual([{text:'Synthetic preference 1',state:'buffered'}]);}
+  finally {store.close();}
+  expect(diagnostic.mock.calls.flat().join('')).not.toContain('capture unavailable');
+ } finally {await h.emit('session_shutdown',{reason:'reload'});diagnostic.mockRestore();vi.unstubAllEnvs();rmSync(root,{recursive:true,force:true});}
+});
+it.each([['extension','Synthetic injection','Synthetic injection'],['interactive','/skill:synthetic','Expanded skill instructions']])('Pi adapter never promotes %s transformed or injected input',async(source,text,delivered)=>{
+ const {root,store,runtime}=fixture();const h=captureHost({...defaultConfig(),dataRoot:root},()=>runtime);await h.emit('session_start',{reason:'startup'});await h.turn(1,source,text,delivered);
+ expect(store.db.prepare("SELECT count(*) AS n FROM observations WHERE state='buffered'").get()!.n).toBe(0);
+});
+it('capture errors report bounded actionable diagnostics, never arbitrary exception text',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'pi-diagnostic-'));cleanup.push(()=>rmSync(root,{recursive:true,force:true}));
+ const {networkConfigError}=await import('../../src/memory-manager/network/route.js');const spy=vi.spyOn(process.stderr,'write').mockImplementation(()=>true);
+ try {
+  const h=captureHost({...defaultConfig(),dataRoot:root},()=>{const error=networkConfigError('no_proxy_invalid');error.message='secret:do-not-print';throw error;});
+  await h.emit('session_start',{reason:'startup'});for(let n=1;n<=10;n++)await h.turn(n);
+  const output=spy.mock.calls.map(c=>String(c[0])).join('');expect(output).toContain('network_config/no_proxy_invalid');expect(output).toContain('config --network');expect(output).not.toContain('do-not-print');expect(spy).toHaveBeenCalledTimes(1);
+ } finally {spy.mockRestore();}
 });

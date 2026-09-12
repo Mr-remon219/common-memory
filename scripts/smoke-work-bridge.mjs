@@ -15,6 +15,7 @@ if(args.length && !(args.length===2 && args[0]==='--package-root'))throw new Err
 const packageRoot=resolve(args[1]??'.');
 const {defaultConfig}=await import(pathToFileURL(join(packageRoot,'dist/config/config.js')));
 const {RuntimeStore}=await import(pathToFileURL(join(packageRoot,'dist/v2/runtime.js')));
+const {installIntegrations,removeIntegrations}=await import(pathToFileURL(join(packageRoot,'dist/cli/integrations.js')));
 const {SessionIngress}=await import(pathToFileURL(join(packageRoot,'dist/v2/session.js')));
 const powershell='/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe';
 if(!process.env.WSL_DISTRO_NAME||!existsSync(powershell))throw new Error('Requires WSL and Windows PowerShell interop');
@@ -36,11 +37,15 @@ server.listen(0,'127.0.0.1');await once(server,'listening');
 try {
  const config=defaultConfig({COMMON_MEMORY_HOME:home});config.remote={provider:'openai-compatible',model:'synthetic',baseUrl:`http://127.0.0.1:${server.address().port}/v1`,apiKeyEnv:'CM_SYNTHETIC_KEY',proxy:{mode:'direct'}};
  writeFileSync(join(home,'config.json'),JSON.stringify(config));writeFileSync(join(home,'.env'),'CM_SYNTHETIC_KEY=synthetic\n',{mode:0o600});
- const transcript=join(home,'转录.jsonl');writeFileSync(transcript,JSON.stringify({type:'session_meta',payload:{cli_version:'0.153.4'}})+'\n');
+ const transcript=join(home,'转录.jsonl');writeFileSync(transcript,JSON.stringify({type:'session_meta',payload:{cli_version:'0.154.0'}})+'\n');
  mkdirSync(join(config.dataRoot,'memory'),{recursive:true});const profile=join(config.dataRoot,'memory/profile.md');writeFileSync(profile,'# Profile\n\n## Synthetic\nSNAPSHOT_A');
  const output=join(nativeRoot,'bundle'),bridge=join(output,'common-memory-bridge.ps1');
- execFileSync(process.execPath,[join(packageRoot,'dist/cli/main.js'),'work-config','--mode','windows-wsl','--distro',process.env.WSL_DISTRO_NAME,'--user',userInfo().username,'--output',output],{env:{...process.env,COMMON_MEMORY_HOME:home}});
- const hookCommand=JSON.parse(/^command = (.+)$/m.exec(readFileSync(join(output,'common-memory.config.toml'),'utf8'))[1]);
+ const targets=['codex','chatgpt'].map(id=>({id,name:id,root:output,mode:'windows-wsl',hooks:true}));
+ installIntegrations(targets,config.dataRoot,{home});
+ const hooksBefore=readFileSync(join(output,'hooks.json'),'utf8'),skillBefore=readFileSync(join(output,'skills/memory-refresh/SKILL.md'),'utf8'),bridgeBefore=readFileSync(bridge);
+ const hooks=JSON.parse(hooksBefore).hooks;
+ for(const entries of Object.values(hooks))assert.equal(entries.length,1,'Shared config must invoke one capture command');
+ const hookCommand=hooks.SessionStart[0].hooks[0].command;
  const encodedHook=hookCommand.split(' -EncodedCommand ')[1];assert.ok(encodedHook);
  const nativeExe=join(nativeRoot,'codex-synthetic.exe');
  const csharp=String.raw`using System; using System.Diagnostics; public class Host { public static int Main(string[] args) { var p = Process.Start(new ProcessStartInfo("powershell.exe", "-NoProfile -File \"" + args[0] + "\"") { UseShellExecute = false }); p.WaitForExit(); return p.ExitCode; } }`;
@@ -59,12 +64,12 @@ $event.hook_event_name='UserPromptSubmit'; $event | Add-Member prompt 'Please pr
 [IO.File]::AppendAllText(${quote(win(transcript))},${quote(records)},[Text.UTF8Encoding]::new($false))
 [IO.File]::WriteAllText(${quote(win(profile))},"# Profile\n\n## Synthetic\nSNAPSHOT_B",[Text.UTF8Encoding]::new($false))
 $env:CODEX_THREAD_ID='synthetic-thread'
-& powershell.exe -NoProfile -File $bridge -Action session-refresh
+& powershell.exe -NoProfile -File $bridge -Action session-refresh -Client codex
 if($LASTEXITCODE -ne 0){throw 'Refresh failed'}
 [IO.File]::WriteAllText(${quote(win(profile))},"# Profile\n\n## Synthetic\nSNAPSHOT_C",[Text.UTF8Encoding]::new($false))
 $event.hook_event_name='PostToolUse'; Hook
 $env:CODEX_THREAD_ID='missing-thread'
-& powershell.exe -NoProfile -File $bridge -Action session-refresh
+& powershell.exe -NoProfile -File $bridge -Action session-refresh -Client codex
 if($LASTEXITCODE -ne 1){throw 'Failure exit code was not preserved'}
 $event.hook_event_name='SessionEnd'; Hook
 exit 0
@@ -73,6 +78,9 @@ exit 0
  const deadlineTimer=setTimeout(()=>child.kill('SIGKILL'),45000);
  let code;try{[code]=await once(child,'close');}finally{clearTimeout(deadlineTimer);} assert.equal(code,0,stderr);assert.match(stdout,/SNAPSHOT_A/);assert.match(stdout,/SNAPSHOT_B/);assert.doesNotMatch(stdout,/SNAPSHOT_C/);assert.match(stderr,/SESSION_REFRESH_ACTIVATION_REQUIRED/);
  assert.equal(existsSync(join(config.dataRoot,'memory/preferences.md')),false);
+ removeIntegrations(['codex'],home);
+ assert.equal(readFileSync(join(output,'hooks.json'),'utf8'),hooksBefore);assert.equal(readFileSync(join(output,'skills/memory-refresh/SKILL.md'),'utf8'),skillBefore);assert.deepEqual(readFileSync(bridge),bridgeBefore);
+
  release=true;const deadline=Date.now()+25000;
  while(Date.now()<deadline){
   if(existsSync(join(config.dataRoot,'memory/preferences.md'))){const store=new RuntimeStore(config.dataRoot);try{const row=store.db.prepare('SELECT sessionId FROM host_activations').get();if(row&&new SessionIngress(store).status(row.sessionId).complete)break;}finally{store.close();}}
@@ -94,9 +102,12 @@ exit 0
  const directDeadline=Date.now()+10000;
  while(Date.now()<directDeadline){const state=new RuntimeStore(config.dataRoot);let done;try{const row=state.db.prepare("SELECT sessionId FROM host_activations WHERE thread='posix-thread'").get();done=row&&new SessionIngress(state).status(row.sessionId).complete;}finally{state.close();}if(done)break;await pause(50);}
  const identities=new RuntimeStore(config.dataRoot);try {
-   const rows=identities.db.prepare('SELECT instance,sessionId FROM host_activations').all();
+   const rows=identities.db.prepare('SELECT instance,sessionId,client FROM host_activations').all();
+   assert.equal(identities.db.prepare('SELECT count(*) AS n FROM observations').get().n,1,'One delivered native turn must produce one observation');
+   assert.equal(rows.find(r=>r.instance.startsWith('windows:')).client,'codex','Automatic capture records host protocol, not an inferred frontend');
    for(const row of rows)assert.equal(new SessionIngress(identities).status(row.sessionId).complete,true,'Host session drain must complete');
    assert.ok(rows.some(r=>r.instance.startsWith('windows:')));assert.ok(rows.some(r=>!r.instance.startsWith('windows:')));
  }finally{identities.close();}
- console.log('PASS: native host identity, Unicode STDIO, path conversion, explicit refresh, exit code, canonical Writer/Core drain after native host exit, and independent direct WSL host identity.');
+ removeIntegrations(['chatgpt'],home);assert.equal(existsSync(bridge),false);assert.equal(existsSync(join(output,'hooks.json')),false);
+ console.log('PASS: automatic shared Work/Codex installation and owner removal, native host identity, Unicode STDIO, path conversion, explicit refresh, exit code, canonical Writer/Core drain after native host exit, and independent direct WSL host identity.');
 } finally {release=true;server.closeAllConnections();await new Promise(r=>server.close(r));rmSync(home,{recursive:true,force:true});rmSync(nativeRoot,{recursive:true,force:true});}

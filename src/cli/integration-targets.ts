@@ -1,3 +1,4 @@
+import { supportsRolloutVersion } from './codex/rollout-contract.js';
 import { execFileSync } from 'node:child_process';
 import { constants, existsSync, accessSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -61,17 +62,17 @@ export function scanIntegrationTargets(options: DiscoveryEnvironment = {}): Inte
   const targets: IntegrationTarget[] = [];
   const codex = executable('codex');
   if (codex) {
-    const supported = /(?:^|\s)0\.153\.4(?:$|\s)/u.test(version(codex));
+    const supported = supportsRolloutVersion(/^codex-cli (\S+)$/u.exec(version(codex))?.[1]);
     targets.push({ id: 'codex', name: 'Codex CLI', root: resolve(env.CODEX_HOME || join(home, '.codex')), mode: 'posix', hooks: supported,
       hint: supported ? '读取 + 会话维护；Hooks 仍需宿主信任' : '读取接入；当前会话格式未验证' });
   }
   const desktop = platform === 'darwin' && (options.applications ?? ['/Applications', join(home, 'Applications')]).some(directory => {
     try { return statSync(join(directory, 'ChatGPT.app')).isDirectory(); } catch { return false; }
-  }) || Boolean(executable('chatgpt'));
-  if (desktop) targets.push({ id: 'chatgpt', name: 'ChatGPT Desktop', root: resolve(env.CODEX_HOME || join(home, '.codex')), mode: 'posix', hooks: false, hint: '本地 Work / Codex 读取接入' });
+  });
+  if (desktop) targets.push({ id: 'chatgpt', name: 'ChatGPT Desktop', root: resolve(env.CODEX_HOME || join(home, '.codex')), mode: 'posix', hooks: true, hint: '本地 Work 读取 + 会话维护；Hooks 仍需宿主信任' });
   else if (platform === 'linux' && env.WSL_DISTRO_NAME) {
     const windows = (options.windowsHome ?? nativeWindowsHome)();
-    if (windows) targets.push({ id: 'chatgpt', name: 'ChatGPT Desktop', root: join(windows, '.codex'), mode: 'windows-wsl', hooks: false, hint: 'Windows 本地 Work 读取接入' });
+    if (windows) targets.push({ id: 'chatgpt', name: 'ChatGPT Desktop', root: join(windows, '.codex'), mode: 'windows-wsl', hooks: true, hint: 'Windows Work 读取 + 会话维护；Hooks 仍需宿主信任' });
   }
   const pi = executable('pi');
   if (pi) targets.push({ id: 'pi', name: 'Pi', root: resolve(env.PI_CODING_AGENT_DIR || join(home, '.pi/agent')), mode: 'posix', hooks: true });

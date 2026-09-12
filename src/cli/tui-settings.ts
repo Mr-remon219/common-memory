@@ -127,9 +127,9 @@ export async function runPermissionsWizard(current: CommonMemoryConfig): Promise
 export async function runNetworkWizard(existing: CommonMemoryConfig | null = loadConfig()): Promise<CommonMemoryConfig> {
   requireInteractive();
   if (!existing) throw new Error('请先配置模型，再设置网络。');
-  const mode = unwrap(await clack.select({ message: '怎样连接模型？', initialValue: existing.remote.proxy?.mode ?? 'env', options: [
+  const mode = unwrap(await clack.select({ message: '怎样连接模型？', initialValue: existing.remote.proxy?.mode ?? 'direct', options: [
+    { value: 'direct' as const, label: '正常系统网络路由（推荐）', hint: '不使用应用代理变量；系统路由、VPN/TUN 仍生效' },
     { value: 'env' as const, label: '跟随环境代理', hint: '使用 HTTPS_PROXY 等变量和 NO_PROXY' },
-    { value: 'direct' as const, label: '直接连接', hint: '不使用应用代理；系统 VPN/TUN 仍可能生效' },
     { value: 'custom' as const, label: '指定代理地址', hint: 'HTTP / HTTPS，SOCKS5 为实验支持' },
   ] }));
   let proxy: ProxyConfig = { mode: mode === 'custom' ? 'env' : mode };
@@ -147,7 +147,7 @@ export async function runNetworkWizard(existing: CommonMemoryConfig | null = loa
   const ca = caAction === 'set' ? expandPath(await text('CA 证书文件路径（PEM）')) : undefined;
   const { caFileEnv, ...remote } = existing.remote;
   const next: CommonMemoryConfig = { ...existing, remote: { ...remote, proxy, ...(ca ? { caFileEnv: PRIVATE_CA_KEY } : caAction === 'keep' && caFileEnv ? { caFileEnv } : {}) } };
-  note(`连接方式：${{ env: '跟随环境代理', direct: '直接连接', custom: '指定代理' }[mode]}\n证书：${{ keep: '保持当前设置', set: '使用所选 PEM 文件', remove: '仅使用默认信任' }[caAction]}\n只影响 Common Memory 的模型请求；保存不会测试连接。`, '确认网络设置');
+  note(`连接方式：${{ env: '跟随环境代理', direct: '正常系统网络路由', custom: '指定代理' }[mode]}\n证书：${{ keep: '保持当前设置', set: '使用所选 PEM 文件', remove: '仅使用默认信任' }[caAction]}\n只影响 Common Memory 的模型请求；保存不会测试连接。`, '确认网络设置');
   if (!await confirm('保存网络设置？')) throw new UserCancelled();
   validateConfig(next);
   checkConfigUnchanged(existing);

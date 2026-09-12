@@ -53,7 +53,7 @@ it('reports private API credentials and custom network configuration without dis
 });
 
 it('describes invalid proxy state without exposing its value, and ignores unrelated environment credentials for a private key', () => {
-  const current = config(); current.remote.apiKeySource = 'private-env';
+  const current = config(); current.remote.apiKeySource = 'private-env'; current.remote.proxy = {mode:'env'};
   vi.stubEnv('CM_VIEW_TEST_KEY', 'host-only-key'); vi.stubEnv('https_proxy', 'invalid-secret-proxy-value');
   const output = currentConfiguration(current);
   expect(output).toContain('API Key: missing'); expect(output).toContain('Network: invalid local configuration; connection not tested');

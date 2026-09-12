@@ -8,7 +8,8 @@ import { decodeText } from '../v2/sqlite.js';
 import { RuntimeStore } from '../v2/runtime.js';
 import { SessionIngress, sessionKey, type SessionIdentity } from '../v2/session.js';
 import { ProjectRegistry } from '../v2/registry.js';
-import { parseTranscript } from './codex/transcript-0.153.4.js';
+import { admitSessionMeta } from './codex/rollout-contract.js';
+import { parseTranscript } from './codex/transcript-codex-host.js';
 export interface CodexEvent { hook_event_name:'SessionStart'|'UserPromptSubmit'|'Stop'|'SessionEnd'|'Interrupt'|'PostToolUse';cwd:string;session_id:string;transcript_path:string;source?:string;turn_id?:string;prompt?:string }
 export function setupHostAdapter(store:RuntimeStore):void {
   store.db.exec(`CREATE TABLE IF NOT EXISTS host_activations(base TEXT PRIMARY KEY,sessionId TEXT NOT NULL,client TEXT NOT NULL,instance TEXT NOT NULL,thread TEXT NOT NULL,cwd TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1);
@@ -27,7 +28,7 @@ function transcript(path:string,offset:number|null,cap:number):{text:string;end:
     const header=Buffer.alloc(Math.min(stat.size,65536));readSync(fd,header,0,header.length,0);
     let meta: {type?:string;payload?:{cli_version?:string}};
     try {meta=JSON.parse(header.subarray(0,header.indexOf(10)).toString('utf8'));}catch{throw new Error('CODEX_UNKNOWN_TRANSCRIPT');}
-    if(meta.type!=='session_meta'||meta.payload?.cli_version!=='0.153.4')throw new Error('CODEX_UNSUPPORTED_VERSION');
+    admitSessionMeta(meta);
     if(offset===null)return {text:'',end:stat.size};
     if(stat.size<offset)throw new Error('CODEX_TRANSCRIPT_REPLACED');
     if(stat.size-offset>cap)throw new Error('SESSION_CAPACITY_EXCEEDED');

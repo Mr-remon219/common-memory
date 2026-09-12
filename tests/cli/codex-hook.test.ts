@@ -67,3 +67,52 @@ it('freezes source scope at input, not the cwd of a later Stop or SessionEnd',as
  f.append({type:'task_started',turn_id:'t'});f.append({type:'user_message',message:'Project expression'});f.append({type:'task_complete',turn_id:'t'});f.read('SessionEnd');await consumeCodexInbox(f.config);
  const store=new RuntimeStore(f.config.dataRoot);try{expect(store.pending()[0]!.scope).toBe(`project:${project.id}`);}finally{store.close();}
 });
+
+// Tagged protocol.rs declares turn_started/turn_complete as serde aliases of task_*.
+it.each([
+ ['0.153.4','task_started','task_complete'], ['0.154.0','task_started','task_complete'],
+ ['99.999.999','task_started','task_complete'], ['0.154.0','turn_started','turn_complete'],
+])('admits host %s with official %s/%s boundaries and ignores retained context',async(version,start,end)=>{
+ const f=fixture();writeFileSync(f.path,JSON.stringify({type:'session_meta',payload:{cli_version:version}})+'\n');f.read();f.read('UserPromptSubmit','startup','s','test-process','Synthetic delivery');
+ f.append({items:[{type:'message',role:'user',content:'not evidence'}]},'retained_context');
+ f.append({type:start,turn_id:'t'});f.append({type:'user_message',message:'Synthetic delivery'});f.append({type:end,turn_id:'t'});f.read('SessionEnd');await consumeCodexInbox(f.config);
+ const store=new RuntimeStore(f.config.dataRoot);try{expect(store.pending().map(r=>r.text)).toEqual(['Synthetic delivery']);}finally{store.close();}
+});
+it.each(['0.153.3','0.154.0-beta.1','01.154.0','0.154','garbage','0.154.0+unknown'])('rejects unvalidated version %s',version=>{
+ const f=fixture();writeFileSync(f.path,JSON.stringify({type:'session_meta',payload:{cli_version:version}})+'\n');expect(()=>f.read()).toThrow('CODEX_UNSUPPORTED_VERSION');
+});
+it.each([
+ ['event_msg',{type:'future_delivery'}],['event_msg',{type:'item_completed',turn_id:'t',item:{type:'FutureItem'}}],
+ ['event_msg',{type:'item_completed',turn_id:'t',item:{type:'UserMessage',id:'u',content:[{type:'future_input'}]}}],
+ ['response_item',{type:'future_response'}],['response_item',{type:'message',role:'future_role',content:[]}],
+ ['event_msg',{type:'user_message',turn_id:'other',message:'Synthetic delivery'}],
+ ['event_msg',{type:'task_complete'}],
+] as const)('fails closed at nested discriminants or identity: %s %j',async(type,payload)=>{
+ const f=fixture();f.read();await consumeCodexInbox(f.config);f.read('UserPromptSubmit','startup','s','test-process','Synthetic delivery');
+ f.append({type:'task_started',turn_id:'t'});f.append({type:'user_message',message:'Synthetic delivery'});f.append(payload,type);f.read('SessionEnd');
+ const store=new RuntimeStore(f.config.dataRoot);try{
+  const before=store.db.prepare('SELECT * FROM codex_cursors').all();await expect(consumeCodexInbox(f.config)).rejects.toThrow();
+  expect(store.db.prepare('SELECT * FROM codex_cursors').all()).toEqual(before);expect(store.db.prepare('SELECT * FROM observations').all()).toEqual([]);
+  expect(store.db.prepare('SELECT text FROM codex_candidates').get()!.text).toBe('Synthetic delivery');expect(store.db.prepare('SELECT body FROM codex_inbox ORDER BY id DESC LIMIT 1').get()!.body).toContain('Synthetic delivery');
+ }finally{store.close();}
+});
+it.each(['no-active-turn','missing-item-turn','bad-time'] as const)('source-defined evidence still requires active identity and timestamp: %s',async kind=>{
+ const f=fixture();f.read();f.read('UserPromptSubmit','startup','s','test-process','Synthetic delivery');
+ if(kind!=='no-active-turn')f.append({type:'task_started',turn_id:'t'});
+ if(kind==='missing-item-turn')f.append({type:'item_completed',item:{type:'UserMessage',id:'u',content:[{type:'text',text:'Synthetic delivery'}]}});
+ else if(kind==='bad-time')appendFileSync(f.path,JSON.stringify({type:'event_msg',timestamp:'not-a-time',payload:{type:'user_message',message:'Synthetic delivery'}})+'\n');
+ else f.append({type:'user_message',message:'Synthetic delivery'});
+ f.read('SessionEnd');await expect(consumeCodexInbox(f.config)).rejects.toThrow('CODEX_UNCONFIRMED_DELIVERY');
+ const store=new RuntimeStore(f.config.dataRoot);try{expect(store.db.prepare('SELECT * FROM observations').all()).toEqual([]);expect(store.db.prepare('SELECT text FROM codex_candidates').get()!.text).toBe('Synthetic delivery');}finally{store.close();}
+});
+it('0.154.0 ten-turn item/legacy duplicate fixture has exactly ten observations, never retained context evidence',async()=>{
+ const f=fixture();writeFileSync(f.path,JSON.stringify({type:'session_meta',payload:{cli_version:'0.154.0'}})+'\n');f.read();
+ f.append({items:[{role:'user',content:'not evidence'}]},'retained_context');
+ for(let n=1;n<=10;n++){
+  const turn=`t${n}`,text=`Synthetic preference ${n}`;
+  codexHook(JSON.stringify({...JSON.parse(f.input('UserPromptSubmit')),turn_id:turn,prompt:text}),f.home,'test-process');
+  f.append({type:'task_started',turn_id:turn});f.append({type:'item_completed',turn_id:turn,item:{type:'UserMessage',id:`u${n}`,content:[{type:'text',text}]}});f.append({type:'user_message',message:text});f.append({type:'task_complete',turn_id:turn});
+ }
+ f.read('SessionEnd');await consumeCodexInbox(f.config);const store=new RuntimeStore(f.config.dataRoot);
+ try{expect(store.pending()).toHaveLength(10);expect(store.db.prepare('SELECT count(*) AS n FROM session_batches').get()!.n).toBe(1);}finally{store.close();}
+});

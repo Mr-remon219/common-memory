@@ -1,3 +1,4 @@
+import { piDiagnosticReporter } from './diagnostics.js';
 import { Type } from 'typebox';
 import { MEMORY_READ_GUIDANCE, MEMORY_READ_DESCRIPTION } from '../v2/read-guidance.js';
 import { launchSessionDrain } from '../cli/session-drain.js';
@@ -11,13 +12,14 @@ import { PiCaptureRuntime, type SessionUserEntry } from "./extraction-runtime.js
 
 export function createCommonMemoryPiExtension(options: {runtimeFactory?: () => PiCaptureRuntime; resolveScope?: (cwd:string) => string; configFactory?: () => CommonMemoryConfig | null} = {}) {
   return (pi: ExtensionAPI): void => {
+    const report=piDiagnosticReporter();
     let runtime: PiCaptureRuntime | undefined;
     let registry: ProjectRegistry | undefined;
     let config: CommonMemoryConfig | undefined;
     // Only a valid configuration is cached; an unconfigured host is re-checked on the next event.
     const cfg = (): CommonMemoryConfig => {
       config ??= (options.configFactory ? options.configFactory() : loadConfig()) ?? undefined;
-      if (!config) throw new Error("Common Memory is not configured");
+      if (!config) throw new Error("NOT_CONFIGURED");
       registry ??= new ProjectRegistry(config.dataRoot);
       return config;
     };
@@ -26,7 +28,7 @@ export function createCommonMemoryPiExtension(options: {runtimeFactory?: () => P
       if (options.runtimeFactory) return runtime = options.runtimeFactory();
       // Pi only captures delivered user turns; without permission to disclose them there is nothing to capture.
       const current = cfg();
-      if (!current.disclosure.allowedProvenance.includes("user_explicit")) throw new Error("Delivered user evidence is not authorized for disclosure");
+      if (!current.disclosure.allowedProvenance.includes("user_explicit")) throw new Error("CAPTURE_NOT_AUTHORIZED");
       const writer = createConfiguredWriter(current);
       try { runtime = new PiCaptureRuntime(writer,current.sessionCache); }
       catch (error) {
@@ -36,7 +38,7 @@ export function createCommonMemoryPiExtension(options: {runtimeFactory?: () => P
       if(!options.configFactory)launchSessionDrain();
       return runtime;
     };
-    const safe = (fn:(r:PiCaptureRuntime)=>void): void => { try { fn(get()); } catch { process.stderr.write("[common-memory] capture unavailable; inspect common-memory status.\n"); } };
+    const safe = (fn:(r:PiCaptureRuntime)=>void): void => { try { fn(get()); } catch (error) { report("capture",error); } };
     const bind = (ctx:ExtensionContext): void => safe(r=>r.bind(ctx.sessionManager.getSessionId(),branchUsers(ctx.sessionManager.getBranch())));
     const snapshotKey=(ctx:ExtensionContext)=>`${cfg().dataRoot}:${ctx.sessionManager.getSessionId()}`;
     const read=(ctx:ExtensionContext,contextId?:string)=>{

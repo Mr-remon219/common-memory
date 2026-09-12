@@ -114,3 +114,9 @@ it('setup retries a rejected apply using the refreshed config, but propagates pr
   await expect(chooseIntegrations(loadConfig()!, { retry: true })).rejects.toThrow('Terminal disconnected');
   expect(clack.multiselect).toHaveBeenCalledTimes(3);
 });
+it('unchanged selection uses newly discovered capture capability to upgrade managed read-only Desktop',async()=>{
+ const desktop=target('chatgpt');installIntegrations([desktop],loadConfig()!.dataRoot);
+ vi.mocked(scanIntegrationTargets).mockReturnValue([{...desktop,hooks:true,hint:'Work capture'}]);vi.mocked(clack.multiselect).mockResolvedValue(['chatgpt']);
+ await integrationsScreen();expect(readInstallationState()!.targets[0]!.hooks).toBe(true);expect(existsSync(join(desktop.root,'hooks.json'))).toBe(true);
+ expect(clack.log.info).toHaveBeenCalledWith(expect.stringContaining('/hooks'));
+});

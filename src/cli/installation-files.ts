@@ -21,7 +21,7 @@ export function readInstallationFile(path: string): string | null {
   try {
     const info = lstatSync(path);
     if (!info.isFile() || info.size > 16_777_216) throw new Error(`安装文件类型或大小不受支持：${path}`);
-    return new TextDecoder('utf-8', { fatal: true }).decode(readFileSync(path));
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(readFileSync(path));
   } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; }
 }
 export function writeInstallationFile(path: string, content: string | null): void {
@@ -40,7 +40,7 @@ const journalPath = (home: string) => join(home, '.installation', 'transaction.j
 export function recoverInstallation(home: string): void {
   const body = readInstallationFile(journalPath(home));
   if (body === null) return;
-  const changes: unknown = JSON.parse(body);
+  const changes: unknown = JSON.parse(body.replace(/^\ufeff/u,''));
   if (!Array.isArray(changes) || changes.length > 100 || !changes.every(c => c && typeof c.path === 'string' && (c.before === null || typeof c.before === 'string') && (c.after === null || typeof c.after === 'string'))) throw new Error('安装恢复记录损坏，未修改文件。');
   for (const change of changes as FileChange[]) {
     const current = readInstallationFile(change.path);

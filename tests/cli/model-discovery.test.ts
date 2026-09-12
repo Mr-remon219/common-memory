@@ -65,3 +65,9 @@ it('uses an isolated real network client and rejects credential-forwarding redir
   try { await expect(discoverModels(provider, key, config)).rejects.toThrow('模型发现失败'); expect(hits).toBe(1); }
   finally { server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())); }
 });
+it('legacy absent proxy remains absent during discovery and never becomes explicit env mode',async()=>{
+ const config=defaultConfig();delete config.remote.proxy;
+ vi.stubEnv('HTTPS_PROXY','bad-secret');vi.stubEnv('https_proxy',undefined);vi.stubEnv('NO_PROXY','malformed/private');vi.stubEnv('no_proxy',undefined);
+ const fetch=vi.fn<typeof globalThis.fetch>().mockResolvedValue(response(['gpt-synthetic']));
+ expect(await discoverModels(PROVIDERS[0],key,config,{fetch})).toHaveLength(1);expect(config.remote).not.toHaveProperty('proxy');
+});

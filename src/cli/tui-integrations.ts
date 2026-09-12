@@ -32,7 +32,7 @@ export async function chooseIntegrations(config: CommonMemoryConfig, options: { 
     log('Scanning integrations…');
     const targets = scanIntegrationTargets(), prior = readInstallationState();
     // Existing ownership remains removable even if its client has disappeared or its version changed.
-    const available = clients.map(client => prior?.targets.find(t => t.id === client.id) ?? targets.find(t => t.id === client.id)).filter(t => t !== undefined);
+    const available = clients.map(client => targets.find(t => t.id === client.id) ?? prior?.targets.find(t => t.id === client.id)).filter(t => t !== undefined);
     note('↑↓ Navigate · Space Toggle · Enter Apply · Esc Back\n勾选代表应用后的接入状态；取消已勾选的 Agent 会移除接入，记忆保留。', 'Agent Integration');
     const selected = unwrap(await clack.multiselect<IntegrationId>({
       message: 'Agent Integration', required: false,
@@ -54,12 +54,12 @@ export async function chooseIntegrations(config: CommonMemoryConfig, options: { 
       for (const id of changes.installed) {
         const target = available.find(t => t.id === id)!;
         clack.log.success(`${name(id)} installed`);
-        if (id === 'codex' && target.hooks) log('Codex /hooks 仍需确认宿主信任；安装不会代替该确认。');
-        else if (id !== 'pi') log(`${name(id)} 已安装读取接入；当前未启用自动会话捕获。`);
+        if (id !== 'pi' && !target.hooks) log(`${name(id)} 已安装读取接入；当前未启用自动会话捕获。`);
       }
+      if(available.some(t=>selected.includes(t.id)&&t.id!=='pi'&&t.hooks))log('Codex / Work /hooks 仍需确认宿主信任；安装或升级不会代替该确认。');
       for (const id of changes.removed) clack.log.success(`${name(id)} 接入已移除`);
       if (changes.retained.length) log(`保留接入：${changes.retained.map(name).join('、')}`);
-      if (!changes.installed.length && !changes.removed.length) log('Agent 接入选择未变化。');
+      if (!changes.installed.length && !changes.removed.length) log('Agent 接入已核对；所选客户端的受管理资源已更新。');
       return selected.length;
     } catch (error) {
       if (!options.retry) throw error;

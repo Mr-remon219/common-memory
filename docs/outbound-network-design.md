@@ -4,6 +4,9 @@
 
 ## Evidence and decisions
 
+The original experiments below are historical. Current defaults, CIDR semantics and
+deferred Writer ownership are updated here; prior live runs did not test these changes.
+
 Primary sources: [Node 24 util.parseEnv](https://github.com/nodejs/node/blob/v24.20.0/doc/api/util.md#utilparseenvcontent), [Node TLS CA APIs](https://github.com/nodejs/node/blob/v24.20.0/doc/api/tls.md#tlsgetcacertificatestype), [Undici env agent](https://github.com/nodejs/undici/blob/main/docs/docs/api/EnvHttpProxyAgent.md), [ProxyAgent](https://github.com/nodejs/undici/blob/main/docs/docs/api/ProxyAgent.md), [SOCKS5](https://github.com/nodejs/undici/blob/main/docs/docs/api/Socks5ProxyAgent.md). The npm 8.10.2 package source was inspected directly; fetching its GitHub tag through the browser returned a cache miss. Do not substitute main-branch claims for the installed-version tests.
 
 Local research scripts are in `/tmp/cm-network-research-58C9ty/`: `behavior.cjs`, `transport.cjs`, `connect-status.cjs`, `socks.cjs`. They use synthetic data/local servers, not personal Memory or real API keys.
@@ -17,7 +20,7 @@ Local research scripts are in `/tmp/cm-network-research-58C9ty/`: `behavior.cjs`
 | Native `localhost,*` and ` * ` do not act like a standalone `*` | Product treats any trimmed standalone `*` token as bypass-all |
 | Expanded IPv6 does not match compressed IPv6 in the native agent | Normalize IP literals with WHATWG URL before comparing |
 | Default and explicit :443 match HTTPS; other ports do not | Compare effective ports (HTTP 80 / HTTPS 443) |
-| localhost does not match 127.0.0.1; CIDR is not implemented | No DNS lookup/loopback aliases; reject unsupported CIDR/glob syntax in an applicable bypass list |
+| Original native probe: localhost does not match 127.0.0.1; CIDR was not implemented | No DNS lookup/loopback aliases; current own resolver supports same-family IP-literal CIDRs via Node BlockList |
 | util.parseEnv preserves Windows backslashes without changing process.env | Local parsing for all new network modes; no process.loadEnvFile for new clients |
 | Own Agent bypasses hostile global dispatcher; closing it leaves host dispatcher alive | Per-client owned Agent/ProxyAgent, never setGlobalDispatcher |
 | Provider HTTP 401 is a response; HTTP proxy 407 is UND_ERR_INVALID_ARG; CONNECT 407 is deeper UND_ERR_ABORTED in fetch.cause | Bounded cause traversal, known code plus complete library-generated message format; persist only local enum/status |
@@ -27,13 +30,13 @@ Earlier real DeepSeek probes showed default Node connecting then resetting while
 
 ## Configuration and compatibility
 
-Keep schemaVersion 2. Add exact-validated optional `remote.proxy`: `{mode:'direct'}`, `{mode:'env'}`, or `{mode:'custom',urlEnv:string,noProxy?:string}`. Add optional `remote.caFileEnv` only with an explicit proxy mode. New `defaultConfig()` writes `{mode:'env'}`. Reading and saving an old config preserves field absence; it means internal **legacy / host-managed / unknown**, never direct. Non-network settings must not migrate it. `config --network` is the explicit migration boundary.
+Keep schemaVersion 2. Add exact-validated optional `remote.proxy`: `{mode:'direct'}`, `{mode:'env'}`, or `{mode:'custom',urlEnv:string,noProxy?:string}`. Add optional `remote.caFileEnv` only with an explicit proxy mode. New `defaultConfig()` writes `{mode:'direct'}`: normal system routing, ignoring application proxy variables while VPN/TUN still applies. Reading and saving an old config preserves field absence; it means internal **legacy / host-managed / unknown**, never direct. Non-network settings must not migrate it. `config --network` is the explicit migration boundary.
 
 Legacy borrows the old global fetch and preserves old private-env fill-if-undefined behavior, including existing HTTP_PROXY/NO_PROXY interactions with a host dispatcher. The legacy loader uses the same Node parser and excludes the newly reserved `COMMON_MEMORY_PROXY_URL` and `COMMON_MEMORY_CA_FILE`; these secrets must never be exported by a stale legacy instance. The network wizard persists only these reserved names. Other custom secret variable names are external-process-env-only. This is a deliberate legacy compatibility exception, not isolation for legacy hosts. Existing host implementations/Node flags remain authoritative; status cannot infer their actual route.
 
 New modes parse private env locally. For standard proxy variables, choose the process source first for each case-insensitive semantic group, then private source; within a source a present lowercase key wins even when empty. Empty means cleared, not permission to recover a private/uppercase value. Custom bypass rules never inherit NO_PROXY. Custom proxy URI must be valid even when its explicit bypass matches; env mode validates only the selected proxy URI when it will be used. No applicable proxy means direct. No failed proxy fallback.
 
-NO_PROXY accepts comma/whitespace-separated names, apex/domain suffixes, IPv4, IPv6 (brackets required for a port), optional ports, and standalone `*`. Normalize case, trailing dot, IDNA and IP spelling. Match suffixes only on domain-label boundaries; IPs exactly. Reject CIDR, URL/path syntax, malformed ports and other wildcard forms. Do not guess loopback aliases or WSL host addresses.
+NO_PROXY accepts comma/whitespace-separated names, apex/domain suffixes, IPv4, IPv6 (brackets required for a port), optional ports, and standalone `*`. Normalize case, trailing dot, IDNA and IP spelling. Match suffixes only on domain-label boundaries; IPs exactly. CIDRs use unbracketed IP literals and decimal prefixes (IPv4 0–32, IPv6 0–128), matched with Node `BlockList.addSubnet`/`check` only against same-family literal endpoints. Never resolve DNS to match a subnet. CIDR ports, brackets, zone IDs and malformed prefixes are rejected, as are URL/path syntax, malformed ports and other wildcard forms. Do not guess loopback aliases or WSL host addresses.
 
 HTTP/HTTPS proxies are formal targets. SOCKS5 (`socks5:` / `socks:`) is experimental and uses remote DNS. SOCKS4, PAC/WPAD and integrated enterprise authentication are unsupported. CA input is a bounded PEM file, merged into a snapshot of Node's default trust store and applied only to the owned client. Certificate/hostname checks stay enabled.
 
@@ -41,7 +44,7 @@ HTTP/HTTPS proxies are formal targets. SOCKS5 (`socks5:` / `socks:`) is experime
 
 One small resolver, one owned network client, and local secret parsing; no routing framework. Resolved routes contain a private URL and a separate safe description. New modes use installed Undici fetch with an explicit owned dispatcher, reject redirects, and cannot escape to another origin. Legacy/injected fetch is borrowed and never closed.
 
-MemoryModelPort stays analysis-only. Concrete remote models expose idempotent async close, abort their own requests and destroy only owned connections. The configured Writer owns its configured model; it blocks new work during close, aborts and awaits current work, closes SQLite after Writer cleanup, then closes its model. A plain Writer continues to borrow a model. CLI/MCP/Pi await cleanup, including construction failure and reload. No dispatcher switch within retries.
+MemoryModelPort stays analysis-only. Concrete remote models expose idempotent async close, abort their own requests and destroy only owned connections. Explicit model/probe factories remain eager. The configured Writer constructs the concrete model serializer immediately for exact request-byte accounting, but defers route/CA/dispatcher initialization until its first request. Environment/private inputs are snapshotted at construction; one transport or controlled admission failure is cached. SQLite capture does not depend on transport admission. The configured Writer owns its configured model and lazy transport; it blocks new work during close, aborts and awaits current work, closes SQLite after Writer cleanup, then closes its model. A plain Writer continues to borrow a model. CLI/MCP/Pi await cleanup, including construction failure and reload. No dispatcher switch within retries.
 
 Network configuration, proxy authentication/availability, TLS validation, DNS, endpoint connection errors, provider API authentication, HTTP status errors and model-output failures have distinct controlled diagnostics. HTTP status from CONNECT is `proxyStatus`, not a provider `httpStatus`. First cancellation/deadline reason remains authoritative. Unknown errors remain unknown; do not infer proxy blame solely from configured mode. No raw exception, credentials, CA contents or provider body is persisted.
 
@@ -52,9 +55,9 @@ Independent design review confirmed the legacy NO_PROXY compatibility trap, rese
 Required regressions: old config round-trip/route preservation; reserved secrets not injected even by legacy loader; route matching matrix; per-instance/global isolation; HTTP/HTTPS proxy authentication and CA; experimental SOCKS5; cancellation and closure races; retries retain route; read-only MCP creates no network client. After implementation run the full Node 24 verify gate and built Linux consumer, then independent implementation review and necessary rechecks. Real smoke remains synthetic, isolated, fixed to deepseek-v4-flash-vision-exp/Responses/4096/60s with explicit reasoning none. Three independent runs must report every attempt and require real Writer receipts plus restarted key-free read for retention; never count ignore or adapter-only success as retained memory. Windows/macOS/WSL and desktop live results are reported separately.
 
 
-## Implemented result and verification
+## Historical implemented result and verification (2026-09-08)
 
-The implementation follows this design. Exact-key optional fields stay in schemaVersion 2;
+That implementation followed the original design. Exact-key optional fields stay in schemaVersion 2;
 new defaults are env, while old field absence remains legacy. `no_proxy_invalid` is a
 separate controlled configuration reason so unsupported lists are actionable. Legacy
 reserved-name filtering is case-insensitive, including Windows aliases. Three concrete
@@ -79,10 +82,10 @@ initial failed Markdown attempt. The old duplicate Rust fixture's lawful ignore 
 separate from the new nonduplicate Fedora/fish retention fixture.
 
 The real tests explicitly cleared both NO_PROXY spellings **inside isolated child env**.
-The current host has unsupported CIDR entries, so its env configuration does not work
-unchanged. This is an explicit remaining compatibility limit, not a successful test of
-the original host environment. Choose a supported bypass list or custom network mode;
-Common Memory never silently removes those rules or switches a failed proxy to direct.
+At that time the host had unsupported CIDR entries, so the run did not validate its
+unchanged environment. Current source now supports IP-literal CIDRs as specified above;
+this does not retroactively validate those historical live runs. Common Memory never
+silently removes bypass rules or switches a failed proxy to direct.
 
 | Environment / protocol | Evidence and limit |
 | --- | --- |
@@ -92,9 +95,11 @@ Common Memory never silently removes those rules or switches a failed proxy to d
 | Windows / macOS native | Portable path handling and reserved-name casing covered by code/contracts; no OS execution or CI result claimed |
 | WSL NAT / mirrored, GUI host env | [Microsoft networking documentation](https://learn.microsoft.com/en-us/windows/wsl/networking) informs explicit-address design; no live WSL or desktop-client acceptance |
 | VPN / TUN | OS routing remains authoritative; not detected, changed or separately verified |
-| CIDR, SOCKS4, PAC/WPAD, NTLM/Kerberos | Unsupported this round; no silent approximation |
+| CIDR, SOCKS4, PAC/WPAD, NTLM/Kerberos | Unsupported in that historical round; current IP-literal CIDR support is documented above, the other exclusions remain |
 
 OpenAI Responses has fake-contract preservation only; Qwen and GLM Chat are documentation
 candidates without live calls; Hunyuan's exact json_object/model combination is unverified.
 No brand-wide compatibility claim, package publication or personal configuration migration
 was performed. Package remains 0.2.0/private:true.
+
+Current CIDR API baseline: [Node 22 BlockList.addSubnet/check](https://nodejs.org/docs/latest-v22.x/api/net.html#blocklistaddsubnetnet-prefix-type), available below this package’s Node 22.19 floor. No DNS lookup, endpoint rewrite or proxy fallback is introduced.

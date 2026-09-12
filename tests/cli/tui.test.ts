@@ -359,3 +359,11 @@ it('network cancellation saves no proxy secrets, and CA changes remain explicit'
   await runNetworkWizard(loadConfig()); expect(loadConfig()!.remote.caFileEnv).toBe('CUSTOM_CA');
   choices('direct', 'remove'); await runNetworkWizard(loadConfig()); expect(loadConfig()!.remote.caFileEnv).toBeUndefined();
 });
+it.each([undefined,'direct','env','custom'] as const)('network wizard recommends normal system routing and preserves explicit initial %s',mode=>{
+ const config=fixture();if(mode===undefined)delete config.remote.proxy;else config.remote.proxy=mode==='custom'?{mode,urlEnv:'SYNTHETIC_PROXY'}:{mode};saveConfig(config);
+ vi.mocked(clack.select).mockImplementationOnce(async options=>{
+  expect(options.initialValue).toBe(mode??'direct');expect(options.options.map(o=>o.value)).toEqual(['direct','env','custom']);
+  expect(options.options[0]!.label).toContain('系统');expect(options.options[0]!.hint).toContain('VPN/TUN');return Symbol('cancel') as never;
+ });
+ return expect(runNetworkWizard(config)).rejects.toBeInstanceOf(UserCancelled);
+});

@@ -1,3 +1,4 @@
+import { piDiagnosticReporter } from './diagnostics.js';
 import { randomUUID } from 'node:crypto';
 import { SessionIngress, type SessionCacheOptions } from '../v2/session.js';
 const processState = globalThis as typeof globalThis & {__commonMemoryPiInstance?:string};
@@ -8,6 +9,7 @@ export interface SessionUserEntry { sequence?:number; id: string; text: string; 
 export interface PiWriter { store: RuntimeStore; run(options?: {force?: boolean; signal?: AbortSignal}): Promise<unknown>; close(): void | Promise<void> }
 /** Host lifecycle adapter. Delivery, rather than successful assistant completion, is evidence. */
 export class PiCaptureRuntime {
+  readonly #report=piDiagnosticReporter();
   readonly #writer: PiWriter;
   readonly ingress:SessionIngress;
   #sessions=new Map<string,string>();
@@ -46,9 +48,12 @@ export class PiCaptureRuntime {
   check(): void {
     if (this.#closed || !this.#stable || this.#running) return;
     this.#running = this.#writer.run({signal:this.#abort.signal}).then(result => {
-      if (result && typeof result === 'object' && 'outcome' in result && result.outcome === 'failed') process.stderr.write('[common-memory] maintenance failed; inspect common-memory status for the diagnostic code.\n');
-    }).catch(() => {
-      process.stderr.write("[common-memory] maintenance failed; durable queue retained. Run common-memory status.\n");
+      if (result && typeof result === 'object' && 'outcome' in result && result.outcome === 'failed') {
+        const diagnostic=this.#writer.store.status().jobs.findLast(job=>job.diagnostic!==null)?.diagnostic;
+        this.#report('maintenance',{diagnostic});
+      }
+    }).catch(error => {
+      this.#report("maintenance",error);
     }).finally(() => { this.#running = undefined; });
   }
   shutdown(): Promise<void> {

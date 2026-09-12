@@ -59,7 +59,7 @@ export function defaultConfig(env: NodeJS.ProcessEnv = process.env): CommonMemor
       provider: "openai-compatible",
       baseUrl: "https://api.openai.com/v1",
       model: "",
-      proxy: {mode:"env"},
+      proxy: {mode:"direct"},
       apiKeyEnv: "OPENAI_API_KEY",
     },
     sessionCache: {...SESSION_CACHE_DEFAULTS},
