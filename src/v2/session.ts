@@ -1,3 +1,4 @@
+import { decodeText } from './sqlite.js';
 import { createHash } from 'node:crypto';
 import type { RuntimeStore, Observation, RuntimeJob } from './runtime.js';
 import { provenanceOf } from './import.js';
@@ -124,7 +125,8 @@ export function sessionProjection(store:RuntimeStore,job:RuntimeJob,authorized:b
   const previous=store.db.prepare("SELECT t.id FROM session_turns t WHERE sessionId=? AND t.id<? AND batchId IS NOT NULL AND NOT EXISTS(SELECT 1 FROM session_messages m LEFT JOIN observations o ON o.id=m.observationId WHERE m.turn=t.id AND (m.scope!=? OR (m.role='user' AND o.state!='processed'))) ORDER BY t.id DESC LIMIT ?").all(job.observations[0]!.sessionId,first.turn,job.observations[0]!.scope,tail).reverse().map(r=>Number(r.id));
   return [...previous,...current].map(id=>{
     const turn=store.db.prepare('SELECT turnId,state FROM session_turns WHERE id=?').get(id)!;
-    return {turn_id:turn.turnId,state:turn.state,context_only:!current.includes(id),messages:store.db.prepare('SELECT m.*,o.text AS userText FROM session_messages m LEFT JOIN observations o ON o.id=m.observationId WHERE turn=? ORDER BY COALESCE(m.sequence,m.id),m.id').all(id).map(m=>{
+    return {turn_id:turn.turnId,state:turn.state,context_only:!current.includes(id),messages:store.db.prepare('SELECT m.*,CAST(m.text AS BLOB) AS text,CAST(o.text AS BLOB) AS userText FROM session_messages m LEFT JOIN observations o ON o.id=m.observationId WHERE turn=? ORDER BY COALESCE(m.sequence,m.id),m.id').all(id).map(m=>{
+      decodeText(m, ['text', 'userText']);
       const canDisclose=authorized&&m.scope===job.observations[0]!.scope;
       const evidence=current.includes(id)&&m.role==='user'&&job.observations.some(o=>o.id===m.observationId);
       return {message_id:m.messageId,role:m.role,source:m.source,source_scope:m.scope,observed_at:m.observedAt,context_only:!evidence,...(evidence?{ref:`ev_${m.observationId}`}:{text:canDisclose?(m.role==='user'?m.userText:m.text):null,unavailable:!canDisclose?'unauthorized_conversation_context':m.unavailable??(m.role==='user'&&m.userText===null?'source_unavailable':null)})};

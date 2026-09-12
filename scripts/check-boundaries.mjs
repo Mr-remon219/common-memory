@@ -1,6 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { nodeRange } from './node-support.mjs';
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const forbidden = ["memory_analysis_v1", "interface Fact", "class Recall", "embedding", "pgvector", "better-sqlite3"];
@@ -19,6 +20,8 @@ for (const file of files) {
   const text = await readFile(file, "utf8");
   const displayPath = relative(root, file).replaceAll("\\", "/");
   const projectPath = `/${displayPath}`;
+  if (displayPath !== 'src/cli/prompt-runtime.ts' && text.includes('@clack/prompts')) violations.push(`${displayPath} bypasses the CLI prompt warning barrier`);
+  if (displayPath !== 'src/v2/sqlite.ts' && /(?:from\s*["']node:sqlite["']|(?:import|require)\(["']node:sqlite["']\))/.test(text.replace(/import type[^;]+;/g, ''))) violations.push(`${displayPath} bypasses lazy SQLite loading`);
   if (!projectPath.startsWith('/src/mcp/') && text.includes('@modelcontextprotocol')) violations.push(`${displayPath} imports MCP outside its adapter`);
   for (const term of forbidden) if (text.toLowerCase().includes(term.toLowerCase())) violations.push(`${displayPath} contains forbidden term ${term}`);
   if (projectPath.includes("/service/") && /from ["']\.\.\/repository\/loader/.test(text)) violations.push(`${displayPath} bypasses LockedRepositorySession`);
@@ -31,6 +34,7 @@ for (const file of files) {
   if (!projectPath.endsWith("/src/memory-manager/openai/openai-responses-adapter.ts") && text.includes("https://api.openai.com/v1/responses")) violations.push(`${displayPath} constructs the provider endpoint outside the adapter`);
 }
 const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
+if (pkg.engines?.node !== nodeRange) violations.push('package engines and verification runtime policy disagree');
 if (Object.keys(pkg.exports ?? {}).some((key) => key !== ".")) violations.push("package exports a deep path");
 if ([...Object.keys(pkg.dependencies ?? {}), ...Object.keys(pkg.devDependencies ?? {})].some((name) => name === "openai" || name.startsWith("@openai/"))) violations.push("package depends on an OpenAI SDK");
 if (violations.length) { console.error(violations.join("\n")); process.exit(1); }

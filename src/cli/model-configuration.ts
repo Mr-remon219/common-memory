@@ -1,4 +1,4 @@
-import * as clack from '@clack/prompts';
+import * as clack from './prompt-runtime.js';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { apiKeyEnvContents, configDirectory, configFilePath, defaultConfig, envFilePath, loadConfig, validateConfig, type CommonMemoryConfig } from '../config/config.js';

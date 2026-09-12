@@ -1,7 +1,8 @@
 import { initializeSessions, sessionGroup } from './session.js';
 import { sanitizeDiagnostic, type FailureDiagnostic } from '../memory-manager/contracts/diagnostic.js';
 import { failureDiagnostic, failureCode } from './errors.js';
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
+import { openDatabase, synchronousResult, decodeText } from "./sqlite.js";
 import { lstatSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID, createHash } from "node:crypto";
@@ -49,7 +50,7 @@ export class RuntimeStore {
     this.#now = options.now ?? Date.now;
     this.#options = {turnThreshold: options.turnThreshold ?? 6, byteThreshold: options.byteThreshold ?? 16384, idleMs: options.idleMs ?? 120000, maxWaitMs: options.maxWaitMs ?? 600000, leaseMs: options.leaseMs ?? 120000, maxAttempts: options.maxAttempts ?? 5};
     for (const value of Object.values(this.#options)) if (!Number.isSafeInteger(value) || value <= 0) throw new Error("Invalid runtime limit");
-    this.db = new DatabaseSync(path, {timeout:options.sqliteTimeoutMs ?? 5000});
+    this.db = openDatabase(path, {timeout:options.sqliteTimeoutMs ?? 5000});
     try { enableWal(this.db,options.sqliteTimeoutMs); this.db.exec(`PRAGMA synchronous=FULL;
       CREATE TABLE IF NOT EXISTS observations(id INTEGER PRIMARY KEY AUTOINCREMENT, sessionId TEXT NOT NULL, entryId TEXT NOT NULL, text TEXT, digest TEXT NOT NULL, scope TEXT NOT NULL, observedAt TEXT NOT NULL, source TEXT NOT NULL, state TEXT NOT NULL, enqueuedAt INTEGER NOT NULL, processedAt INTEGER, jobId TEXT, issue TEXT, UNIQUE(sessionId,entryId));
       CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY, token TEXT NOT NULL, generation INTEGER NOT NULL, state TEXT NOT NULL, expires INTEGER NOT NULL, attempts INTEGER NOT NULL, available INTEGER NOT NULL, issue TEXT);
@@ -71,20 +72,20 @@ export class RuntimeStore {
     } catch (error) { this.db.close(); throw error; }
   }
   transaction<T>(fn: () => T): T {
-    if (this.#depth > 0) return fn();
+    if (this.#depth > 0) return synchronousResult(fn());
     this.db.exec("BEGIN IMMEDIATE"); this.#depth++;
-    try { const result = fn(); if (result instanceof Promise) throw new Error("Runtime transaction must be synchronous"); this.db.exec("COMMIT"); return result; }
+    try { const result = synchronousResult(fn()); this.db.exec("COMMIT"); return result; }
     catch (error) { this.db.exec("ROLLBACK"); throw error; }
     finally { this.#depth--; }
   }
   enqueue(input: ObservationInput): Observation {
     const digest = createHash("sha256").update(input.text).digest("hex");
     return this.transaction(() => {
-      const existing = this.db.prepare("SELECT * FROM observations WHERE sessionId=? AND entryId=?").get(input.sessionId,input.entryId) as Row | undefined;
+      const existing = decodeText(this.db.prepare("SELECT *, CAST(text AS BLOB) AS text FROM observations WHERE sessionId=? AND entryId=?").get(input.sessionId,input.entryId)) as Row | undefined;
       if (existing) { if (existing.digest !== digest || existing.scope !== input.scope || existing.source !== input.source) throw new Error("Conflicting observation identity"); return existing as unknown as Observation; }
       const state = provenanceOf(input.source) !== null ? "pending" : "quarantined";
       const result = this.db.prepare("INSERT INTO observations(sessionId,entryId,text,digest,scope,observedAt,source,state,enqueuedAt) VALUES(?,?,?,?,?,?,?,?,?)").run(input.sessionId,input.entryId,input.text,digest,input.scope,input.observedAt,input.source,state,this.#now());
-      return this.db.prepare("SELECT * FROM observations WHERE id=?").get(result.lastInsertRowid) as unknown as Observation;
+      return decodeText(this.db.prepare("SELECT *, CAST(text AS BLOB) AS text FROM observations WHERE id=?").get(result.lastInsertRowid)) as unknown as Observation;
     });
   }
   /** Exact lookup only; callers own namespace authorization. Never returns conversation bodies. */
@@ -106,10 +107,10 @@ export class RuntimeStore {
     return Boolean(this.db.prepare("SELECT 1 FROM observations WHERE state IN ('pending','claimed','dead') LIMIT 1").get());
   }
   hasWork(): boolean { return Boolean(this.db.prepare("SELECT 1 FROM observations WHERE state IN ('pending','claimed') LIMIT 1").get()); }
-  pending(): Observation[] { return this.db.prepare("SELECT * FROM observations WHERE state='pending' ORDER BY id").all() as unknown as Observation[]; }
+  pending(): Observation[] { return this.db.prepare("SELECT *, CAST(text AS BLOB) AS text FROM observations WHERE state='pending' ORDER BY id").all().map(row => decodeText(row)) as unknown as Observation[]; }
   context(observation: Observation): Observation[] {
     if(sessionGroup(this,observation)) return [];
-    return (this.db.prepare("SELECT * FROM observations WHERE id<? AND sessionId=? AND scope=? AND state='processed' AND text IS NOT NULL ORDER BY id DESC LIMIT 2").all(observation.id,observation.sessionId,observation.scope) as unknown as Observation[]).reverse();
+    return (this.db.prepare("SELECT *, CAST(text AS BLOB) AS text FROM observations WHERE id<? AND sessionId=? AND scope=? AND state='processed' AND text IS NOT NULL ORDER BY id DESC LIMIT 2").all(observation.id,observation.sessionId,observation.scope).map(row => decodeText(row)) as unknown as Observation[]).reverse();
   }
   requestFlush(): void { this.db.prepare("INSERT INTO settings VALUES('flush',1) ON CONFLICT(key) DO UPDATE SET value=1").run(); }
   claim(options: {force?: boolean; maxTurns?: number} = {}): RuntimeJob | null {
@@ -123,18 +124,18 @@ export class RuntimeStore {
         else {
           const token = randomUUID(), generation = Number(active.generation)+1;
           this.db.prepare("UPDATE jobs SET token=?,generation=?,state='running',expires=?,attempts=attempts+1 WHERE id=?").run(token,generation,now+this.#options.leaseMs,active.id!);
-          return {id:String(active.id),token,generation,observations:this.db.prepare("SELECT * FROM observations WHERE jobId=? ORDER BY id").all(active.id!) as unknown as Observation[]};
+          return {id:String(active.id),token,generation,observations:this.db.prepare("SELECT *, CAST(text AS BLOB) AS text FROM observations WHERE jobId=? ORDER BY id").all(active.id!).map(row => decodeText(row)) as unknown as Observation[]};
         }
       }
       // Decode only a bounded queue head, not every pending conversation body.
-      let head = this.db.prepare("SELECT * FROM observations WHERE state='pending' ORDER BY id LIMIT ?")
-        .all(options.maxTurns ?? this.#options.turnThreshold) as unknown as Observation[];
+      let head = this.db.prepare("SELECT *, CAST(text AS BLOB) AS text FROM observations WHERE state='pending' ORDER BY id LIMIT ?")
+        .all(options.maxTurns ?? this.#options.turnThreshold).map(row => decodeText(row)) as unknown as Observation[];
       // A sealed session must not wait behind an ineligible legacy queue head.
-      const sessionHead=this.db.prepare("SELECT o.* FROM observations o JOIN session_messages m ON m.observationId=o.id JOIN session_turns t ON t.id=m.turn WHERE o.state='pending' AND t.batchId IS NOT NULL ORDER BY o.id LIMIT 1").get() as unknown as Observation|undefined;
+      const sessionHead=decodeText(this.db.prepare("SELECT o.*, CAST(o.text AS BLOB) AS text FROM observations o JOIN session_messages m ON m.observationId=o.id JOIN session_turns t ON t.id=m.turn WHERE o.state='pending' AND t.batchId IS NOT NULL ORDER BY o.id LIMIT 1").get()) as unknown as Observation|undefined;
       if(sessionHead)head=[sessionHead];
       if (!head.length) { this.db.prepare("DELETE FROM settings WHERE key='flush'").run(); return null; }
       const group = sessionGroup(this, head[0]!);
-      if (group) head = this.db.prepare("SELECT o.* FROM observations o JOIN session_messages m ON m.observationId=o.id JOIN session_turns t ON t.id=m.turn WHERE o.state='pending' AND t.batchId=? ORDER BY o.id").all(group.batch) as unknown as Observation[];
+      if (group) head = this.db.prepare("SELECT o.*, CAST(o.text AS BLOB) AS text FROM observations o JOIN session_messages m ON m.observationId=o.id JOIN session_turns t ON t.id=m.turn WHERE o.state='pending' AND t.batchId=? ORDER BY o.id").all(group.batch).map(row => decodeText(row)) as unknown as Observation[];
       const flush = this.db.prepare("SELECT value FROM settings WHERE key='flush'").get();
       if (!group && !options.force && !flush?.value) {
         // Eligibility spans all scopes, independently of this batch's capacity.
@@ -146,7 +147,7 @@ export class RuntimeStore {
           const latest = this.db.prepare("SELECT enqueuedAt FROM observations WHERE state='pending' ORDER BY id DESC LIMIT 1").get()!;
           if (now - Number(latest.enqueuedAt) < this.#options.idleMs) {
             // SQLite counts UTF-8 bytes including NULs without copying all bodies to JS.
-            const row = this.db.prepare("SELECT SUM(length(CAST(text AS BLOB))) AS bytes FROM observations WHERE state='pending'").get()!;
+            const row = decodeText(this.db.prepare("SELECT SUM(length(CAST(text AS BLOB))) AS bytes FROM observations WHERE state='pending'").get())!;
             if (Number(row.bytes) < this.#options.byteThreshold) return null;
           }
         }
@@ -203,7 +204,7 @@ export class RuntimeStore {
   stageInput(input: {sessionId:string;text:string;source:string;scope:string;streamingBehavior?:"steer"|"followUp";parentEntryId?:string|null;hasUnsupportedContent?:boolean}): string {
     return this.transaction(()=>{
       const id=randomUUID(),kind=input.streamingBehavior??"direct";
-      const prior=kind==="direct"?this.db.prepare("SELECT text FROM inputs WHERE sessionId=? AND queueKind='direct'").get(input.sessionId):undefined;
+      const prior=kind==="direct"?decodeText(this.db.prepare("SELECT CAST(text AS BLOB) AS text FROM inputs WHERE sessionId=? AND queueKind='direct'").get(input.sessionId)):undefined;
       // Direct preflight may be cancelled; queued steer/followUp are legal FIFO lists.
       if(kind==="direct")this.db.prepare("DELETE FROM inputs WHERE sessionId=? AND queueKind='direct'").run(input.sessionId);
       let source=input.hasUnsupportedContent?"unsupported_content":prior?.text===input.text?"ambiguous":input.source;
@@ -222,14 +223,14 @@ export class RuntimeStore {
       if(this.db.prepare("SELECT id FROM deliveries WHERE sessionId=? AND digest=? AND timestamp=?").get(sessionId,digest,timestamp))return;
       // Pi drains direct delivery, steering, then follow-up queues. Never search old
       // inputs by text: a cancelled global input must not authenticate project text.
-      const expected=this.db.prepare("SELECT * FROM inputs WHERE sessionId=? ORDER BY CASE queueKind WHEN 'direct' THEN 0 WHEN 'steer' THEN 1 ELSE 2 END, rowid LIMIT 1").get(sessionId) as Row|undefined;
+      const expected=decodeText(this.db.prepare("SELECT *, CAST(text AS BLOB) AS text FROM inputs WHERE sessionId=? ORDER BY CASE queueKind WHEN 'direct' THEN 0 WHEN 'steer' THEN 1 ELSE 2 END, rowid LIMIT 1").get(sessionId)) as Row|undefined;
       const matches=expected?.text===text;
       const source=hasUnsupportedContent?"unsupported_content":matches?String(expected!.source):"ambiguous";
       this.db.prepare("INSERT OR IGNORE INTO deliveries(sessionId,text,digest,timestamp,scope,source,state) VALUES(?,?,?,?,?,?,'unbound')").run(sessionId,text,digest,timestamp,expected?.scope??"global",source);
       if(expected)this.db.prepare("DELETE FROM inputs WHERE id=?").run(expected.id!);
     });
   }
-  bind(sessionId:string,entries:readonly {id:string;text:string;timestamp:number}[], admit?: (input:ObservationInput)=>void): void {this.transaction(()=>{const deliveries=this.db.prepare("SELECT * FROM deliveries WHERE sessionId=? AND state='unbound' ORDER BY id").all(sessionId) as Row[];for(const delivery of deliveries){const matches=entries.filter(e=>e.text===delivery.text && e.timestamp===delivery.timestamp);if(matches.length>1){this.db.prepare("UPDATE deliveries SET state='quarantined' WHERE id=?").run(delivery.id!);continue;}if(matches.length===0)continue;this.db.prepare("UPDATE deliveries SET state='bound',text='' WHERE id=?").run(delivery.id!);(admit ?? ((input:ObservationInput)=>this.enqueue(input)))({sessionId,entryId:matches[0]!.id,text:String(delivery.text),scope:String(delivery.scope),source:String(delivery.source),observedAt:new Date(Number(delivery.timestamp)).toISOString()});}});}
+  bind(sessionId:string,entries:readonly {id:string;text:string;timestamp:number}[], admit?: (input:ObservationInput)=>void): void {this.transaction(()=>{const deliveries=this.db.prepare("SELECT *, CAST(text AS BLOB) AS text FROM deliveries WHERE sessionId=? AND state='unbound' ORDER BY id").all(sessionId).map(row => decodeText(row)) as Row[];for(const delivery of deliveries){const matches=entries.filter(e=>e.text===delivery.text && e.timestamp===delivery.timestamp);if(matches.length>1){this.db.prepare("UPDATE deliveries SET state='quarantined' WHERE id=?").run(delivery.id!);continue;}if(matches.length===0)continue;this.db.prepare("UPDATE deliveries SET state='bound',text='' WHERE id=?").run(delivery.id!);(admit ?? ((input:ObservationInput)=>this.enqueue(input)))({sessionId,entryId:matches[0]!.id,text:String(delivery.text),scope:String(delivery.scope),source:String(delivery.source),observedAt:new Date(Number(delivery.timestamp)).toISOString()});}});}
   status(): {observations:Row[];jobs:JobStatus[];unbound:number;quarantinedDeliveries:number} {return {observations:this.db.prepare("SELECT state,COUNT(*) AS count FROM observations GROUP BY state").all() as Row[],jobs:this.db.prepare("SELECT id,state,attempts,issue,diagnostic,available FROM jobs ORDER BY rowid").all().map(row => ({id:String(row.id),state:String(row.state),attempts:Number(row.attempts),issue:nullableString(row.issue),diagnostic:readDiagnostic(row.diagnostic),retryAt:row.state === 'retry' ? Number(row.available) : null})),quarantinedDeliveries:Number(this.db.prepare("SELECT COUNT(*) AS n FROM deliveries WHERE state='quarantined'").get()!.n),unbound:Number(this.db.prepare("SELECT COUNT(*) AS n FROM deliveries WHERE state='unbound'").get()!.n)};}
   close(): void {this.db.close();}
 }

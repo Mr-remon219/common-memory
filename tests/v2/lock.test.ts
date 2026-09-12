@@ -12,6 +12,12 @@ function fixture() {
 }
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
+it.each([() => Promise.resolve(), () => ({ then() {} }), () => { throw new Error('action failed'); }])('releases repository locks after invalid asynchronous results or failures', action => {
+  const root = fixture();
+  expect(() => withRepositoryLock(root, action)).toThrow();
+  expect(withRepositoryLock(root, () => 'reopened')).toBe('reopened');
+});
+
 it('locks a fresh nested data root without relying on a registry read to create storage', () => {
   const dataRoot = join(fixture(), 'missing', 'data');
   expect(withRepositoryLock(dataRoot, () => 'locked')).toBe('locked');

@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, lstatSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { openDatabase } from '../v2/sqlite.js';
 import { isDeepStrictEqual } from 'node:util';
 import { configDirectory, configFilePath, envFilePath, loadConfig, type CommonMemoryConfig } from '../config/config.js';
 import { PRIVATE_NETWORK_KEYS } from '../memory-manager/network/route.js';
@@ -45,7 +45,7 @@ export function assertDeletableData(config: CommonMemoryConfig, home = configDir
   walk(root);
   const database = join(root, 'runtime.sqlite');
   if (existsSync(database)) {
-    const db = new DatabaseSync(database, { readOnly: true, timeout: 100 });
+    const db = openDatabase(database, { readOnly: true, timeout: 100 });
     try {
       if (db.prepare("SELECT 1 FROM jobs WHERE state='running' AND expires>? LIMIT 1").get(Date.now())) throw new Error('仍有记忆任务运行中，请先停止客户端及后台任务。');
     } finally { db.close(); }

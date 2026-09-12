@@ -6,9 +6,10 @@ import { execFileSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
+import { supportsNode } from './node-support.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const args = process.argv.slice(2);
@@ -25,7 +26,7 @@ const npm = (args, cwd = temp) => {
 };
 let client;
 try {
-  assert.equal(Number(process.versions.node.split('.')[0]), 24, 'Consumer verification requires Node 24.x');
+  assert.ok(supportsNode(), 'Consumer verification requires Node 22.19+ (22.x) or Node 24+');
   if (!registryVersion) assert.ok(existsSync(join(root, 'dist/cli/main.js')), 'Run the full gate/build before testing consumers');
   const [packed] = JSON.parse(npm(['pack', ...(registryVersion ? [`common-memory-core@${registryVersion}`, '--registry=https://registry.npmjs.org/'] : []), '--ignore-scripts', '--json', '--pack-destination', temp], root));
   if (registryVersion) assert.equal(packed.version, registryVersion, 'Registry must serve the requested release');
@@ -40,7 +41,7 @@ try {
   }
   writeFileSync(join(temp, 'package.json'), JSON.stringify({ private: true, type: 'module' }));
   // No prepare/build hooks or development dependencies may be needed by an npm user.
-  console.log(npm(['install', '--ignore-scripts', '--omit=dev', '--no-audit', '--no-fund', join(temp, packed.filename)]).trim());
+  console.log(npm(['install', '--engine-strict', '--ignore-scripts', '--omit=dev', '--no-audit', '--no-fund', join(temp, packed.filename)]).trim());
   const pkg = join(temp, 'node_modules/common-memory-core');
   assert.equal(realpathSync(pkg), pkg, 'Installed package must not be linked to the checkout');
   assert.ok(readFileSync(join(pkg, 'dist/v2/memory-maintainer.md'), 'utf8').trim(), 'Empty maintainer prompt');
@@ -59,6 +60,11 @@ try {
   const cli = join(pkg, 'dist/cli/main.js');
   const home = join(temp, 'read-only-home'); mkdirSync(home);
   const env = { ...process.env, COMMON_MEMORY_HOME: home, CM_CONSUMER_UNUSED_KEY: '' };
+  if (!registryVersion) {
+    const guard = join(temp, 'no-sqlite.mjs');
+    copyFileSync(join(root, 'tests/cli/fixtures/no-sqlite.mjs'), guard);
+    env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ''} --import=${pathToFileURL(guard).href}`;
+  }
   const manifest = JSON.parse(readFileSync(join(pkg, 'package.json'), 'utf8'));
   assert.equal(manifest.license, 'MIT');
   assert.equal(run([cli, '--version'], { env }).trim(), registryVersion ?? manifest.version);

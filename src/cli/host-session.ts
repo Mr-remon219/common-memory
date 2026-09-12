@@ -4,6 +4,7 @@ import { hostProcessInstance } from './host-process.js';
 import { constants } from 'node:fs';
 import { setTimeout } from 'node:timers/promises';
 import type { CommonMemoryConfig } from '../config/config.js';
+import { decodeText } from '../v2/sqlite.js';
 import { RuntimeStore } from '../v2/runtime.js';
 import { SessionIngress, sessionKey, type SessionIdentity } from '../v2/session.js';
 import { ProjectRegistry } from '../v2/registry.js';
@@ -39,8 +40,8 @@ function transcript(path:string,offset:number|null,cap:number):{text:string;end:
 }
 /** SQLite WAL + synchronous=FULL is the atomic, fsynced inbox. No remote work in a hook. */
 export function enqueueCodexEvent(config:CommonMemoryConfig,event:CodexEvent,instance=codexProcessInstance(),client:HostClient='codex'):{key:string;initial:boolean} {
-  const store=new RuntimeStore(config.dataRoot,{sqliteTimeoutMs:150});setupHostAdapter(store);
-  try {return store.transaction(()=>{
+  const store=new RuntimeStore(config.dataRoot,{sqliteTimeoutMs:150});
+  try {setupHostAdapter(store);return store.transaction(()=>{
     const ingress=new SessionIngress(store,config.sessionCache);
     let identity:SessionIdentity={client,processInstance:instance,sessionId:event.session_id};
     const base=sessionKey(identity),activation=store.db.prepare('SELECT * FROM host_activations WHERE base=?').get(base);
@@ -77,13 +78,15 @@ export function enqueueCodexEvent(config:CommonMemoryConfig,event:CodexEvent,ins
 }
 function fstatSize(path:string):number {const fd=openSync(path,constants.O_RDONLY|constants.O_NOFOLLOW);try{return fstatSync(fd).size;}finally{closeSync(fd);}}
 export async function consumeCodexInbox(config:CommonMemoryConfig, progressCallback?:()=>Promise<void>):Promise<void> {
-  const store=new RuntimeStore(config.dataRoot);setupHostAdapter(store);const ingress=new SessionIngress(store,config.sessionCache);
-  const deadline=Date.now()+60000;
+  const store=new RuntimeStore(config.dataRoot);
   try {
+    setupHostAdapter(store);
+    const ingress=new SessionIngress(store,config.sessionCache);
+    const deadline=Date.now()+60000;
     for(;;) {
       if(Date.now()>deadline)throw new Error('CODEX_COMPLETION_UNCONFIRMED');
       const consumed=store.transaction(()=>{
-        const row=store.db.prepare('SELECT * FROM codex_inbox ORDER BY id LIMIT 1').get();if(!row)return false;
+        const row=decodeText(store.db.prepare('SELECT *, CAST(body AS BLOB) AS body FROM codex_inbox ORDER BY id LIMIT 1').get(), ['body']);if(!row)return false;
         const key=String(row.sessionId),cursor=store.db.prepare('SELECT * FROM codex_cursors WHERE sessionId=?').get(key)!;
         if(row.start!==cursor.offset)throw new Error('CODEX_CURSOR_CONFLICT');
         const parsed=parseTranscript(String(row.body),{offset:Number(cursor.offset),turnId:cursor.turnId===null?null:String(cursor.turnId)},String(row.scope));

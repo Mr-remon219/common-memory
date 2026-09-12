@@ -1,4 +1,4 @@
-import * as clack from '@clack/prompts';
+import * as clack from './prompt-runtime.js';
 import { isDeepStrictEqual } from 'node:util';
 import { MemoryModelError } from '../memory-manager/contracts/errors.js';
 import { describeConfiguredNetwork } from '../config/runtime.js';

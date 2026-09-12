@@ -1,4 +1,5 @@
 import { enqueueCodexEvent, type CodexEvent, type HostClient, setupHostAdapter } from './codex-session.js';
+import { decodeText } from '../v2/sqlite.js';
 import { RuntimeStore } from '../v2/runtime.js';
 import { SessionIngress } from '../v2/session.js';
 import { hostProcessInstance } from './host-process.js';
@@ -45,8 +46,8 @@ function putSnapshot(store:RuntimeStore,key:string,body:string,pending:number,in
 export function refreshSession(home:string,client:HostClient,instance=hostProcessInstance(),thread=process.env.CODEX_THREAD_ID):void {
   if(!thread)throw new Error('SESSION_REFRESH_IDENTITY_REQUIRED');
   const config=loadConfig(join(home,'config.json'));if(!config)throw new Error('UNCONFIGURED');
-  const store=new RuntimeStore(config.dataRoot);setupHostAdapter(store);
-  try {store.transaction(()=>{
+  const store=new RuntimeStore(config.dataRoot);
+  try {setupHostAdapter(store);store.transaction(()=>{
     const rows=store.db.prepare('SELECT * FROM host_activations WHERE client=? AND instance=? AND thread=? AND active=1').all(client,instance,thread);
     if(rows.length!==1)throw new Error('SESSION_REFRESH_ACTIVATION_REQUIRED');
     const row=rows[0]!;
@@ -68,7 +69,7 @@ export function codexHook(input:string,home:string,instance?:string,client:HostC
       }
       putSnapshot(store,admitted.key,body,1,new SessionIngress(store,config.sessionCache));
     }
-    const row=store.db.prepare('SELECT * FROM host_snapshots WHERE sessionId=?').get(admitted.key);
+    const row=decodeText(store.db.prepare('SELECT *, CAST(body AS BLOB) AS body FROM host_snapshots WHERE sessionId=?').get(admitted.key), ['body']);
     const restore=event.hook_event_name==='SessionStart'&&['compact','clear','reload'].includes(event.source??'');
     if(!row||(!restore&&!row.pending)||!['SessionStart','PostToolUse','UserPromptSubmit'].includes(event.hook_event_name))return {};
     store.db.prepare('UPDATE host_snapshots SET pending=0 WHERE sessionId=?').run(admitted.key);

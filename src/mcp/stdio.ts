@@ -48,8 +48,12 @@ export async function runMcp(args: string[]): Promise<void> {
     running = writer.run({ signal: abort.signal }).then(value => { if (value.outcome === 'failed') report(); }, report)
       .finally(() => { running = undefined; });
   };
-  const transport = new StdioServerTransport(process.stdin, process.stdout, { maxBufferSize: 1024 * 1024 });
-  const handle = serveStdio(() => createMcpServer(ingress), { transport, onerror: report });
+  let transport: StdioServerTransport;
+  let handle: ReturnType<typeof serveStdio>;
+  try {
+    transport = new StdioServerTransport(process.stdin, process.stdout, { maxBufferSize: 1024 * 1024 });
+    handle = serveStdio(() => createMcpServer(ingress), { transport, onerror: report });
+  } catch (error) { await writer?.close(); throw error; }
   const timer = setInterval(check, 1000); timer.unref();
   const shutdown = () => {
     if (closing) return;
@@ -60,10 +64,11 @@ export async function runMcp(args: string[]): Promise<void> {
       try { writer?.store.requestFlush(); } catch { report(); }
       try { await handle.close(); await running; }
       finally {
-        await writer?.close();
-        process.stdin.off('end', shutdown); process.stdin.off('error', shutdown);
-        process.stdout.off('error', shutdown);
-        process.off('SIGINT', shutdown); process.off('SIGTERM', shutdown);
+        try { await writer?.close(); } finally {
+          process.stdin.off('end', shutdown); process.stdin.off('error', shutdown);
+          process.stdout.off('error', shutdown);
+          process.off('SIGINT', shutdown); process.off('SIGTERM', shutdown);
+        }
       }
     }).catch(report).finally(finish);
   };

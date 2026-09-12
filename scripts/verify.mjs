@@ -4,10 +4,11 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { supportsNode } from './node-support.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-if (Number(process.versions.node.split('.')[0]) !== 24) {
-  console.error('Common Memory verification requires Node 24.x.');
+if (!supportsNode()) {
+  console.error('Common Memory verification requires Node 22.19+ (22.x) or Node 24+.');
   process.exit(2);
 }
 const tsc = join(root, 'node_modules/typescript/bin/tsc');

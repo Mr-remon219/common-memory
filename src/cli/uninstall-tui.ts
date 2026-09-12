@@ -1,4 +1,4 @@
-import * as clack from '@clack/prompts';
+import * as clack from './prompt-runtime.js';
 import { configDirectory, loadConfig } from '../config/config.js';
 import { readInstallationState, removeIntegrations } from './integrations.js';
 import { recoverPendingInstallation } from './installation-files.js';

@@ -20,7 +20,7 @@ Memory runs inside WSL and the ChatGPT/Codex desktop app reaches it through `wsl
 
 ## Setup
 
-Requires Node.js 24. Installation: `npm install -g common-memory-core@0.3.1`.
+Requires Node.js 22.19+ (22.x) or 24+. Installation: `npm install -g common-memory-core@0.3.2`.
 The following TUI describes the current source. Source contributors use
 `npm ci && npm run build`, then `node dist/cli/main.js`.
 **`common-memory` is the single entry for interactive management.** First run selects
@@ -338,7 +338,7 @@ recovers durable handoffs and waits through retry backoff and leases.
 ## MCP access (stdio)
 
 Build with `npm ci && npm run build`. Configure Common Memory using the existing
-CLI, then give your MCP host an explicit command and argument array. Node 24 is
+CLI, then give your MCP host an explicit command and argument array. Node 22.19+ (22.x) or 24+ is
 required. No running Pi process is needed; the existing Pi peer/package layout is
 unchanged. The SDK stdio entry serves modern and legacy clients. No HTTP port,
 automatic host installer, Roots discovery, Resources, Prompts or retrieval is added.

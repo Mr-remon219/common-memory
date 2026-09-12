@@ -1,11 +1,15 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
+import { setImmediate } from 'node:timers/promises';
 import { loadConfig } from "../config/config.js";
 import { runFlush } from "./flush-command.js";
 import { listProjects, registerProject, removeProject, retryJob, runtimeStatus, showMemory } from './operations.js';
 import { printStatus, runNetworkWizard, runShowTui, runTui, UserCancelled } from "./tui.js";
 
 async function main(): Promise<void> {
+  // Imports can queue Node warnings (notably SQLite). Let them reach the terminal
+  // before the first prompt: later output would displace Clack's redraw cursor.
+  await setImmediate();
   const [command,...args]=process.argv.slice(2);
   if ((command === '--version' || command === '-v') && !args.length) {
     console.log((JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as { version: string }).version);

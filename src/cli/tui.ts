@@ -1,4 +1,4 @@
-import * as clack from '@clack/prompts';
+import * as clack from './prompt-runtime.js';
 import { configDirectory, loadConfig, type CommonMemoryConfig } from '../config/config.js';
 import { currentConfiguration } from './current-configuration.js';
 import { installationOverview } from './installation-overview.js';

@@ -1,4 +1,4 @@
-import * as clack from '@clack/prompts';
+import * as clack from './prompt-runtime.js';
 import { loadConfig, type CommonMemoryConfig } from '../config/config.js';
 import { listProjects, memoryView, retryJob, runtimeStatus } from './operations.js';
 import { modifyMemory } from './modify-memory.js';

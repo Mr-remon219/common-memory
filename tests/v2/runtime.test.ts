@@ -9,6 +9,13 @@ function setup(options:ConstructorParameters<typeof RuntimeStore>[1]={}) {const 
 function add(store:RuntimeStore,n:number,text="用户当前状态") {return store.enqueue({sessionId:"s",entryId:String(n),text,scope:"global",source:"interactive",observedAt:"2026-01-01T00:00:00Z"});}
 afterEach(()=>{for(const store of stores.splice(0))store.close();for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true});});
 describe("durable V2 runtime",()=>{
+  it.each([false, true])('rejects thenables and rolls back writes (nested=%s)', nested => {
+    const { store } = setup();
+    const work = () => { add(store, 1); return { then() {} }; };
+    expect(() => store.transaction(() => nested ? store.transaction(work) : work())).toThrow('must be synchronous');
+    expect(store.db.prepare('SELECT count(*) AS n FROM observations').get()!.n).toBe(0);
+    add(store, 2); expect(store.pending()).toHaveLength(1);
+  });
   it("hybrid count, idle, bytes and oldest wait; no empty calls",()=>{
     let now=0;const {store}=setup({now:()=>now});expect(store.claim({force:true})).toBeNull();add(store,1);expect(store.claim()).toBeNull();now=120000;let job=store.claim()!;expect(job.observations).toHaveLength(1);store.finish(job);
     for(let n=2;n<=7;n++)add(store,n);job=store.claim()!;expect(job.observations).toHaveLength(6);store.finish(job);

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.2 — 2026-09-12
+
+- Flush queued startup warnings before rendering the interactive CLI, preventing
+  SQLite warnings from displacing the cursor and leaving duplicate menu rows on
+  arrow-key navigation. Keep warnings visible and drain them before every prompt,
+  including when a database is first opened between menus.
+- Add a real-renderer subprocess regression for startup warnings, repeated arrow
+  keys, Esc cancellation and terminal raw-mode restoration.
+- Load SQLite only for actual database operations; read-only memory, configuration
+  and help paths do not load SQLite. Keep all database opens behind one entry.
+- Close host and Pi/MCP writer resources on initialization failures, and reject
+  asynchronous transaction/lock results before committing.
+- Support Node 22.19+ on the 22.x line and Node 24+. Align development types,
+  verification scripts and CI/installed-package matrices with the minimum runtime.
+- Read stored conversation/snapshot bodies as UTF-8 bytes to avoid Node 22 SQLite
+  truncation at embedded NUL; preserve existing TEXT storage, deduplication and attribution.
+  Test legacy host proxy routing both with Node's flag and an explicit host dispatcher.
+
 ## 0.3.1 — 2026-09-12
 
 ### Unified interactive management

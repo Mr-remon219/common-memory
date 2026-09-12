@@ -60,7 +60,7 @@ it('status is local, redacted and does not create absent homes or data roots', (
   expect(describeConfiguredNetwork(config,{COMMON_MEMORY_HOME:home,ALL_PROXY:'http://name:password@proxy.invalid'})).toEqual({mode:'env',route:'proxy',reason:'all_proxy',protocol:'http'});
   expect(existsSync(home)).toBe(false);
 });
-it('legacy factory preserves Node env-dispatcher routing after old private NO_PROXY loading', async () => {
+it('legacy factory preserves host env-dispatcher routing after old private NO_PROXY loading', async () => {
   const origin=createServer((_q,r)=>r.end('direct')),proxy=createServer((_q,r)=>r.end('proxy'));
   await new Promise<void>(resolve=>origin.listen(0,'127.0.0.1',resolve));await new Promise<void>(resolve=>proxy.listen(0,'127.0.0.1',resolve));
   const home=root();writeFileSync(join(home,'.env'),'NO_PROXY=127.0.0.1\nCM_LEGACY_KEY=synthetic\nCOMMON_MEMORY_PROXY_URL=http://secret:password@p\n');
@@ -68,10 +68,14 @@ it('legacy factory preserves Node env-dispatcher routing after old private NO_PR
   const source=new URL('../../src/config/runtime.ts',import.meta.url).href;
   // --import expects a module URL; a Windows drive path is parsed as an unsupported scheme.
   const loader=new URL('../mcp/fixtures/source-loader.mjs',import.meta.url).href;
-  const code=`import {createConfiguredMemoryModel} from ${JSON.stringify(source)}; import {defaultConfig} from ${JSON.stringify(new URL('../../src/config/config.ts',import.meta.url).href)}; const config=defaultConfig(); config.remote.model='fake';config.remote.apiKeyEnv='CM_LEGACY_KEY';delete config.remote.proxy;config.remote.baseUrl=${JSON.stringify(endpoint)}; const model=createConfiguredMemoryModel(config); console.log(JSON.stringify({body:await (await fetch(config.remote.baseUrl)).text(),reserved:process.env.COMMON_MEMORY_PROXY_URL===undefined})); await model.close();`;
+  // Older supported Node 22 releases lack --use-env-proxy. Exercise an equivalent
+  // host-owned dispatcher there; Common Memory must not install a global dispatcher.
+  const nativeProxy = process.allowedNodeEnvironmentFlags.has('--use-env-proxy');
+  const hostSetup = nativeProxy ? '' : "import {EnvHttpProxyAgent,setGlobalDispatcher} from 'undici'; const hostProxy=new EnvHttpProxyAgent(); setGlobalDispatcher(hostProxy);";
+  const code=`${hostSetup} import {createConfiguredMemoryModel} from ${JSON.stringify(source)}; import {defaultConfig} from ${JSON.stringify(new URL('../../src/config/config.ts',import.meta.url).href)}; const config=defaultConfig(); config.remote.model='fake';config.remote.apiKeyEnv='CM_LEGACY_KEY';delete config.remote.proxy;config.remote.baseUrl=${JSON.stringify(endpoint)}; const model=createConfiguredMemoryModel(config); console.log(JSON.stringify({body:await (await fetch(config.remote.baseUrl)).text(),reserved:process.env.COMMON_MEMORY_PROXY_URL===undefined})); await model.close(); ${nativeProxy ? '' : 'await hostProxy.close();'}`;
   try {
     const result=await new Promise<string>((resolve,reject)=>{
-      const child=spawn(process.execPath,['--use-env-proxy','--import',loader,'--input-type=module','-e',code],{env:{COMMON_MEMORY_HOME:home,HTTP_PROXY:`http://127.0.0.1:${(proxy.address() as {port:number}).port}`},stdio:['ignore','pipe','pipe']});
+      const child=spawn(process.execPath,[...(nativeProxy ? ['--use-env-proxy'] : []),'--import',loader,'--input-type=module','-e',code],{env:{COMMON_MEMORY_HOME:home,HTTP_PROXY:`http://127.0.0.1:${(proxy.address() as {port:number}).port}`},stdio:['ignore','pipe','pipe']});
       let output='',stderr='';child.stdout.on('data',b=>output+=b);child.stderr.on('data',b=>stderr+=b);child.on('error',reject);child.on('close',(status,signal)=>status===0?resolve(output):reject(new Error(`legacy child exit ${status}, signal ${signal ?? 'none'}\n${stderr}`)));
     });
     expect(JSON.parse(result)).toEqual({body:'direct',reserved:true});

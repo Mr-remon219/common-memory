@@ -1,4 +1,4 @@
-import * as clack from '@clack/prompts';
+import * as clack from './prompt-runtime.js';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 

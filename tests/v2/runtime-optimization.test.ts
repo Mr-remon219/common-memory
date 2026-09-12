@@ -7,6 +7,33 @@ const stores:RuntimeStore[]=[],roots:string[]=[];
 function setup(options:RuntimeOptions={}) {const root=mkdtempSync(join(tmpdir(),'cm-perf-test-'));roots.push(root);const store=new RuntimeStore(root,options);stores.push(store);return store;}
 function add(store:RuntimeStore,id:string,text='x',scope='global'){return store.enqueue({sessionId:'s',entryId:id,text,scope,source:'interactive',observedAt:new Date(0).toISOString()});}
 afterEach(()=>{for(const store of stores.splice(0))store.close();for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true});});
+it('preserves embedded NUL bodies through deduplication, restart, retry and prior context', () => {
+ let now=0;
+ let store=setup({now:()=>now});
+ const text='prefix\0中文😀suffix';
+ expect(add(store,'a',text).text).toBe(text);
+ expect(add(store,'a',text).text).toBe(text);
+ expect(store.pending()[0]!.text).toBe(text);
+ const job=store.claim({force:true})!;expect(job.observations[0]!.text).toBe(text);
+ store.fail(job,new Error('synthetic'));stores.splice(stores.indexOf(store),1);store.close();
+ now=1000;store=new RuntimeStore(roots.at(-1)!,{now:()=>now});stores.push(store);
+ const retry=store.claim({force:true})!;expect(retry.observations[0]!.text).toBe(text);store.finish(retry);
+ const next=add(store,'b','next');expect(store.context(next)[0]!.text).toBe(text);
+ now+=200;store.pruneProcessed(100);expect(add(store,'a',text).text).toBeNull();
+});
+it('uses complete input and delivery bodies for attribution, never a NUL-truncated prefix', () => {
+ const store=setup(),text='prefix\0tail';
+ for(const [session,delivered] of [['exact',text],['prefix','prefix']] as const) {
+  store.stageInput({sessionId:session,text,source:'interactive',scope:'global'});
+  store.delivered(session,delivered,1);store.bind(session,[{id:'one',text:delivered,timestamp:1}]);
+ }
+ expect(store.pending()).toMatchObject([{sessionId:'exact',text,source:'interactive'}]);
+ expect(store.db.prepare("SELECT source,state FROM observations WHERE sessionId='prefix'").get()).toMatchObject({source:'ambiguous',state:'quarantined'});
+ store.stageInput({sessionId:'duplicate',text,source:'interactive',scope:'global'});
+ store.stageInput({sessionId:'duplicate',text,source:'interactive',scope:'global'});
+ store.delivered('duplicate',text,2);store.bind('duplicate',[{id:'one',text,timestamp:2}]);
+ expect(store.db.prepare("SELECT source FROM observations WHERE sessionId='duplicate'").get()!.source).toBe('ambiguous');
+});
 it.each(['中文','😀','a\0b','\ud800','\udc00'])('counts persisted UTF-8 bytes without truncation: %j',text=>{
  const cap=Buffer.byteLength(text)+1,store=setup({byteThreshold:cap,turnThreshold:100,idleMs:100000,maxWaitMs:100000});
  add(store,'a',text);expect(store.claim({maxTurns:1})).toBeNull();add(store,'b','x','project:a');

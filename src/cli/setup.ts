@@ -1,4 +1,4 @@
-import * as clack from '@clack/prompts';
+import * as clack from './prompt-runtime.js';
 import { join } from 'node:path';
 import { configDirectory, loadConfig, type CommonMemoryConfig } from '../config/config.js';
 import { configureModel } from './model-configuration.js';

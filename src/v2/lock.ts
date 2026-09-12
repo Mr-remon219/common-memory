@@ -1,6 +1,6 @@
 import { mkdirSync, lstatSync } from 'node:fs';
 import { resolve, join, parse, relative, sep } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { openDatabase, synchronousResult } from './sqlite.js';
 export function safeDirectory(path: string): void {
   const full = resolve(path); let current = parse(full).root;
   for (const part of relative(current, full).split(sep).filter(Boolean)) {
@@ -16,7 +16,7 @@ export function withRepositoryLock<T>(dataRoot: string, action: () => T): T {
     try { const stat = lstatSync(path + suffix); if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error('UNSAFE_LOCK'); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
   }
-  const db = new DatabaseSync(path, { timeout: 2000 });
-  try { db.exec('PRAGMA journal_mode=DELETE; CREATE TABLE IF NOT EXISTS lock (id INTEGER PRIMARY KEY); BEGIN IMMEDIATE;'); const value = action(); db.exec('COMMIT'); return value; }
+  const db = openDatabase(path, { timeout: 2000 });
+  try { db.exec('PRAGMA journal_mode=DELETE; CREATE TABLE IF NOT EXISTS lock (id INTEGER PRIMARY KEY); BEGIN IMMEDIATE;'); const value = synchronousResult(action()); db.exec('COMMIT'); return value; }
   finally { db.close(); }
 }

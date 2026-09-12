@@ -2,14 +2,16 @@
 
 ## 当前状态
 
-v0.3 使用所有者确认的 MIT 许可证。npm 版本是 **0.3.1**，GitHub tag 是 **v0.3.1**，
+v0.3 使用所有者确认的 MIT 许可证。npm 版本是 **0.3.2**，GitHub tag 是 **v0.3.2**，
 包名 `common-memory-core`，可执行命令 `common-memory`，默认发布标签 `latest`。
 这是面向早期使用者的版本，不声称已经完成全部真实客户端验收。
 
-Linux、macOS 和 WSL 在 Node 24 环境使用同一行安装命令：
+数据库入口、终端警告与兼容性依据见 [数据库运行时审查](database-runtime-audit.md)。
+
+Linux、macOS 和 WSL 在 Node 22.19+（22.x）或 24+ 环境使用同一行安装命令：
 
 ```sh
-npm install -g common-memory-core@0.3.1
+npm install -g common-memory-core@0.3.2
 ```
 
 安装 Node / WSL 是前置要求，不包含在这个 npm 命令中。详细说明见 [README](../README.md)。
@@ -18,7 +20,7 @@ npm install -g common-memory-core@0.3.1
 
 | 路径 | 要求与证据边界 |
 | --- | --- |
-| Core、CLI、stdio MCP | Node **24.x**；Linux / macOS CI 覆盖完整 gate 和真实 tarball 隔离安装 |
+| Core、CLI、stdio MCP | Node **22.19+（22.x）或 24+**；Linux / macOS CI 覆盖完整 gate 和真实 tarball 隔离安装 |
 | Pi | 精确 peer 版本 **0.84.4**；事件契约和包加载测试不等于所有真实交互组合已验证 |
 | Codex / Work 会话捕获 | rollout 仅接受 **Codex 0.153.4**；未知版本拒绝而非猜测；真实 UI Hook 信任仍需验收 |
 | Windows 用户 | 产品部署在 WSL；原生 Windows 是薄桥接，不是第二套 Core 部署。Windows CI 结果应单独查看 |
@@ -33,7 +35,7 @@ Pi peer 暂时是**必需依赖**。即使只用 CLI/MCP，npm 也会安装对�
 
 - `package.json.version`、锁文件、README 安装版本、`test:published` 和 GitHub tag 必须一致。
 - 仓库具有 `LICENSE` 和 `package.json.license: MIT`，不再设置 `private: true`。
-- 用 Node 24 执行 `npm install --package-lock-only --ignore-scripts` 同步变更后的元数据。
+- 用 Node 22.19+（22.x）或 24+ 执行 `npm install --package-lock-only --ignore-scripts` 同步变更后的元数据。
 - `npm run release:check` 检查发布元数据及许可证文件存在，不能代替贡献权利审查或 npm 权限检查。
 - npm 包的同一个版本不能覆盖；发现问题时修复源码并发布新的补丁版本，不移动已有发布 tag。
 
@@ -43,7 +45,7 @@ Pi peer 暂时是**必需依赖**。即使只用 CLI/MCP，npm 也会安装对�
 遗漏新加的 TUI 模块或测试。不要提交 `.env`、记忆目录、SQLite、个人会话、编辑器交换文件。
 
 ```sh
-node --version                 # 24.x
+node --version                 # 22.19+ (22.x) or 24+
 npm ci
 npm run release:check
 node scripts/verify.mjs        # typecheck → boundaries → full tests → build，各一次
@@ -88,14 +90,14 @@ Release/tag 都要由维护者在对应服务上完成。本文和本地验证�
 发布后从一个新目录安装并核对 registry 中的版本：
 
 ```sh
-npm view common-memory-core@0.3.1 version dist.integrity
-npm install -g common-memory-core@0.3.1
+npm view common-memory-core@0.3.2 version dist.integrity
+npm install -g common-memory-core@0.3.2
 common-memory --version
 common-memory --help
 npm run test:published
 ```
 
-npm 发布成功并完成本地 registry 检查后，创建 GitHub Release `v0.3.1`。它会触发
+npm 发布成功并完成本地 registry 检查后，创建 GitHub Release `v0.3.2`。它会触发
 `published-package` 工作流：Ubuntu / macOS 实际执行上述一行全局安装，核对 CLI 版本，
 然后从 npm 下载 tarball 验证类型导出、Writer 提交/重启、Pi 模块和无 Key 的只读 MCP。
 也可通过 Actions 的 Run workflow 输入精确版本手动重跑。这个工作流**不发布包**，只有

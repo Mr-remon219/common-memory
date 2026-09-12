@@ -27,7 +27,12 @@ export function createCommonMemoryPiExtension(options: {runtimeFactory?: () => P
       // Pi only captures delivered user turns; without permission to disclose them there is nothing to capture.
       const current = cfg();
       if (!current.disclosure.allowedProvenance.includes("user_explicit")) throw new Error("Delivered user evidence is not authorized for disclosure");
-      runtime = new PiCaptureRuntime(createConfiguredWriter(current),current.sessionCache);
+      const writer = createConfiguredWriter(current);
+      try { runtime = new PiCaptureRuntime(writer,current.sessionCache); }
+      catch (error) {
+        void writer.close().catch(() => { process.stderr.write('[common-memory] writer cleanup failed.\n'); });
+        throw error;
+      }
       if(!options.configFactory)launchSessionDrain();
       return runtime;
     };

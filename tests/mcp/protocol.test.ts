@@ -77,6 +77,7 @@ it('feeds the unchanged Writer through a real synthetic Responses server', async
 // Capability profiles are fixed at launch: each process only registers what its arguments allow.
 it('read-only launch serves memory_read without a Writer, API key or runtime database', async () => {
   const { env, config } = fixture();
+  env.NODE_OPTIONS = `--import=${pathToFileURL(resolve('tests/cli/fixtures/no-sqlite.mjs')).href}`;
   delete env.CM_TEST_KEY;
   mkdirSync(join(config.dataRoot, 'memory'), { recursive: true });
   writeFileSync(join(config.dataRoot, 'memory/profile.md'), '# Profile\n\n## Background\nStudies ecology and keeps a rescued tortoise named Basalt.\n');
