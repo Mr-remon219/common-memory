@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.3 — 2026-09-12
+
+- Reap CLI test children and wait for their stdio to close before deleting temporary
+  databases, including after a test timeout. This prevents Windows SQLite EBUSY cleanup failures.
+- Give import and crash-recovery subprocess tests explicit time budgets and preserve
+  timeout, signal, stdout and stderr diagnostics instead of reporting only a null exit code.
+- Limit Windows test workers to two to reduce competing durable filesystem operations.
+  Retain the full test suite, crash checkpoints and cancellation assertions.
+- Add real subprocess regressions for database lock release, cancellation, output
+  draining and timeouts. Audit every run for the release SHA, including tag-triggered CI.
+- Retain the Node 22.19+ (22.x) / Node 24+ runtime support and TUI/database fixes from 0.3.2.
+
 ## 0.3.2 — 2026-09-12
 
 - Flush queued startup warnings before rendering the interactive CLI, preventing
