@@ -64,11 +64,16 @@ export function withoutMemorySecrets(body: string | null, config: CommonMemoryCo
 }
 
 /** Fail rather than leave a hand-installed hook/extension pointing at a removed package. */
-function assertNoUnmanagedReferences(roots: string[]): void {
+function assertNoUnmanagedReferences(roots: string[], read = readInstallationFile): void {
   const directories = new Set([...roots, resolve(process.env.CODEX_HOME || join(homedir(), '.codex')), resolve(process.env.PI_CODING_AGENT_DIR || join(homedir(), '.pi/agent')), ...scanIntegrationTargets().map(t => t.root)]);
-  for (const root of directories) for (const file of ['config.toml', 'hooks.json', 'settings.json']) {
-    const body = readInstallationFile(join(root, file));
-    if (body && /common-memory-core|common_memory|common-memory[./\\\s'"]/u.test(body)) throw new Error('检测到未由此安装器管理的 Common Memory 接入；保留程序和数据，避免留下失效客户端配置。');
+  for (const root of directories) {
+    assertSafePath(root);
+    // Codex profile files are independently loaded and may retain launch commands after base removal.
+    const profiles = existsSync(root) ? readdirSync(root).filter(name => name.endsWith('.config.toml')) : [];
+    for (const file of ['config.toml', 'hooks.json', 'settings.json', ...profiles]) {
+      const body = read(join(root, file));
+      if (body && /common-memory-core|common_memory|common-memory[./\\\s'"]/u.test(body)) throw new Error('检测到未由此安装器管理的 Common Memory 接入；保留程序和数据，避免留下失效客户端配置。');
+    }
   }
 }
 
@@ -88,8 +93,10 @@ export async function uninstallCompletely(options: {
   if (contains(options.installation.packageRoot, home) || contains(options.installation.packageRoot, config.dataRoot)) throw new Error('程序目录包含用户配置或记忆，拒绝 npm 卸载。');
   if (options.deleteMemory) assertDeletableData(config, home);
   const state = readInstallationState(home);
-  removeIntegrations(state?.targets.map(t => t.id) ?? [], home);
-  assertNoUnmanagedReferences(state?.targets.map(t => t.root) ?? []);
+  const roots = state?.targets.map(t => t.root) ?? [];
+  // Check the projected removal before committing, so a blocked retry retains custom-root ownership.
+  removeIntegrations(state?.targets.map(t => t.id) ?? [], home, read => assertNoUnmanagedReferences(roots, read));
+  assertNoUnmanagedReferences(roots);
   const removePackage = options.removePackage ?? (async installation => {
     const current = npmInstallation();
     if (current.prefix !== installation.prefix || current.packageRoot !== installation.packageRoot || current.npm !== installation.npm || current.node !== installation.node) throw new Error('npm 安装位置已变化。');

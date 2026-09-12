@@ -98,7 +98,9 @@ busy timeout，生成器给三秒宿主期限；不在 hook 内运行模型。�
 ## Work、activation 与刷新
 
 TUI 选择 ChatGPT 后自动安装本地 Work 的六个 Hook、显式 refresh skill，并保留原有 read MCP。
-自动安装不增加 `memory_init` 或其他导入能力。macOS 用绝对 POSIX 启动；
+默认不增加导入能力；v0.3.8 起可在 TUI 显式选择独立 `memory_init` 接入，并单独确认尚未授予的
+`agent_observation` 披露权限，与安装事务一起保存。Core 来源与固定 capability 边界不变。
+macOS 用绝对 POSIX 启动；
 Windows Desktop 从 WSL 安装到原生 Windows 配置目录，同时写入带 UTF-8 BOM 的 PowerShell 桥接。
 不会探测/捕获网页或普通 Chat。已有受管理只读安装重新确认原选择即可事务性补齐；修改或缺失
 仍保留的资源、显式 hooks=false、未归属捕获定义和不安全路径会中止，不接管用户配置。
@@ -108,7 +110,8 @@ skill 和 Windows bridge，添加/移除一方不改变捕获/刷新身份。官
 所以自动安装均标记内部 `client=codex`，表示 **Codex host 协议**，不声称来自某个前端。
 最后一个 owner 离开才移除共享资源；不从 Hook 祖先或 owner 数推断产品身份。
 手动 `work-config` 仍保留明确选择的 `chatgpt-work` 身份及既有独立 init 配置，
-其导入仍需原有审批和披露授权。不能与同根自动捕获配置叠加安装重复 Hook。
+其导入仍需原有审批和披露授权。自动可选 init 使用稳定 `common-memory-local-init` identity，
+不冒充旧手动 `chatgpt-desktop` 的导入来源或 receipt。不能与同根自动捕获配置叠加安装重复 Hook。
 
 host_activations 在同一 Runtime 保存 client、原生宿主实例、真实 thread、cwd 和 active
 状态；host_snapshots 只有每个 activation 的唯一正文 slot 与 pending 标志。真实
@@ -165,7 +168,9 @@ Windows PowerShell 5.1 → Ubuntu WSL 的合成宿主测试验证 Unicode STDIO�
 `tests/v2/pi-sdk-capture.test.ts` 通过真实 Pi SDK 和合成 provider 验证交付、持久化、十轮封批与退出尾批，
 并验证维护网络不可用时仍能捕获；开发依赖基线为 Pi 0.84.4，另在本机 Pi 0.85.1 SDK 下验证。
 `tests/cli/codex-hook.test.ts` 覆盖官方 task_* / turn_* 等价回合事件、候选匹配及未知结构保留队列。
-`tests/cli/integrations.test.ts` 覆盖自动接入不新增 init 权限、已有只读接入升级、共享资源及安全卸载。
+`tests/cli/integrations.test.ts` 覆盖默认自动接入不新增 init 权限、已有只读接入升级、共享资源及安全卸载。
+v0.3.8 新增 `integration-init.test.ts` / `integration-probe.test.ts`，覆盖显式 init 选择与披露事务、
+macOS GUI/CLI 根分离、真实只读 MCP 握手与超时；TUI / uninstall 回归覆盖取消、能力保留及 profile 残留检查。
 `npm run test:wsl` 使用安装后的包验证 PTY、只读 MCP、自动共享 Work/Codex 资源及原生合成宿主的
 Unicode/路径/刷新/退出码和 Writer/Core 提交；它不代表真实 Desktop UI 的 Hook 审查或完整交互验收。
 精确发布提交及最终验证结果保留在对应 GitHub Release 和 CI 记录中。

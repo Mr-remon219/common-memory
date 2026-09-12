@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { parse } from 'smol-toml';
+import { Client } from '@modelcontextprotocol/client';
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { defaultConfig, saveConfig } from 'common-memory-core';
 const root = process.cwd(), home = join(root, 'automatic-home');
 process.env.COMMON_MEMORY_HOME = home;
@@ -41,4 +44,24 @@ assert.equal(existsSync(join(codex.root, 'skills/memory-refresh/SKILL.md')), fal
 removeIntegrations(['pi', 'chatgpt']);
 assert.deepEqual(JSON.parse(readFileSync(join(pi.root, 'settings.json'), 'utf8')), { theme: 'preserved' });
 assert.equal(existsSync(mcpPath), false); assert.equal(existsSync(join(config.dataRoot, 'runtime.sqlite')), false);
-console.log('Packaged automatic installation, actual Pi wrapper registration, mixed Agent reconciliation and ownership-safe removal passed.');
+const { probeReadIntegration } = await import(new URL('dist/cli/integration-probe.js', packageRoot));
+// The packaged TUI uses these exact generated registrations, not a hand-built MCP command.
+reconcileIntegrations([{ ...codex, init: true }], config.dataRoot, { authorizeAgentImport: { expectedConfig: config } });
+assert.deepEqual(await probeReadIntegration(readInstallationState(), codex), { ok: true, code: 'READ_TOOLS_READY' });
+assert.equal(existsSync(join(config.dataRoot, 'runtime.sqlite')), false);
+writeFileSync(join(home, '.env'), 'OPENAI_API_KEY=synthetic-install-test\n');
+const initConfig = parse(readFileSync(mcpPath, 'utf8')).mcp_servers.common_memory_init;
+const client = new Client({ name: 'installed-init-check', version: '1' });
+const transport = new StdioClientTransport({ command: initConfig.command, args: initConfig.args, env: initConfig.env, stderr: 'pipe' });
+let stderr = ''; transport.stderr?.on('data', chunk => { stderr += chunk; });
+try {
+  await client.connect(transport, { timeout: 10_000 });
+  assert.deepEqual((await client.listTools()).tools.map(t => t.name).sort(), ['memory_init', 'memory_status']);
+  const status = await client.callTool({ name: 'memory_status', arguments: {} });
+  assert.equal(status.structuredContent.initEnabled, true);
+  assert.equal(status.structuredContent.readEnabled, false);
+} catch (cause) { throw new Error(`Installed init MCP failed: ${stderr}`, { cause }); }
+finally { await client.close(); }
+removeIntegrations(['codex']);
+assert.equal(existsSync(mcpPath), false);
+console.log('Packaged installation, Pi registration, mixed reconciliation, real read/init MCP discovery and ownership-safe removal passed.');

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.8 — 2026-09-12
+
+- Add explicit, default-off AI understanding import selection to the TUI for local Codex / Desktop Work. Register a separate init-only MCP with host approval; commit any newly confirmed `agent_observation` disclosure permission atomically with installation. Preserve read-only defaults, provenance and Core write authority.
+- Actually start the managed read MCP and check its tool list after applying integrations, with bounded failure reporting. Show config paths, registered capabilities, reload/profile guidance and the ordinary Chat/web limitation; never equate file ownership with a live host connection. Probes do not read memories or start Writer/init processes.
+- Keep macOS Desktop's default configuration root separate from a terminal-only `CODEX_HOME`; safely migrate old managed resources when reapplied.
+- Check independent Codex profile files before complete uninstall, and preflight unmanaged references before deleting registrations so blocked retries retain custom-root ownership. Preserve unrelated files, shared owners and memory data.
+- Add installation/consent/rollback/probe/removal regressions and installed-package discovery checks for both read and init MCP. Upgrade the npm package, then reapply Agent Integration; existing read-only installs do not automatically acquire import authority.
+
 ## 0.3.7 — 2026-09-12
 
 - Fix ChatGPT Work and Codex hook configuration warnings: emit `additionalContextLimit = 0` only for SessionStart, UserPromptSubmit and PostToolUse, never Stop, Interrupt or SessionEnd.

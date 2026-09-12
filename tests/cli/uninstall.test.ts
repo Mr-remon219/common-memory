@@ -72,6 +72,30 @@ it('unmanaged legacy integrations block package removal instead of being silentl
   const removePackage = vi.fn(async () => {});
   await expect(run(false, removePackage)).rejects.toThrow('未由此安装器管理'); expect(removePackage).not.toHaveBeenCalled(); expect(loadConfig()).toEqual(config);
 });
+it('unmanaged profile launches block complete uninstall before removing managed custom-root ownership, including retries', async () => {
+  const custom = join(root, 'old-custom-desktop');
+  installIntegrations([{ id: 'chatgpt', name: 'ChatGPT', root: custom, mode: 'posix', hooks: false, init: true }], config.dataRoot);
+  const profile = join(custom, 'legacy.config.toml');
+  writeFileSync(profile, '[mcp_servers.common_memory_legacy]\ncommand="old-common-memory"\n');
+  const state = readInstallationState(), removePackage = vi.fn(async () => {});
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await expect(run(false, removePackage)).rejects.toThrow('未由此安装器管理');
+    expect(removePackage).not.toHaveBeenCalled(); expect(readInstallationState()).toEqual(state);
+    expect(existsSync(join(custom, 'config.toml'))).toBe(true);
+    expect(readFileSync(profile, 'utf8')).toContain('common_memory_legacy');
+  }
+  rmSync(profile);
+  await run(false, removePackage);
+  expect(removePackage).toHaveBeenCalledTimes(1); expect(existsSync(join(custom, 'config.toml'))).toBe(false);
+});
+it('unmanaged base configuration also blocks removal before losing custom-root ownership', async () => {
+  const custom = join(root, 'custom-desktop');
+  installIntegrations([{ id: 'chatgpt', name: 'ChatGPT', root: custom, mode: 'posix', hooks: false }], config.dataRoot);
+  const path = join(custom, 'config.toml'), body = readFileSync(path, 'utf8') + '\n[mcp_servers.common_memory_old]\ncommand="old"\n';
+  writeFileSync(path, body); const state = readInstallationState(), removePackage = vi.fn(async () => {});
+  await expect(run(false, removePackage)).rejects.toThrow('未由此安装器管理');
+  expect(readInstallationState()).toEqual(state); expect(readFileSync(path, 'utf8')).toBe(body); expect(removePackage).not.toHaveBeenCalled();
+});
 it('private-env cleanup removes only exact managed assignments, not similarly named values', () => {
   expect(withoutMemorySecrets('export TEST_KEY=secret\nTEST_KEY_COPY=keep\n# keep comment\n', config)).toBe('TEST_KEY_COPY=keep\n# keep comment\n');
   expect(withoutMemorySecrets('TEST_KEY=secret\n', config)).toBeNull();

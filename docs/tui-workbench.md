@@ -8,7 +8,7 @@ common-memory
 
 首次运行进入初始化；完成以后再次运行直接进入主 TUI。主界面分为
 **Agent Integration / Memory Control / Model & Configuration** 三个栏目。
-单选使用 ↑↓ / Enter，Esc 返回上一步；首页 Esc 退出。Agent 列表使用 Space 勾选、Enter 应用。
+单选使用 ↑↓ / Enter，Esc 返回上一步；首页 Esc 退出。Agent 列表使用 Space 勾选、Enter 继续；本地 MCP 宿主随后可选择导入能力再应用。
 
 ## 首次 Setup
 
@@ -16,7 +16,7 @@ common-memory
 Model Configuration
   Provider → Base URL → API Key → Model → Enter 保存
 Agent Integration
-  扫描可接入状态 → Space 多选 → Enter 自动安装
+  扫描可接入状态 → Space 多选 → 可选 AI 理解导入 / 披露确认 → 自动安装与只读 MCP 检查
 Done → 退出
 ```
 
@@ -65,7 +65,7 @@ Qwen、Kimi、Zhipu 使用上表的中国区普通 API；其他区域、Coding P
 日常管理以已有受管理接入作为初始勾选状态：
 
 - **Space**：选择 / 取消选择，尚未写入安装配置。
-- **Enter**：将最终选择与原状态比较；新增项自动安装，取消项自动移除，继续勾选的项核对并补齐当前受管理资源（包括只读安装升级）。
+- **Enter**：继续选择 Codex / Desktop Work 的可选 `memory_init`（默认未选，已有选择保留），再应用；新增项安装，取消项移除，继续勾选的项核对并补齐当前受管理资源。
 - **Esc**：返回，不应用本次选择。
 
 例如原来 Pi、Codex 已勾选，改为 Pi、ChatGPT 已勾选后确认，会保留 Pi、移除 Codex 接入、
@@ -79,10 +79,12 @@ Qwen、Kimi、Zhipu 使用上表的中国区普通 API；其他区域、Coding P
 | 客户端 | 自动安装内容 | 当前边界 |
 | --- | --- | --- |
 | Pi（不限制版本号） | 用户级 `settings.json` 中的 Extension wrapper | 同一 Linux/macOS/WSL 环境；发现可执行文件即可选择，事件兼容性不等于所有历史版本均已验证 |
-| Codex CLI | 用户级只读 MCP；>=0.153.4 数字版本另装 Hooks 和显式 refresh skill | 无版本上限；未知结构拒绝，不猜测交付 |
-| ChatGPT | Desktop 本地 Work 的 Hooks、显式 refresh skill、原有 read MCP；Windows 附 WSL bridge | 自动收集仅限本地 Work；不是普通 Chat 或网页版；仍需宿主信任与披露授权 |
+| Codex CLI | 用户级只读 MCP；可选独立 init MCP；>=0.153.4 数字版本另装 Hooks 和显式 refresh skill | 无版本上限；未知结构拒绝，不猜测交付 |
+| ChatGPT | Desktop 本地 Work 的 Hooks、refresh skill、read MCP 和可选 init MCP；Windows 附 WSL bridge | 自动收集仅限本地 Work；不是普通 Chat 或网页版；仍需宿主信任与披露授权 |
 
-路径来自 PATH、标准用户目录、`CODEX_HOME` 和 `PI_CODING_AGENT_DIR`。
+路径来自 PATH、标准用户目录、Codex CLI 的 `CODEX_HOME` 和 Pi 的 `PI_CODING_AGENT_DIR`。
+macOS Desktop 使用用户默认 `~/.codex`，不会把终端的 `CODEX_HOME` 当作独立 GUI 的路径；
+v0.3.7 受此问题影响的受管理安装重新应用时会安全迁移，保留其他 owner 的资源。
 macOS 检查 `/Applications/ChatGPT.app` 和 `~/Applications/ChatGPT.app` 目录；WSL 通过只读 PowerShell 探测 Windows Appx 和开始菜单应用，确认桌面程序与 Windows 用户目录后写入固定 WSL 启动配置。
 Windows 优先检查 `*ChatGPT*` 包，未命中时用 `Get-StartApps` 查显示名 `ChatGPT`，兼容包名仍为 `OpenAI.Codex` 的桌面版；只有 Codex 而没有 ChatGPT 显示名不会被当成 ChatGPT。
 **不会只因存在 WSL 就推断 Windows Desktop 已安装或使用 WSL agent。**
@@ -91,8 +93,23 @@ Windows 优先检查 `*ChatGPT*` 包，未命中时用 `Get-StartApps` 查显示
 这些是发现与包安装依据，不是所有宿主版本的运行时兼容性保证。
 
 同一宿主配置根中的 Codex / ChatGPT 共享一套捕获和刷新资源；内部 client=codex 表示宿主协议，
-不推断前端身份。自动安装不增加导入能力；移除一方保留另一方所需资源。
-已有受管理只读接入重新按 Enter 即可升级；外部修改不会被覆盖。
+不推断前端身份。read、Hooks 和可选 init 分别记录 owner，移除一方保留另一方所需资源。
+同根宿主的物理 MCP 配置共享，不能承诺 Codex 与 Work 之间的前端能力隔离。
+已有受管理只读接入重新确认选择即可升级；外部修改不会被覆盖。
+
+### 可选导入与连接诊断
+
+`AI 理解导入` 为所选本地宿主注册独立 `common_memory_init`，仅暴露 `memory_init` / `memory_status`，
+设置宿主审批；原 `common_memory` 始终只读。首次尚未授权 `agent_observation` 时明确询问是否允许将
+AI 整理材料发送给配置的模型；确认与安装在同一可恢复事务中提交。取消、冲突或拒绝不会部分扩大权限。
+不扩大读写范围，不添加 relay 或直接写入能力。导入写端需要模型密钥；缺失时 TUI 会阻止该选择，
+可取消导入而仅安装只读接入。移除导入接入不撤销全局披露授权或已接受请求。
+
+保存后实际启动受管理的只读 MCP 并执行 `initialize` / `tools/list`，有超时；不读取记忆、不启动
+init/Writer、不调用模型。失败明确标成检查失败，配置保留供修复。界面分别列出配置路径、只读工具、
+是否注册导入，以及重启后 `/mcp` 的确认入口；检查通过不等于当前宿主会话已加载。
+若工具仍不可见，检查是否使用本地 Work、新会话是否已重载、当前 profile / 项目是否覆盖 MCP。
+ChatGPT 普通 Chat 与网页版 Plugins 不读取本地配置；本产品没有可接入它们的 HTTP MCP 服务。
 
 安装后的客户端需要重启/重新加载以读取配置。Hooks 仍须宿主信任；安装器不设置信任凭据，不改审批或沙箱策略，
 也不覆盖显式禁用 Hooks 的设置。已安装 ≠ 正在运行、已获信任或真实宿主连接验收通过。
@@ -163,7 +180,8 @@ API Key 与代理凭据不显示明文；配置中的凭据引用显示为变量
 - **Memory Data 单独确认，默认保留**：保留整个 `dataRoot`，包括 Markdown、持久 SQLite、项目注册和恢复资料，
   而非只保留 `memory/`。小型安装记录保留自定义数据位置，供重装使用，不含 API Key。
 - 明确确认删除时才删除当前数据目录；共享 / 重叠目录、链接、特殊文件和活动 Writer 租约会阻止删除。
-- 未管理的旧接入会阻止包删除，避免留下失效 Hooks；npm 失败时保留配置和数据，并明确报告已经移除的接入。
+- 未管理的旧接入（包括 Codex `*.config.toml` profile）在提交接入移除前检查；发现后保留安装归属，
+  重试仍能检查原自定义目录。不会自动删除用户 profile。npm 失败时保留配置和数据，并报告已移除的接入。
 - 私有 `.env` 中无关变量保留。不递归删除整个用户目录或配置 Home。
 
 ## 兼容与非交互使用

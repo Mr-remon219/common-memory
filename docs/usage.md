@@ -20,14 +20,14 @@ Memory runs inside WSL and the ChatGPT/Codex desktop app reaches it through `wsl
 
 ## Setup
 
-Requires Node.js 22.19+ (22.x) or 24+. Installation: `npm install -g common-memory-core@0.3.7`.
+Requires Node.js 22.19+ (22.x) or 24+. Installation: `npm install -g common-memory-core@0.3.8`.
 The following TUI describes the current source. Source contributors use
 `npm ci && npm run build`, then `node dist/cli/main.js`.
 **`common-memory` is the single entry for interactive management.** First run selects
 Provider → Base URL → hidden API Key → Model, then offers Pi, Codex and ChatGPT for
 multi-select automatic integration and exits. Presets prefill an editable URL and
 load the model list from that URL; Custom asks for the model name without discovery.
-Space toggles Agent selections; Enter applies them. Later launches open the main TUI
+Space toggles Agent selections; Enter continues to optional init selection and applies them. Later launches open the main TUI
 without repeating setup. An interrupted setup resumes its pending integration step.
 Model discovery runs only when entering model selection, never on ordinary configured
 startup or in runtime. Model & Configuration → Change Model / Provider reopens the
@@ -195,7 +195,7 @@ Agent selection; once initialized, each launch opens these three columns:
 
 | Menu | Tasks |
 | --- | --- |
-| Agent Integration | Pi, Codex and ChatGPT availability and managed selection; Space toggles, Enter applies installation/removal differences |
+| Agent Integration | Pi, Codex and ChatGPT availability and managed selection; Space toggles; optional init selection and disclosure confirmation precede installation/removal |
 | Memory Control | Search / View Memory, Adjust Memory, and processing status with continuation/retry for pending requests |
 | Model & Configuration | Current Configuration, Change Model / Provider, network settings, model connection test, and complete uninstall |
 
@@ -648,7 +648,16 @@ paths of the runtime you are actually using.
 
 Select ChatGPT in **Agent Integration** on macOS or from WSL after local Desktop discovery.
 The installer writes six hooks and an explicit refresh skill while preserving the existing
-read MCP capability. It does not install `memory_init` or other import capabilities.
+read MCP capability. By default it does not install import capabilities. In v0.3.8, explicitly
+selecting AI Understanding Import installs a separate `common_memory_init` MCP with
+`memory_init` / `memory_status` and host approval. Missing `agent_observation` permission
+requires a separate disclosure confirmation, committed atomically with registration.
+No relay/direct-write authority or scope expansion is added. Shared-root hosts share
+physical tools; removing one owner preserves resources needed by another. Revoking a host
+registration does not revoke global disclosure permission or already accepted imports.
+The post-install check starts only the read MCP and lists tools; it does not read memories,
+start the Writer or prove that the current Desktop/CLI session has loaded its configuration.
+See [TUI diagnostics and removal](tui-workbench.md#可选导入与连接诊断).
 Native Windows receives a BOM PowerShell bridge with fixed
 WSL distro/user/Node/CLI/home and native process identity; it converts only cwd/transcript paths.
 No web Chat or ordinary Chat capture, trust-store changes or bypass flags are installed.

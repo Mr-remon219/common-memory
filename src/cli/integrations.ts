@@ -7,7 +7,7 @@ import { isAbsolute, join, resolve, win32 } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { parse as parseTomlDocument, stringify as stringifyToml } from 'smol-toml';
-import { configDirectory } from '../config/config.js';
+import { configDirectory, validateConfig, type CommonMemoryConfig } from '../config/config.js';
 import type { LaunchOptions } from './host-launch.js';
 import { installationTransaction, readInstallationFile, type FileChange } from './installation-files.js';
 import type { IntegrationId, IntegrationTarget } from './integration-targets.js';
@@ -41,7 +41,7 @@ export function readInstallationState(home = configDirectory()): InstallationSta
   const value: unknown = JSON.parse(raw.replace(/^\ufeff/u,''));
   if (!object(value) || value.version !== 1 || typeof value.setupComplete !== 'boolean' || !Array.isArray(value.targets) || !Array.isArray(value.resources)
     || value.dataRoot !== undefined && (typeof value.dataRoot !== 'string' || !isAbsolute(value.dataRoot))) throw new Error('安装记录损坏，未修改任何客户端。');
-  for (const target of value.targets) if (!object(target) || !integrationIds.includes(String(target.id)) || typeof target.name !== 'string' || typeof target.root !== 'string' || !isAbsolute(target.root) || !['posix', 'windows-wsl'].includes(String(target.mode)) || typeof target.hooks !== 'boolean') throw new Error('客户端安装记录损坏。');
+  for (const target of value.targets) if (!object(target) || !integrationIds.includes(String(target.id)) || typeof target.name !== 'string' || typeof target.root !== 'string' || !isAbsolute(target.root) || !['posix', 'windows-wsl'].includes(String(target.mode)) || typeof target.hooks !== 'boolean' || target.init !== undefined && (typeof target.init !== 'boolean' || target.id === 'pi' && target.init)) throw new Error('客户端安装记录损坏。');
   for (const resource of value.resources) {
     if (!object(resource) || typeof resource.path !== 'string' || !isAbsolute(resource.path) || !['file', 'toml', 'array'].includes(String(resource.kind)) || !Array.isArray(resource.owners) || !resource.owners.length || resource.owners.some(id => !integrationIds.includes(String(id)))) throw new Error('安装文件归属记录损坏。');
     if (resource.kind !== 'array' && typeof resource.content !== 'string') throw new Error('安装内容记录损坏。');
@@ -85,6 +85,7 @@ export function integrationHealth(state: InstallationState, id: IntegrationId): 
 function desiredResources(target: IntegrationTarget, home: string, env: NodeJS.ProcessEnv): Resource[] {
   const owner = [target.id], cli = join(applicationRoot, 'dist/cli/main.js');
   if (target.id === 'pi') {
+    if (target.init) throw new Error('Pi 不支持 MCP 导入接入。');
     const wrapper = join(home, 'integrations/pi/common-memory.js');
     const extension = pathToFileURL(join(applicationRoot, 'dist/pi-extension/index.js')).href;
     const body = `// Common Memory managed integration\nimport { resolve } from 'node:path';\nexport default async function(pi) {\n  const home = ${JSON.stringify(home)};\n  if (process.env.COMMON_MEMORY_HOME && resolve(process.env.COMMON_MEMORY_HOME) !== home) throw new Error('Common Memory home conflicts with the installed Pi integration');\n  process.env.COMMON_MEMORY_HOME = home;\n  const { default: extension } = await import(${JSON.stringify(extension)});\n  return extension(pi);\n}\n`;
@@ -106,6 +107,16 @@ function desiredResources(target: IntegrationTarget, home: string, env: NodeJS.P
   const tag = createHash('sha256').update(home).digest('hex').slice(0, 12);
   const config = stringifyToml({ mcp_servers: { common_memory: { command, args, ...(environment ? { env: environment } : {}), enabled_tools: ['memory_read', 'memory_status'] } } });
   const resources: Resource[] = [{ kind: 'toml', path: join(target.root, 'config.toml'), content: `\n# common-memory:${tag}:begin\n${config}# common-memory:${tag}:end\n`, owners: owner }];
+  if (target.init) {
+    const initArgs = [...args];
+    initArgs[initArgs.indexOf('--capability') + 1] = 'init';
+    initArgs[initArgs.indexOf('--client-id') + 1] = 'common-memory-local-init';
+    const initConfig = stringifyToml({ mcp_servers: { common_memory_init: {
+      command, args: initArgs, ...(environment ? { env: environment } : {}),
+      enabled_tools: ['memory_init', 'memory_status'], default_tools_approval_mode: 'approve',
+    } } });
+    resources.push({ kind: 'toml', path: join(target.root, 'config.toml'), content: `\n# common-memory:${tag}:init:begin\n${initConfig}# common-memory:${tag}:init:end\n`, owners: owner });
+  }
   if (target.hooks) {
     const launch:LaunchOptions={wsl:target.mode==='windows-wsl',cli};
     const launchEnv={...env,COMMON_MEMORY_HOME:home};
@@ -262,12 +273,13 @@ export function installIntegrations(targets: IntegrationTarget[], dataRoot: stri
   });
 }
 
-export function removeIntegrations(ids: IntegrationId[], home = configDirectory()): void {
+export function removeIntegrations(ids: IntegrationId[], home = configDirectory(), preflight?: (readPlannedFile: (path: string) => string | null) => void): void {
   installationTransaction(home, commit => {
     const plan = integrationPlan(); plan.get(statePath(home));
     const state = readInstallationState(home);
-    if (!state) return;
+    if (!state) { preflight?.(plan.get); return; }
     stageRemove(state, ids, home, plan);
+    preflight?.(plan.get);
     plan.put(statePath(home), JSON.stringify(state, null, 2) + '\n');
     commit([...plan.changes.values()]);
   });
@@ -278,6 +290,8 @@ export interface IntegrationChanges { installed: IntegrationId[]; removed: Integ
 /** Apply the final selected state in one recoverable transaction, keeping unchanged integrations intact. */
 export function reconcileIntegrations(targets: IntegrationTarget[], dataRoot: string, options: {
   home?: string; env?: NodeJS.ProcessEnv; expectedState?: InstallationState | null;
+  /** Only set after an explicit disclosure confirmation; committed with host registration. */
+  authorizeAgentImport?: { expectedConfig: CommonMemoryConfig };
 } = {}): IntegrationChanges {
   const home = resolve(options.home ?? configDirectory()), env = options.env ?? process.env;
   return installationTransaction(home, commit => {
@@ -285,6 +299,16 @@ export function reconcileIntegrations(targets: IntegrationTarget[], dataRoot: st
     const previous = readInstallationState(home);
     if (options.expectedState !== undefined && !isDeepStrictEqual(previous, options.expectedState)) throw new Error('Agent 接入状态已被其他操作修改，请重新打开页面后再试。');
     const state = previous ?? emptyState();
+    if (options.authorizeAgentImport) {
+      if (!targets.some(t => t.id !== 'pi' && t.init)) throw new Error('未选择导入接入，未扩大披露授权。');
+      const path = join(home, 'config.json'), raw = plan.get(path);
+      const current = raw === null ? null : validateConfig(JSON.parse(raw));
+      if (!isDeepStrictEqual(current, options.authorizeAgentImport.expectedConfig) || current?.dataRoot !== dataRoot) throw new Error('配置已被其他操作修改，请重新打开页面后再试。');
+      const next = validateConfig({ ...current, disclosure: { ...current.disclosure,
+        allowedProvenance: [...new Set([...current.disclosure.allowedProvenance, 'agent_observation'])],
+      } });
+      plan.put(path, JSON.stringify(next, null, 2) + '\n');
+    }
     if (new Set(targets.map(t => t.id)).size !== targets.length) throw new Error('Agent 选择包含重复项。');
     const removed = state.targets.filter(t => !targets.some(selected => selected.id === t.id)).map(t => t.id);
     const added = targets.filter(t => !state.targets.some(installed => installed.id === t.id));

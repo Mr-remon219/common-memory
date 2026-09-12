@@ -11,6 +11,8 @@ export interface IntegrationTarget {
   root: string;
   mode: 'posix' | 'windows-wsl';
   hooks: boolean;
+  /** Explicit host opt-in; independent of Core disclosure permission. */
+  init?: boolean;
   hint?: string;
 }
 export interface DiscoveryEnvironment {
@@ -69,7 +71,8 @@ export function scanIntegrationTargets(options: DiscoveryEnvironment = {}): Inte
   const desktop = platform === 'darwin' && (options.applications ?? ['/Applications', join(home, 'Applications')]).some(directory => {
     try { return statSync(join(directory, 'ChatGPT.app')).isDirectory(); } catch { return false; }
   });
-  if (desktop) targets.push({ id: 'chatgpt', name: 'ChatGPT Desktop', root: resolve(env.CODEX_HOME || join(home, '.codex')), mode: 'posix', hooks: true, hint: '本地 Work 读取 + 会话维护；Hooks 仍需宿主信任' });
+  // A terminal's CODEX_HOME selects its CLI, not an independently launched GUI application.
+  if (desktop) targets.push({ id: 'chatgpt', name: 'ChatGPT Desktop', root: join(home, '.codex'), mode: 'posix', hooks: true, hint: '本地 Work 读取 + 会话维护；Hooks 仍需宿主信任' });
   else if (platform === 'linux' && env.WSL_DISTRO_NAME) {
     const windows = (options.windowsHome ?? nativeWindowsHome)();
     if (windows) targets.push({ id: 'chatgpt', name: 'ChatGPT Desktop', root: join(windows, '.codex'), mode: 'windows-wsl', hooks: true, hint: 'Windows Work 读取 + 会话维护；Hooks 仍需宿主信任' });

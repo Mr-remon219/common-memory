@@ -10,7 +10,7 @@ Common Memory 把长期内容保存在本机的 Markdown 中，通过 Pi 扩展�
 会话接入和本地 MCP，让助手读取获授权的个人偏好、背景与项目上下文。模型提出维护决定，
 本地 Core 校验后写入；你可以直接查看和编辑文件。
 
-**v0.3.7** · npm 包名 `common-memory-core` · 命令 `common-memory` · MIT 许可证。
+**v0.3.8** · npm 包名 `common-memory-core` · 命令 `common-memory` · MIT 许可证。
 这是早期版本；安装可用不等于所有真实宿主和模型行为均已验证，具体边界见下文。
 
 ## 一行安装
@@ -18,7 +18,7 @@ Common Memory 把长期内容保存在本机的 Markdown 中，通过 Pi 扩展�
 在 **Linux、macOS 或 Windows 的 WSL 终端**中执行（需已安装 **Node.js 22.19+（22.x）或 24+**，包含 npm）：
 
 ```sh
-npm install -g common-memory-core@0.3.7
+npm install -g common-memory-core@0.3.8
 ```
 
 安装后运行 `common-memory` 开始配置。无需克隆仓库、手动构建或先启动 Pi。
@@ -30,7 +30,7 @@ npm install -g common-memory-core@0.3.7
   安装，或用现有版本管理器切换。上面的一行命令安装 Common Memory，**不会安装 Node 或 WSL**。
 - Windows 用户在 WSL 内安装，不要在原生 PowerShell 中安装另一份 Core。
 - 如遇全局安装权限错误，使用用户级 Node 版本管理器；不建议 `sudo npm install`。
-- 不想全局安装？可用 `npx --yes common-memory-core@0.3.7` 运行已发布版本。
+- 不想全局安装？可用 `npx --yes common-memory-core@0.3.8` 运行已发布版本。
 - 本版仍有必需的 Pi peer 依赖（`*`，不锁宿主版本）：仅使用 CLI/MCP 也会安装该依赖树，但不会自动启动或配置 Pi。
 
 ## 第一次使用与日常管理
@@ -45,14 +45,16 @@ common-memory
 
 1. **配置模型**：选择 Provider，填写或确认 Base URL，隐藏输入 API Key，再选择 Model。
    预置 Provider 提供默认 URL，并从填写的地址获取实时模型目录；Custom 手动填写 Model。
-2. **选择 Agent**：查看 Pi、Codex、ChatGPT 的可接入状态，Space 选择 / 取消，Enter 应用并自动安装。
-   可以不接入任何 Agent。安装后退出初始化；中断的接入步骤可在下次启动继续。
+2. **选择 Agent**：Space 选择 / 取消，Enter 继续；Codex / Desktop Work 可再选择 `memory_init` 导入（默认不选）。
+   首次开启导入会确认 AI 材料的模型披露授权，与接入配置一并保存。可以不接入任何 Agent。
+   安装后自动检查只读 MCP 启动与工具列表，不读取记忆；仍需重启宿主并在新会话 `/mcp` 确认。
+   ChatGPT 普通 Chat / 网页版 Plugins 不读取本地配置，不属于此接入。
 
 完成初始化后，再次运行 `common-memory` 直接进入主 TUI：
 
 | 栏目 | 操作 |
 | --- | --- |
-| **Agent Integration** | Space 修改当前选择，Enter 按差异安装或移除接入；保留仍然选中的 Agent |
+| **Agent Integration** | 修改 Agent 与可选导入选择，按差异安装或移除；保留仍然选中的接入 |
 | **Memory Control** | **Search / View Memory** 查找、查看授权记忆；**Adjust Memory** 用自然语言调整记忆并查看处理状态 |
 | **Model & Configuration** | **Current Configuration** 查看配置和密钥状态；**Change Model / Provider** 重进模型配置，另可设置网络、测试连接或完整卸载 |
 
@@ -105,6 +107,7 @@ common-memory --help                    # 入口说明；自动化命令见使�
 | Windows | Core 运行在 WSL；原生 Windows 桌面宿主通过生成的 WSL 桥接访问同一存储 |
 | Pi | 不按版本号限制接入；在同一 POSIX / WSL 环境运行，使用相同 `COMMON_MEMORY_HOME`。事件契约以 0.84.4 为验证基线，不代表所有历史版本均已实测 |
 | Codex / ChatGPT Work 会话捕获 | rollout 最低 **Codex 0.153.4**，无版本上限；按已知结构验证，未知格式拒绝；Desktop 仅本地 Work |
+| Codex / Work 主动导入 | 在 Agent Integration 显式勾选；独立 init 进程、宿主审批与 Core 披露授权，非直接写文件 |
 | 其他本地 MCP 宿主 | **stdio only**；`read`、`init`、`relay` 能力在启动时固定 |
 
 只读使用不需要模型 API Key，也不会打开 SQLite。客户端可用性和受管理安装状态不证明客户端在线、
