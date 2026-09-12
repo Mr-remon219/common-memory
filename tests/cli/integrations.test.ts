@@ -10,9 +10,12 @@ import { installationTransaction, readInstallationFile, writeInstallationFile } 
 import { scanIntegrationTargets, type IntegrationTarget } from '../../src/cli/integration-targets.js';
 
 vi.mock('node:child_process', async importOriginal => {const actual=await importOriginal<typeof import('node:child_process')>();return {...actual,execFileSync:vi.fn(actual.execFileSync)};});
+const nativePlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+// These two fixtures model a WSL installer even when the test runner is macOS.
+const simulateWslRuntime = () => Object.defineProperty(process, 'platform', { ...nativePlatform, value: 'linux' });
 let root: string, home: string, dataRoot: string;
 beforeEach(() => { root = realpathSync(mkdtempSync(join(tmpdir(), 'cm-integrations-'))); home = join(root, 'common-memory'); dataRoot = join(home, 'data'); vi.stubEnv('COMMON_MEMORY_HOME', home); stubInstalledBuild();vi.mocked(execFileSync).mockImplementation((()=> 'C:\\Synthetic\\common-memory-bridge.ps1') as unknown as typeof execFileSync); });
-afterEach(() => { vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }); });
+afterEach(() => { Object.defineProperty(process, 'platform', nativePlatform); vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }); });
 function target(id: 'codex' | 'chatgpt' | 'pi', hooks = id !== 'chatgpt'): IntegrationTarget { return { id, name: id, root: join(root, id === 'pi' ? 'pi' : 'codex'), mode: 'posix', hooks }; }
 const install = (targets: IntegrationTarget[]) => installIntegrations(targets, dataRoot, { home });
 
@@ -133,6 +136,7 @@ it.each(['system', 'user'])('discovers macOS Desktop in the %s Applications dire
   expect(scanIntegrationTargets(options)).toEqual([]);
 });
 it('discovers native Windows Desktop from an explicit app probe, not merely WSL presence', () => {
+  simulateWslRuntime();
   const base = { home: root, env: { PATH: '', WSL_DISTRO_NAME: 'Synthetic' }, platform: 'linux' as const, executable: () => undefined };
   expect(scanIntegrationTargets({ ...base, windowsHome: () => undefined })).toEqual([]);
   const [desktop] = scanIntegrationTargets({ ...base, windowsHome: () => join(root, 'windows') });
@@ -263,6 +267,7 @@ it('unowned host capture definitions are never duplicated across JSON and inline
  expect(()=>install([desktop])).toThrow('未归属');expect(readInstallationState()).toBeNull();
 });
 it('managed Windows read-only Desktop upgrades without changing its exact read block',()=>{
+ simulateWslRuntime();
  const desktop={...target('chatgpt',false),mode:'windows-wsl' as const};const env={WSL_DISTRO_NAME:'Synthetic'};
  installIntegrations([desktop],dataRoot,{home,env});const before=readInstallationState()!,read=before.resources[0]!.content!;
  reconcileIntegrations([{...desktop,hooks:true}],dataRoot,{home,env,expectedState:before});
