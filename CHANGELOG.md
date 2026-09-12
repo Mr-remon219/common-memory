@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.4 — 2026-09-12
+
+- Split verification by deployment: Linux and macOS retain full Node 22.19 / 24 gates and isolated npm installs; native Windows runs a small PowerShell bridge suite instead of the entire Core suite.
+- Exercise generated PowerShell in a real native process: fixed WSL arguments, Unicode stdin, path conversion, encoded hook commands, capability isolation and failure exit codes.
+- Fix PowerShell 5.1 native argument forwarding for quoted Linux paths and Windows paths with spaces and trailing backslashes. Existing Windows hook bundles must be regenerated to receive this fix.
+- Add an explicit real-WSL installed-package smoke for first-run/repeated TUI navigation, read-only MCP through wsl.exe, and synthetic native host hooks/refresh/Writer drain. Missing WSL interop fails instead of silently skipping.
+- Remove duplicated tag Core runs and migrate the environment-dependent WSL unit test into the dedicated smoke. Critical Core durability and recovery tests remain in the POSIX full suite.
+
 ## 0.3.3 — 2026-09-12
 
 - Reap CLI test children and wait for their stdio to close before deleting temporary

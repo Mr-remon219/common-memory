@@ -15,7 +15,7 @@ Current implementation and boundaries are described in `README.md` and enforced 
 
 For documentation/instruction-only edits, check accuracy against current files, links, diffs, and skill frontmatter where applicable; code tests are unnecessary unless an executable contract changes.
 
-For code, runtime prompts, configuration, or build changes, Node 22.19+ (22.x) or Node 24+ and installed dependencies are required. Run `node scripts/verify.mjs` (or `npm run verify`) for the full gate: typecheck once, boundary checks, full tests once, then build. CI and prepublish use the same entry.
+For code, runtime prompts, configuration, or build changes, Node 22.19+ (22.x) or Node 24+ and installed dependencies are required. Run `node scripts/verify.mjs` (or `npm run verify`) for the full gate: typecheck once, boundary checks, full tests once, then build. Linux/macOS CI and prepublish use the same entry. Native Windows runs only `npm run test:windows` (PowerShell bridge contracts); it is not a Core deployment. Before release, run `npm run test:wsl` on real WSL after build, and retain the exact commit/version and output. This checks installed TUI and native host interop; generic Linux and Windows CI cannot replace it.
 
 Use `test:fixtures`, `test:recovery`, or `test:remote-contract` for a focused change; those tests are included in the full suite and do not need to run again beside it. For package export/consumer changes, also run `npm run test:consumer` after the build. Live model calls and personal data are not needed for the fake-provider contract tests.
 

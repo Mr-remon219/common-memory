@@ -10,11 +10,9 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["tests/**/*.test.ts"],
+    exclude: ["tests/windows/**/*.test.ts"],
     testTimeout: 20_000,
     hookTimeout: 20_000,
     pool: "forks",
-    // Durable SQLite/fsync fixtures also spawn Node children. Avoid competing
-    // filesystem-heavy workers exhausting short process budgets on Windows CI.
-    ...(process.platform === 'win32' ? { maxWorkers: 2 } : {})
   }
 });

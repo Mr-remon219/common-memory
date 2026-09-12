@@ -7,6 +7,46 @@ import { runtimeLaunch, shellQuote, type LaunchOptions } from './host-launch.js'
 import type { HostClient } from './codex-session.js';
 const psQuote=(s:string)=>"'"+s.replaceAll("'","''")+"'";
 
+// Windows PowerShell 5.1 rewrites native argv (including trailing backslashes).
+// Use the Windows CRT quoting rules explicitly with ProcessStartInfo instead.
+// https://learn.microsoft.com/en-us/cpp/c-language/parsing-c-command-line-arguments
+const windowsProcess = String.raw`
+function Quote-NativeArgument([string]$Value) {
+  if($Value.Length -gt 0 -and $Value -notmatch '[\s"]'){return $Value}
+  $escaped=[regex]::Replace($Value,'(\\*)"', {param($m) ('\' * (2*$m.Groups[1].Length+1))+'"'})
+  $escaped=[regex]::Replace($escaped,'(\\+)$', {param($m) '\' * (2*$m.Groups[1].Length)})
+  return '"'+$escaped+'"'
+}
+function Invoke-Wsl([string[]]$Arguments, [string]$Body='') {
+  $info=[System.Diagnostics.ProcessStartInfo]::new()
+  $info.FileName=$wsl
+  $info.Arguments=($Arguments | ForEach-Object { Quote-NativeArgument $_ }) -join ' '
+  $info.UseShellExecute=$false
+  $info.RedirectStandardInput=$true
+  $info.RedirectStandardOutput=$true
+  $info.RedirectStandardError=$true
+  $info.StandardOutputEncoding=[System.Text.UTF8Encoding]::new($false)
+  $info.StandardErrorEncoding=[System.Text.UTF8Encoding]::new($false)
+  $child=[System.Diagnostics.Process]::new()
+  $child.StartInfo=$info
+  $started=$false
+  try {
+    $started=$child.Start()
+    $stdout=$child.StandardOutput.ReadToEndAsync()
+    $stderr=$child.StandardError.ReadToEndAsync()
+    $bytes=[System.Text.Encoding]::UTF8.GetBytes($Body)
+    $child.StandardInput.BaseStream.Write($bytes,0,$bytes.Length)
+    $child.StandardInput.Close()
+    $child.WaitForExit()
+    [Console]::Error.Write($stderr.GetAwaiter().GetResult())
+    return @{Code=$child.ExitCode;Output=$stdout.GetAwaiter().GetResult()}
+  } finally {
+    if($started -and !$child.HasExited){$child.Kill();$child.WaitForExit()}
+    $child.Dispose()
+  }
+}
+`;
+
 /** Generated native bridge retains the long-lived host identity across WSL invocations. */
 export function renderWindowsBridge(options:LaunchOptions,env:NodeJS.ProcessEnv=process.env):string {
   const r=runtimeLaunch(options,env);
@@ -26,23 +66,24 @@ for($depth=0;$depth -lt 32 -and $ancestor.ParentProcessId -gt 0;$depth++) {
 }
 if(!$hostIdentity){throw 'CODEX_HOST_PROCESS_UNCONFIRMED'}
 $wsl=${psQuote(r.wslExe)}
-$prefix=@(${['-d',r.distro!,'-u',r.user,'-e'].map(psQuote).join(',')})
+${windowsProcess}$prefix=@(${['-d',r.distro!,'-u',r.user,'-e'].map(psQuote).join(',')})
 $launch=@('/usr/bin/env',${psQuote('COMMON_MEMORY_HOME='+r.home)},"COMMON_MEMORY_HOST_INSTANCE=$hostIdentity", "CODEX_THREAD_ID=$env:CODEX_THREAD_ID",${psQuote(r.node)},${psQuote(r.cli)},$Action,'--home',${psQuote(r.home)})
 if($Action -eq 'session-refresh') {
-  & $wsl @prefix @launch '--client' $Client
+  $result=Invoke-Wsl -Arguments ($prefix+$launch+@('--client',$Client))
 } else {
   $event=[Console]::In.ReadToEnd() | ConvertFrom-Json
   foreach($field in @('cwd','transcript_path')) {
     $path=$event.$field
     if($path -notmatch '^/') {
-      $converted=& $wsl @prefix '/usr/bin/wslpath' '-u' $path
-      if($LASTEXITCODE -ne 0){throw 'WSL_PATH_CONVERSION_FAILED'}
-      $event.$field=$converted.Trim()
+      $converted=Invoke-Wsl -Arguments ($prefix+@('/usr/bin/wslpath','-u',$path))
+      if($converted.Code -ne 0){throw 'WSL_PATH_CONVERSION_FAILED'}
+      $event.$field=$converted.Output.Trim()
     }
   }
-  ($event | ConvertTo-Json -Compress -Depth 100) | & $wsl @prefix @launch
+  $result=Invoke-Wsl -Arguments ($prefix+$launch) -Body ($event | ConvertTo-Json -Compress -Depth 100)
 }
-exit $LASTEXITCODE
+[Console]::Write($result.Output)
+exit $result.Code
 `;
 }
 export function renderHostConfig(client:HostClient,options:LaunchOptions,env:NodeJS.ProcessEnv=process.env,bridgePath?:string):{config:string;skill:string;policy:string;bridge?:string} {

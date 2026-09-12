@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// One portable gate shared by local work, CI, and prepublish.
+// One POSIX Core gate shared by local work, CI, and prepublish.
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -9,6 +9,10 @@ import { supportsNode } from './node-support.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url));
 if (!supportsNode()) {
   console.error('Common Memory verification requires Node 22.19+ (22.x) or Node 24+.');
+  process.exit(2);
+}
+if (process.platform === 'win32') {
+  console.error('Core runs in WSL. Use npm run test:windows for native host bridge verification; run the full gate inside WSL.');
   process.exit(2);
 }
 const tsc = join(root, 'node_modules/typescript/bin/tsc');

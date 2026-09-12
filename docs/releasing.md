@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-v0.3 使用所有者确认的 MIT 许可证。npm 版本是 **0.3.3**，GitHub tag 是 **v0.3.3**，
+v0.3 使用所有者确认的 MIT 许可证。npm 版本是 **0.3.4**，GitHub tag 是 **v0.3.4**，
 包名 `common-memory-core`，可执行命令 `common-memory`，默认发布标签 `latest`。
 这是面向早期使用者的版本，不声称已经完成全部真实客户端验收。
 
@@ -11,7 +11,7 @@ v0.3 使用所有者确认的 MIT 许可证。npm 版本是 **0.3.3**，GitHub t
 Linux、macOS 和 WSL 在 Node 22.19+（22.x）或 24+ 环境使用同一行安装命令：
 
 ```sh
-npm install -g common-memory-core@0.3.3
+npm install -g common-memory-core@0.3.4
 ```
 
 安装 Node / WSL 是前置要求，不包含在这个 npm 命令中。详细说明见 [README](../README.md)。
@@ -29,7 +29,7 @@ npm install -g common-memory-core@0.3.3
 
 Pi peer 暂时是**必需依赖**。即使只用 CLI/MCP，npm 也会安装对应的 Pi peer 依赖树；
 当前版本不承诺无 Pi 的轻量安装。不要用 `--legacy-peer-deps` 掩盖不兼容的宿主版本。
-不要把 Windows CI 的纯代码检查理解成 Windows 原生宿主支持。
+不要把 Windows 桥接 CI 理解成 Windows 原生 Core 部署或真实 Desktop UI 验收。
 
 ## 版本和权限
 
@@ -59,20 +59,44 @@ npm pack --dry-run             # 检查文件清单；prepack 会重新构建，
 打包 prompt、Writer 提交/重启读取、Pi entry、CLI 命令链接、无 Key 的只读 MCP 和 SQLite
 不被只读端打开。它不调用真实模型，也不读取用户存储。
 
-`core-ci` 在 Ubuntu、macOS 和 Windows 执行相同完整 gate；Ubuntu / macOS 追加隔离
-tarball 测试。macOS 测试临时目录采用真实路径，避免系统 `/var` 别名与禁止符号链接的
-存储约束冲突；不会放松产品的路径安全检查。发布者应检查本次提交对应的 CI，而不是沿用
-历史通过记录。安装测试联网失败不是产品已经通过的证据。
+`core-ci` 的发布门槛按部署环境拆分：
+
+| 环境 | Node | 必须通过 |
+| --- | --- | --- |
+| Linux | 22.19.0 / 24 | 完整 gate、构建后的隔离 npm 安装验证 |
+| macOS | 22.19.0 / 24 | 同 Linux；继续承诺支持，因此不缩减 Core 验证 |
+| 原生 Windows | 24（测试驱动器） | `npm run test:windows`，真实 Windows PowerShell 5.1 与原生参数接收程序；不运行 Core/SQLite/Writer 全套 |
+| 真实 WSL | 22.19.0 / 24 | `npm run test:wsl`，隔离 npm 安装、真实 PTY TUI、wsl.exe 只读 MCP、生成的 PowerShell 宿主桥接 |
+
+Windows 桥接测试验证固定发行版/用户、参数边界、路径转换、引号/反斜杠、Unicode stdin、
+退出码、身份失败与配置生成。Windows 测试驱动器的 Node 版本不代表在 Windows 部署 Core。
+macOS 临时目录采用真实路径，不放松产品的符号链接安全约束。
+
+真实 WSL 验证在发布者的 WSL 机器执行；GitHub 托管的普通 Linux/Windows runner 不作替代。
+需要 WSL interop、Windows PowerShell、`wslpath`、Python 3 和 Windows 本地临时目录；
+脚本缺少前置环境会失败，不计为通过。使用合成数据和独立临时安装，不改个人 Agent 配置。
+PowerShell 遵循系统脚本策略；不添加 ExecutionPolicy Bypass。
+
+```sh
+npm run test:windows           # 原生 Windows，或具备 PowerShell interop 的 WSL
+npm run test:wsl               # 真实 WSL；先构建，Node 22.19 / 24 分别运行
+# 发布后也可对确切 registry 产物验证：
+npm run test:wsl -- --registry-version 0.3.4
+```
+
+WSL 冒烟使用真实的原生合成宿主进程，通过生成的 Hook 调用 Core；验证宿主身份、路径转换、
+刷新、Unicode 与宿主退出后的 Writer drain。它不代表真实 ChatGPT Desktop UI、信任确认或
+未来 PowerShell Agent 的所有事件组合已验收。每次发布记录 SHA、包版本、Node/WSL 版本与日志。
 
 `prepublishOnly` 依次执行发布锁检查、完整 gate 和隔离消费者检查；`prepack` 构建生产产物。
 不要使用 `npm publish --ignore-scripts` 绕过检查。验证失败时保留原输出并修复原因。
 
 ## npm 发布（维护者执行）
 
-完成上述本地检查后，将候选提交推送到获授权的发布候选分支，等待该精确 SHA 的
-`core-ci` 全平台通过，再快进正式分支并发布 npm。Actions 不能验证尚未推送的本地提交；
-旧版 main 的通过记录不能代替新候选版本，若不允许推送候选分支则停在本地验证阶段。
-任何修复都要重新验证修复后的 SHA，不移动已发布 tag。
+完成本地 gate 与真实 WSL 检查后，将提交推送到获授权的正式分支或候选分支，等待该精确
+SHA 的 `core-ci` 全部通过，再发布 npm。候选分支不是必需步骤；若已推送正式分支，不再为
+同一 SHA 额外创建候选分支。Actions 不能验证尚未推送的本地提交；旧提交的成功不能代替
+本次发布。任何修复都要验证修复后的 SHA，不移动已发布 tag。
 
 README 先写好正式版本的安装说明；发布完成后使用 registry 返回的产物验证，不用
 工作树构建冒充已发布包。
@@ -90,14 +114,14 @@ Release/tag 都要由维护者在对应服务上完成。本文和本地验证�
 发布后从一个新目录安装并核对 registry 中的版本：
 
 ```sh
-npm view common-memory-core@0.3.3 version dist.integrity
-npm install -g common-memory-core@0.3.3
+npm view common-memory-core@0.3.4 version dist.integrity
+npm install -g common-memory-core@0.3.4
 common-memory --version
 common-memory --help
 npm run test:published
 ```
 
-npm 发布成功并完成本地 registry 检查后，创建 GitHub Release `v0.3.3`。它会触发
+npm 发布成功并完成本地 registry 检查后，创建 GitHub Release `v0.3.4`。它会触发
 `published-package` 工作流：Ubuntu / macOS 实际执行上述一行全局安装，核对 CLI 版本，
 然后从 npm 下载 tarball 验证类型导出、Writer 提交/重启、Pi 模块和无 Key 的只读 MCP。
 也可通过 Actions 的 Run workflow 输入精确版本手动重跑。这个工作流**不发布包**，只有
@@ -107,8 +131,9 @@ npm 发布成功并完成本地 registry 检查后，创建 GitHub Release `v0.3
 保留日志、定位原因并修复；网络失败也不能标成通过。Linux CI 不代表 WSL 桌面宿主，macOS
 CI 也不代表真实 Desktop UI 信任和事件组合已验收。
 
-创建 tag 还会通过 `push` 额外触发一次 `core-ci`。发布收尾时按 commit SHA 列出全部运行，
-同时检查候选分支、main、tag 和 Release；不能只检查 main 后就报告全部通过：
+从 v0.3.4 开始，`core-ci` 的 push 仅匹配分支；tag 不重复执行 Core 全套。Release 仍触发
+独立的 `published-package` registry 安装验证。发布收尾时按 SHA 列出全部运行，确认本次
+分支 CI 与 Release 检查完成，不沿用旧版本或另一个 SHA 的结果：
 
 ```sh
 gh run list --commit <release-commit-sha> --limit 100 --json databaseId,workflowName,headBranch,status,conclusion,url
@@ -137,6 +162,8 @@ node dist/cli/main.js
 本版不承诺 `npm install github:...` 直接安装源码；使用上述 clone/build 路径或正式 npm
 包。生成的 MCP/Hook 配置固定实际 Node、CLI 和 home 路径，移动安装或切换 Node 后需要重新
 生成并审阅。安装的 CLI 与 Pi 宿主必须使用同一个 `COMMON_MEMORY_HOME`。
+从旧版本升级到 v0.3.4 后，需要重新生成 Windows Hook bundle，已生成的 `.ps1` 不会随 npm
+升级自动改写；重新生成后才包含 PowerShell 引号与末尾反斜杠修复。
 
 ## 升级、备份和卸载
 

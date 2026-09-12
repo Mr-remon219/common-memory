@@ -6,7 +6,7 @@ import { defaultConfig } from '../../src/config/config.js';
 import { codexHook,refreshSession } from '../../src/cli/codex-hook.js';
 import { consumeCodexInbox } from '../../src/cli/codex-session.js';
 import { RuntimeStore } from '../../src/v2/runtime.js';
-import { renderHostConfig,renderWindowsBridge } from '../../src/cli/work-config.js';
+import { renderHostConfig } from '../../src/cli/work-config.js';
 const roots:string[]=[];
 afterEach(()=>roots.splice(0).forEach(p=>rmSync(p,{recursive:true,force:true})));
 function fixture(){
@@ -64,16 +64,9 @@ it('unconfirmed item retains the inbox and cannot promote skill text',async()=>{
  const f=fixture();f.hook();f.hook('UserPromptSubmit');f.append({type:'task_started',turn_id:'t'});f.append({type:'item_completed',turn_id:'t',item:{type:'UserMessage',id:'skill',content:[{type:'text',text:'Skill injected instruction'}]}});f.hook('SessionEnd');
  await expect(consumeCodexInbox(f.config)).rejects.toThrow('CODEX_UNCONFIRMED_DELIVERY');f.inspect(s=>expect(s.db.prepare('SELECT body FROM codex_inbox ORDER BY id DESC LIMIT 1').get()!.body).toContain('Skill injected instruction'));
 });
-it.skipIf(process.platform==='win32')('generates explicit skill, isolated MCP identities, and fixed native bridge paths without trust bypass',()=>{
+it.skipIf(process.platform==='win32')('generates POSIX skills and isolated MCP identities without trust bypass',()=>{
  const env={...process.env,COMMON_MEMORY_HOME:'/tmp/memory home'};
  const work=renderHostConfig('chatgpt-work',{wsl:false},env);expect(work.config).toContain('chatgpt-desktop');expect(work.config).toContain('chatgpt-work');expect(work.policy).toContain('allow_implicit_invocation: false');expect(work.skill).toContain("'session-refresh' '--home' '/tmp/memory home' '--client' 'chatgpt-work'");
  const codex=renderHostConfig('codex',{wsl:false},env);expect(codex.config).toContain('[mcp_servers.common_memory_init]\nenabled = false');expect(codex.config).toContain('codex-cli');
- if(process.platform==='linux'){
-  const bridge=renderWindowsBridge({wsl:true,distro:'Synthetic Distro',user:'tester'},env);expect(bridge).toContain('CreationDate');expect(bridge).toContain('COMMON_MEMORY_HOST_INSTANCE');expect(bridge).toContain('/usr/bin/wslpath');expect(bridge).toContain('UTF8Encoding');expect(bridge).toContain('exit $LASTEXITCODE');expect(bridge).toContain('C:\\Windows\\System32\\wsl.exe');
-  expect(()=>renderHostConfig('chatgpt-work',{wsl:true,distro:'x'},env)).toThrow('--bridge-path');
-  const native=renderHostConfig('chatgpt-work',{wsl:true,distro:'x'},env,"C:\\Memory $data\\bridge.ps1");
-  const encoded=JSON.parse(/^command = (.+)$/m.exec(native.config)![1]!).split(' -EncodedCommand ')[1]!;
-  expect(Buffer.from(encoded,'base64').toString('utf16le')).toContain("& 'C:\\Memory $data\\bridge.ps1'");
- }
  expect(work.config).not.toContain('bypass');
 });

@@ -20,7 +20,7 @@ Memory runs inside WSL and the ChatGPT/Codex desktop app reaches it through `wsl
 
 ## Setup
 
-Requires Node.js 22.19+ (22.x) or 24+. Installation: `npm install -g common-memory-core@0.3.3`.
+Requires Node.js 22.19+ (22.x) or 24+. Installation: `npm install -g common-memory-core@0.3.4`.
 The following TUI describes the current source. Source contributors use
 `npm ci && npm run build`, then `node dist/cli/main.js`.
 **`common-memory` is the single entry for interactive management.** First run selects
@@ -671,9 +671,12 @@ WSL `~/.codex/config.toml` used by Codex CLI inside WSL takes the non-`--wsl` ou
 Workspaces are WSL paths registered with `common-memory project register`; a Windows path
 string (`C:\...`) is not a registered project and is rejected rather than mapped. Pi is
 supported when it runs inside the same WSL distribution; Windows-native Pi is not covered.
-`docs/init-v0.1-verification.md` records that a read-only process launched through
-`wsl.exe -d Ubuntu -u <user> -e ...` returns byte-identical `memory_read` content to a
-direct launch of the same store (`tests/cli/demo-and-bridge.test.ts`, skipped off-WSL).
+Run `npm run test:wsl` after building on a real WSL host to verify the installed CLI
+in a PTY, compare direct and Windows-bridged read-only MCP results, and exercise generated
+PowerShell hooks with a synthetic native host. The entry fails when WSL interop is missing;
+it is separate from the Linux/macOS Core suite and native Windows bridge tests. See
+[release verification](releasing.md) for the platform gates and evidence limits.
+Regenerate existing Windows Hook bundles after upgrading to v0.3.4 to apply the quoting fix.
 
 ### Relay (pre-existing)
 

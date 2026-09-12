@@ -7,18 +7,22 @@ import { once } from 'node:events';
 import { mkdtempSync,writeFileSync,readFileSync,existsSync,rmSync,mkdirSync,copyFileSync,chmodSync } from 'node:fs';
 import { tmpdir,userInfo } from 'node:os';
 import { join,resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { setTimeout as pause } from 'node:timers/promises';
 import assert from 'node:assert/strict';
-import { defaultConfig } from '../dist/config/config.js';
-import { RuntimeStore } from '../dist/v2/runtime.js';
-import { SessionIngress } from '../dist/v2/session.js';
+const args=process.argv.slice(2);
+if(args.length && !(args.length===2 && args[0]==='--package-root'))throw new Error('Usage: smoke-work-bridge.mjs [--package-root <installed-package>]');
+const packageRoot=resolve(args[1]??'.');
+const {defaultConfig}=await import(pathToFileURL(join(packageRoot,'dist/config/config.js')));
+const {RuntimeStore}=await import(pathToFileURL(join(packageRoot,'dist/v2/runtime.js')));
+const {SessionIngress}=await import(pathToFileURL(join(packageRoot,'dist/v2/session.js')));
 const powershell='/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe';
 if(!process.env.WSL_DISTRO_NAME||!existsSync(powershell))throw new Error('Requires WSL and Windows PowerShell interop');
 const win=p=>execFileSync('/usr/bin/wslpath',['-w',p],{encoding:'utf8'}).trim();
 const quote=s=>"'"+s.replaceAll("'","''")+"'";
-const home=mkdtempSync(join(tmpdir(),'cm-work-bridge-'));
+const home=mkdtempSync(join(tmpdir(),"cm work '中文 $data-"));
 const windowsTemp=execFileSync(powershell,['-NoProfile','-Command','[Console]::Write($env:TEMP)'],{encoding:'utf8'}).trim();
-const nativeRoot=mkdtempSync(join(execFileSync('/usr/bin/wslpath',['-u',windowsTemp],{encoding:'utf8'}).trim(),'cm-work-'));
+const nativeRoot=mkdtempSync(join(execFileSync('/usr/bin/wslpath',['-u',windowsTemp],{encoding:'utf8'}).trim(),"cm work '中文 $data-"));
 let release=false,calls=0;
 const server=createServer(async(req,res)=>{
  let input='';for await(const chunk of req)input+=chunk;
@@ -35,12 +39,12 @@ try {
  const transcript=join(home,'转录.jsonl');writeFileSync(transcript,JSON.stringify({type:'session_meta',payload:{cli_version:'0.153.4'}})+'\n');
  mkdirSync(join(config.dataRoot,'memory'),{recursive:true});const profile=join(config.dataRoot,'memory/profile.md');writeFileSync(profile,'# Profile\n\n## Synthetic\nSNAPSHOT_A');
  const output=join(nativeRoot,'bundle'),bridge=join(output,'common-memory-bridge.ps1');
- execFileSync(process.execPath,[resolve('dist/cli/main.js'),'work-config','--mode','windows-wsl','--distro',process.env.WSL_DISTRO_NAME,'--user',userInfo().username,'--output',output],{env:{...process.env,COMMON_MEMORY_HOME:home}});
+ execFileSync(process.execPath,[join(packageRoot,'dist/cli/main.js'),'work-config','--mode','windows-wsl','--distro',process.env.WSL_DISTRO_NAME,'--user',userInfo().username,'--output',output],{env:{...process.env,COMMON_MEMORY_HOME:home}});
  const hookCommand=JSON.parse(/^command = (.+)$/m.exec(readFileSync(join(output,'common-memory.config.toml'),'utf8'))[1]);
  const encodedHook=hookCommand.split(' -EncodedCommand ')[1];assert.ok(encodedHook);
  const nativeExe=join(nativeRoot,'codex-synthetic.exe');
  const csharp=String.raw`using System; using System.Diagnostics; public class Host { public static int Main(string[] args) { var p = Process.Start(new ProcessStartInfo("powershell.exe", "-NoProfile -File \"" + args[0] + "\"") { UseShellExecute = false }); p.WaitForExit(); return p.ExitCode; } }`;
- const compile=join(nativeRoot,'compile.ps1');writeFileSync(compile,`Add-Type -TypeDefinition ${quote(csharp)} -OutputAssembly ${quote(win(nativeExe))} -OutputType ConsoleApplication\n`);
+ const compile=join(nativeRoot,'compile.ps1');writeFileSync(compile,'\ufeff'+`Add-Type -TypeDefinition ${quote(csharp)} -OutputAssembly ${quote(win(nativeExe))} -OutputType ConsoleApplication\n`);
  execFileSync(powershell,['-NoProfile','-File',win(compile)],{encoding:'utf8'});
  const event={hook_event_name:'SessionStart',source:'startup',session_id:'synthetic-thread',turn_id:'t',cwd:win(home),transcript_path:win(transcript)};
  const records=[{type:'task_started',turn_id:'t'},{type:'item_completed',turn_id:'t',item:{type:'UserMessage',id:'user-1',content:[{type:'text',text:'Please prefer concise replies. 用户表达'}]}},{type:'task_complete',turn_id:'t'}].map(payload=>JSON.stringify({type:'event_msg',timestamp:new Date().toISOString(),payload})).join('\n')+'\n';
@@ -66,7 +70,8 @@ $event.hook_event_name='SessionEnd'; Hook
 exit 0
 `);
  const child=spawn(nativeExe,[win(runner)],{stdio:['ignore','pipe','pipe']});let stdout='',stderr='';child.stdout.on('data',b=>stdout+=b);child.stderr.on('data',b=>stderr+=b);
- const [code]=await once(child,'exit');assert.equal(code,0,stderr);assert.match(stdout,/SNAPSHOT_A/);assert.match(stdout,/SNAPSHOT_B/);assert.doesNotMatch(stdout,/SNAPSHOT_C/);assert.match(stderr,/SESSION_REFRESH_ACTIVATION_REQUIRED/);
+ const deadlineTimer=setTimeout(()=>child.kill('SIGKILL'),45000);
+ let code;try{[code]=await once(child,'close');}finally{clearTimeout(deadlineTimer);} assert.equal(code,0,stderr);assert.match(stdout,/SNAPSHOT_A/);assert.match(stdout,/SNAPSHOT_B/);assert.doesNotMatch(stdout,/SNAPSHOT_C/);assert.match(stderr,/SESSION_REFRESH_ACTIVATION_REQUIRED/);
  assert.equal(existsSync(join(config.dataRoot,'memory/preferences.md')),false);
  release=true;const deadline=Date.now()+25000;
  while(Date.now()<deadline){
@@ -82,7 +87,7 @@ exit 0
  const event=${JSON.stringify(posixEvent)};
  for(const name of ['SessionStart','SessionEnd']) {
    event.hook_event_name=name;
-   process.stdout.write(execFileSync(${JSON.stringify(process.execPath)},[${JSON.stringify(resolve('dist/cli/main.js'))},'work-hook','--home',${JSON.stringify(home)}],{input:JSON.stringify(event),encoding:'utf8'}));
+   process.stdout.write(execFileSync(${JSON.stringify(process.execPath)},[${JSON.stringify(join(packageRoot,'dist/cli/main.js'))},'work-hook','--home',${JSON.stringify(home)}],{input:JSON.stringify(event),encoding:'utf8'}));
  }`);
  const direct=execFileSync(posixExe,[posixScript],{env:{...process.env,COMMON_MEMORY_HOME:home,COMMON_MEMORY_HOST_INSTANCE:''},encoding:'utf8'});
  assert.match(direct,/SNAPSHOT_C/);

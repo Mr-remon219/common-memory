@@ -1,7 +1,8 @@
 # 测试取舍与关键行为
 
 目标是用可定位的失败保护用户数据，不以用例数量或预设模型答案衡量质量。
-`npm run verify` 仍执行全部单测；没有通过 skip、排除文件或合并断言来隐藏测试数量。
+`npm run verify` 在 Linux/macOS 执行完整 Core 套件；Windows 桥接与真实 WSL 冒烟有独立入口。
+按部署职责选择套件，不以某个平台未运行的测试冒充已验证。
 
 ## 关键行为的负责位置
 
@@ -33,10 +34,19 @@
 缺少构建的拒绝路径另有断言。真实产物加载由 build 后的 tarball consumer 验证。
 Setup 的脚本化选择次数有界，意外重试会立即失败，不会把错误隐藏成整套测试超时。
 
-## 验证与限制
+## 平台划分与执行成本
 
-本轮 Node 24.20.0：全量 **521 → 508** 项，`node scripts/verify.mjs` 的类型、边界、测试、构建均通过。没有为了降到某个数字删除有效的边界测试。
+- Linux/macOS：Node 22.19.0 和 24 均执行完整 gate 和 npm consumer。持久事务、恢复、来源、租约、只读边界与网络合同仍全部保留。
+- 原生 Windows：`npm run test:windows` 只运行 `windows/bridge.test.ts`。用真实 PowerShell 5.1 和 C# 原生参数接收程序验证生成脚本；不启动 Core 数据库或模型。测试中的 WSL 运行时描述和宿主元数据是合成的，参数解析、stdin 与退出状态是真实进程行为。
+- WSL：构建后执行 `npm run test:wsl`，从 tarball 隔离安装，使用真实 PTY 驱动首次取消和重复启动/方向键/Esc，再验证真实 wsl.exe 的只读 MCP 和原生合成宿主的 Hook/refresh/Writer drain。入口缺少真实 WSL 时失败。
 
-另在临时副本中独立注入两种回归：跳过 receipt→SQLite 恢复、允许 incomplete 会话变成 complete。新测试分别因来源队列未恢复、完成状态错误而失败；未修改工作区实现。
+优化以删除重复执行为主：原生 Windows 不再重复约 560 项 Core 测试；分支提交验证后，tag 不再触发一轮完整矩阵。原先条件跳过的 WSL 桥接单测迁入已安装包的专门冒烟，WSL 不再重复 npm consumer 的类型检查、通用 Writer 和自卸载场景。配置文本的粗略字符串断言由结构化 TOML/argv 检查和真实 PowerShell 执行替代。
 
-这证明本地执行与恢复合同，不证明真实模型的记忆选择、语义纠正或遗忘判断质量。Writer benchmark 在独立的 `../../memory-benchmark` 仓库；真实模型、真实 Desktop UI、Windows/macOS 实机行为不能由本轮 Linux 离线测试代替。
+macOS 继续承诺支持，因此完整矩阵保留。避免为“减少数量”删除安全拒绝路径、六阶段崩溃恢复或数据库关闭验证。
+
+## 验证证据与限制
+
+每次发布记录实际提交、Node/WSL 版本与日志；历史测试数量不表示当前覆盖。Linux CI 不证明
+Windows PowerShell 参数行为；原生 Windows CI 不证明真实 WSL interop。合成宿主冒烟不证明
+真实 ChatGPT Desktop UI 信任和所有客户端事件组合。Writer benchmark 仍在独立的
+`../../memory-benchmark` 仓库，测试不调用真实模型或读取个人记忆。

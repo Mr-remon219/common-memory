@@ -52,7 +52,9 @@ Node 20。Node 23 不在支持范围内。
 - 测试加载器使用的同步 `module.registerHooks` 始于 22.15。
   依据：[Node module API](https://nodejs.org/api/module.html)。
 - 验证脚本、包引擎声明和 CI 使用同一支持范围；CI 配置为 Node 22.19.0 / 24，
-  Linux、macOS、Windows 完整 gate，Linux/macOS 另测隔离安装。
+  v0.3.2 当时在 Linux、macOS、Windows 执行完整 gate，Linux/macOS 另测隔离安装。
+  v0.3.4 起按部署职责拆分，Windows 只测试薄桥接，完整 Core 留在 Linux/macOS；
+  真实 WSL 另做安装与宿主冒烟，当前矩阵见 [发布验证](releasing.md)。
 - `--use-env-proxy` 始于 22.21 / 24.5；旧版本的宿主代理回归使用显式的宿主 dispatcher。
   Common Memory 的显式网络配置不依赖此开关，也不接管宿主全局 dispatcher。
   依据：[Node CLI API](https://nodejs.org/api/cli.html#--use-env-proxy)。
