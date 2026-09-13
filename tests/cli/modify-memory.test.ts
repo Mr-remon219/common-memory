@@ -41,7 +41,7 @@ afterEach(async () => {
   vi.unstubAllEnvs(); rmSync(home, { recursive: true, force: true });
 });
 function decision(projection: Projection, kind: 'retain' | 'forget' | 'ignore', operations: unknown[] = [], applicability = 'global') {
-  return { version: 'memory_maintenance_v2', request_id: projection.request_id, decisions: [{
+  return { edit_result:kind === 'ignore' ? 'already_satisfied' : 'modified', version: 'memory_maintenance_v2', request_id: projection.request_id, decisions: [{
     kind, applicability, confidence: 1, evidence: projection.observations.map(o => o.ref), reason: 'synthetic test',
     ...(kind === 'retain' ? { admission: 'correct', lifetime: 'until_changed' } : {}),
     ...(kind === 'ignore' ? {} : { operations }),
@@ -74,7 +74,7 @@ it('sends user evidence through the real configured Writer and Core for retain, 
   expect(inspect(store => store.db.prepare('SELECT text FROM observations').all()).every(row => row.text === null)).toBe(true);
 });
 
-it('reports ignore as processed with no retained content', async () => {
+it('reports explicitly already satisfied without forcing a write', async () => {
   const result = await modifyMemory(config, 'A transient request');
   expect(result.complete).toBe(true); expect(result.outcome.retainedIn).toEqual([]);
   expect(existsSync(join(config.dataRoot, 'memory/profile.md'))).toBe(false);

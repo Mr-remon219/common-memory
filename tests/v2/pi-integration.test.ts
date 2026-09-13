@@ -110,9 +110,11 @@ it('native memory_read remains callable with current scoped memory and shared pr
  const root=mkdtempSync(join(tmpdir(),'pi-tool-'));cleanup.push(()=>rmSync(root,{recursive:true,force:true}));const data=join(root,'data');
  const tools=new Map<string,Parameters<ExtensionAPI['registerTool']>[0]>();const pi={on:()=>{},registerCommand:()=>{},registerTool:(tool:Parameters<ExtensionAPI['registerTool']>[0])=>tools.set(tool.name,tool)} as unknown as ExtensionAPI;
  createCommonMemoryPiExtension({configFactory:()=>({...defaultConfig(),dataRoot:data})})(pi);
- const tool=tools.get('memory_read')!;expect(tool.promptSnippet).toBeTruthy();expect(tool.promptGuidelines?.join(' ')).toContain('什么是梯度下降');
+ const tool=tools.get('memory_read')!;expect(tool.description).toContain('replace older memory snapshots');expect(tool.promptSnippet).toBeTruthy();expect(tool.promptGuidelines?.join(' ')).toContain('什么是梯度下降');
  const ctx={cwd:root,sessionManager:{getSessionId:()=>'tool-session'}} as unknown as import('@earendil-works/pi-coding-agent').ExtensionContext;
- expect(JSON.stringify(await tool.execute('one',{},undefined,undefined,ctx))).toContain('no stored content');
+ const firstRead=await tool.execute('one',{},undefined,undefined,ctx);
+ expect(JSON.stringify(firstRead)).toContain('no stored content');
+ expect(firstRead.content).toEqual([expect.objectContaining({text:expect.stringContaining('including empty documents or removed content')})]);
  mkdirSync(join(data,'memory'),{recursive:true});writeFileSync(join(data,'memory/profile.md'),'# Profile\n\n## Background\nSynthetic fresh background\n');
  expect(JSON.stringify(await tool.execute('two',{contextId:'global'},undefined,undefined,ctx))).toContain('Synthetic fresh background');
  await expect(tool.execute('three',{contextId:'project:unauthorized'},undefined,undefined,ctx)).rejects.toThrow('CONTEXT_UNAVAILABLE');

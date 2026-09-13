@@ -63,7 +63,7 @@ it('actual item delivery settles the tenth turn, deduplicates legacy delivery an
 });
 it('unconfirmed item retains the inbox and cannot promote skill text',async()=>{
  const f=fixture();f.hook();f.hook('UserPromptSubmit');f.append({type:'task_started',turn_id:'t'});f.append({type:'item_completed',turn_id:'t',item:{type:'UserMessage',id:'skill',content:[{type:'text',text:'Skill injected instruction'}]}});f.hook('SessionEnd');
- await expect(consumeCodexInbox(f.config)).rejects.toThrow('CODEX_UNCONFIRMED_DELIVERY');f.inspect(s=>expect(s.db.prepare('SELECT body FROM codex_inbox ORDER BY id DESC LIMIT 1').get()!.body).toContain('Skill injected instruction'));
+ expect(await consumeCodexInbox(f.config)).toMatchObject({complete:false,isolated:1,recoveries:[{issue:'CODEX_UNCONFIRMED_DELIVERY'}]});f.inspect(s=>expect(s.db.prepare('SELECT body FROM codex_inbox ORDER BY id DESC LIMIT 1').get()!.body).toContain('Skill injected instruction'));
 });
 it.each(['codex','chatgpt-work'] as const)('terminal %s hooks never emit or consume a pending refresh',client=>{
  const f=fixture();f.memory('A');f.hook('SessionStart','startup','s','','t',client);

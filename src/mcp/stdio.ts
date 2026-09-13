@@ -11,10 +11,11 @@ export function parseMcpOptions(args: string[]): McpOptions {
     const arg = args[i];
     if (arg === '--global') options.global = true;
     else if (arg === '--accept-client-reported-user-turns') options.accept = true;
-    else if (arg === '--client-id' || arg === '--workspace' || arg === '--capability') {
+    else if (arg === '--client-id' || arg === '--workspace' || arg === '--workspace-project-id' || arg === '--capability') {
       const value = args[++i];
       if (!value || value.startsWith('--')) throw new Error('MCP option requires a value');
       if (arg === '--workspace') options.workspaces.push(value);
+      else if (arg === '--workspace-project-id') (options.workspaceProjectIds ??= []).push(value);
       else if (arg === '--capability') {
         if (!MCP_CAPABILITIES.includes(value as McpCapability)) throw new Error('Unknown MCP capability');
         if (!options.capabilities.includes(value as McpCapability)) options.capabilities.push(value as McpCapability);

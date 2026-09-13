@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { defaultConfig, loadConfig, saveConfig } from '../../src/config/config.js';
+import { defaultConfig, loadConfig, saveApiKeyToEnvFile, saveConfig } from '../../src/config/config.js';
 import { configureModel } from '../../src/cli/model-configuration.js';
 import { discoverModels } from '../../src/cli/model-discovery.js';
 import { runSetupFlow } from '../../src/cli/setup.js';
@@ -103,7 +103,67 @@ it('Esc from a preset key returns to its edited URL, then Provider, without disc
   expect(discoverModels).not.toHaveBeenCalled(); expect(loadConfig()).toBeNull(); expect(existsSync(join(home, '.env'))).toBe(false);
 });
 it('discovery failure never saves a key and allows choosing another provider', async () => {
-  choices('deepseek', Symbol('exit')); vi.mocked(discoverModels).mockRejectedValue(new Error('模型发现失败'));
+  choices('deepseek', 'back', Symbol('exit')); vi.mocked(discoverModels).mockRejectedValue(new Error('模型发现失败'));
+  await expect(configureModel()).rejects.toBeInstanceOf(UserCancelled);
+  expect(loadConfig()).toBeNull(); expect(existsSync(join(home, '.env'))).toBe(false);
+});
+it('keeps an empty-config discovery failure in the form, retries a network draft and commits secrets with the model', async () => {
+  const done = choices('deepseek', 'network', 'custom', 'keep', 'model-a');
+  vi.mocked(clack.password).mockResolvedValueOnce('synthetic-private-key').mockResolvedValueOnce('socks5://draft-user:draft-pass@127.0.0.1:1080');
+  vi.mocked(discoverModels).mockRejectedValueOnce(new Error('unsafe transport secret')).mockImplementationOnce(async (_provider, key, config, options) => {
+    expect(loadConfig()).toBeNull(); expect(existsSync(join(home, '.env'))).toBe(false);
+    expect(key).toBe('synthetic-private-key');
+    expect(config.remote.proxy).toEqual({ mode: 'custom', urlEnv: 'COMMON_MEMORY_PROXY_URL' });
+    expect(options?.secrets).toEqual({ COMMON_MEMORY_PROXY_URL: 'socks5://draft-user:draft-pass@127.0.0.1:1080' });
+    return [{ id: 'model-a', api: 'chat_completions' }];
+  });
+  const config = await configureModel(); done();
+  expect(config.remote.proxy).toEqual({ mode: 'custom', urlEnv: 'COMMON_MEMORY_PROXY_URL' });
+  expect(vi.mocked(clack.text).mock.calls.filter(([o]) => o.message === 'Base URL')).toHaveLength(1);
+  expect(readFileSync(join(home, '.env'), 'utf8')).toContain('draft-pass');
+  expect(displayed()).not.toMatch(/unsafe transport secret|draft-pass|synthetic-private-key/);
+  expect(existsSync(join(home, '.installation/transaction.json'))).toBe(false);
+});
+it.each(['direct', 'env'])('retries with a %s + CA draft before saving either private file', async mode => {
+  const ca = join(home, 'synthetic-ca.pem');
+  choices('deepseek', 'network', mode, 'set', 'model-a');
+  vi.mocked(clack.text).mockResolvedValueOnce('https://api.deepseek.com/v1').mockResolvedValueOnce(ca);
+  vi.mocked(discoverModels).mockRejectedValueOnce(new Error('offline')).mockImplementationOnce(async (_p, _key, config, options) => {
+    expect(loadConfig()).toBeNull(); expect(existsSync(join(home, '.env'))).toBe(false);
+    expect(config.remote).toMatchObject({ proxy: { mode }, caFileEnv: 'COMMON_MEMORY_CA_FILE' });
+    expect(options?.secrets).toEqual({ COMMON_MEMORY_CA_FILE: ca });
+    return [{ id: 'model-a', api: 'chat_completions' }];
+  });
+  expect((await configureModel()).remote).toMatchObject({ proxy: { mode }, caFileEnv: 'COMMON_MEMORY_CA_FILE' });
+  expect(readFileSync(join(home, '.env'), 'utf8')).toContain(ca);
+});
+it('cancels a failed network draft without writing config, key or proxy secrets', async () => {
+  const done = choices('deepseek', 'network', 'custom', 'keep', 'back', Symbol('exit'));
+  vi.mocked(clack.password).mockResolvedValueOnce('synthetic-private-key').mockResolvedValueOnce('http://draft:secret@127.0.0.1:1234');
+  vi.mocked(discoverModels).mockRejectedValue(new Error('unreachable'));
+  await expect(configureModel()).rejects.toBeInstanceOf(UserCancelled); done();
+  expect(loadConfig()).toBeNull(); expect(existsSync(join(home, '.env'))).toBe(false);
+});
+it('manual fallback keeps provider/API and compatible thinking and can retain the private key byte-for-byte', async () => {
+  const config = defaultConfig(); Object.assign(config.remote, { preset: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', model: 'old', api: 'chat_completions', thinking: { type: 'enabled' } });
+  saveConfig(config); saveApiKeyToEnvFile(config.remote.apiKeyEnv, 'keep-private-key');
+  const before = readFileSync(join(home, '.env'), 'utf8');
+  const done = choices('deepseek', 'keep', 'manual');
+  vi.mocked(clack.text).mockResolvedValueOnce(config.remote.baseUrl).mockResolvedValueOnce('manual-model');
+  vi.mocked(discoverModels).mockRejectedValue(new Error('offline'));
+  const next = await configureModel(loadConfig()); done();
+  expect(next.remote).toMatchObject({ preset: 'deepseek', api: 'chat_completions', model: 'manual-model', thinking: { type: 'enabled' }, apiKeyEnv: config.remote.apiKeyEnv });
+  expect(readFileSync(join(home, '.env'), 'utf8')).toBe(before); expect(clack.password).not.toHaveBeenCalled();
+});
+it('preserves compatible Responses reasoning on a same-provider model change', async () => {
+  const config = defaultConfig(); Object.assign(config.remote, { preset: 'openai', model: 'old', api: 'responses', reasoningEffort: 'high' }); saveConfig(config);
+  choices('openai', 'gpt-selected'); vi.mocked(discoverModels).mockResolvedValue([{ id: 'gpt-selected', api: 'responses' }]);
+  expect((await configureModel(loadConfig())).remote.reasoningEffort).toBe('high');
+});
+it('fails final validation without leaving a network draft or key half-saved', async () => {
+  choices('deepseek', 'network', 'custom', 'keep', 'bad-model', Symbol('exit'));
+  vi.mocked(clack.password).mockResolvedValueOnce('synthetic-private-key').mockResolvedValueOnce('http://draft:secret@127.0.0.1:1234');
+  vi.mocked(discoverModels).mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce([{ id: 'bad-model', api: 'invalid' as never }]);
   await expect(configureModel()).rejects.toBeInstanceOf(UserCancelled);
   expect(loadConfig()).toBeNull(); expect(existsSync(join(home, '.env'))).toBe(false);
 });

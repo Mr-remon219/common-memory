@@ -13,6 +13,9 @@ export interface IntegrationTarget {
   hooks: boolean;
   /** Explicit host opt-in; independent of Core disclosure permission. */
   init?: boolean;
+  /** Fixed read MCP launch scope; absent means global-only. Hooks still use cwd. */
+  readWorkspace?: string;
+  readWorkspaceProjectId?: string;
   hint?: string;
 }
 export interface DiscoveryEnvironment {

@@ -2,16 +2,16 @@
 
 ## 当前状态
 
-v0.4 使用所有者确认的 MIT 许可证。npm 版本是 **0.4.0**，GitHub tag 是 **v0.4.0**，
+v0.4 使用所有者确认的 MIT 许可证。当前版本为 **0.4.1**，对应 npm 版本 **0.4.1**、GitHub tag **v0.4.1**，
 包名 `common-memory-core`，可执行命令 `common-memory`，默认发布标签 `latest`。
 这是面向早期使用者的版本，不声称已经完成全部真实客户端验收。
 
 数据库入口、终端警告与兼容性依据见 [数据库运行时审查](database-runtime-audit.md)。
 
-Linux、macOS 和 WSL 在 Node 22.19+（22.x）或 24+ 环境使用同一行安装命令：
+发布后，Linux、macOS 和 WSL 在 Node 22.19+（22.x）或 24+ 环境使用同一行安装命令；发布前使用下方源码构建路径：
 
 ```sh
-npm install -g common-memory-core@0.4.0
+npm install -g common-memory-core@0.4.1
 ```
 
 安装 Node / WSL 是前置要求，不包含在这个 npm 命令中。详细说明见 [README](../README.md)。
@@ -81,7 +81,7 @@ PowerShell 遵循系统脚本策略；不添加 ExecutionPolicy Bypass。
 npm run test:windows           # 原生 Windows，或具备 PowerShell interop 的 WSL
 npm run test:wsl               # 真实 WSL；先构建，Node 22.19 / 24 分别运行
 # 发布后也可对确切 registry 产物验证：
-npm run test:wsl -- --registry-version 0.4.0
+npm run test:wsl -- --registry-version 0.4.1
 ```
 
 WSL 冒烟使用真实的原生合成宿主进程，通过生成的 Hook 调用 Core；验证宿主身份、路径转换、
@@ -114,14 +114,14 @@ Release/tag 都要由维护者在对应服务上完成。本文和本地验证�
 发布后从一个新目录安装并核对 registry 中的版本：
 
 ```sh
-npm view common-memory-core@0.4.0 version dist.integrity
-npm install -g common-memory-core@0.4.0
+npm view common-memory-core@0.4.1 version dist.integrity
+npm install -g common-memory-core@0.4.1
 common-memory --version
 common-memory --help
 npm run test:published
 ```
 
-npm 发布成功并完成本地 registry 检查后，创建 GitHub Release `v0.4.0`。它会触发
+npm 发布成功并完成本地 registry 检查后，创建 GitHub Release `v0.4.1`。它会触发
 `published-package` 工作流：Ubuntu / macOS 实际执行上述一行全局安装，核对 CLI 版本，
 然后从 npm 下载 tarball 验证类型导出、Writer 提交/重启、Pi 模块和无 Key 的只读 MCP。
 也可通过 Actions 的 Run workflow 输入精确版本手动重跑。这个工作流**不发布包**，只有
@@ -177,6 +177,10 @@ v0.3.9 统一从私有 `.env` 读取模型 Key，不再使用终端或宿主的�
 升级前在 TUI 中保存有效 Key；升级后重启所有助手/MCP。401/403 等永久服务错误不再自动重复五次，
 失败输入仍保留，修复后使用 TUI 的失败任务重试或 `common-memory retry <job-id>` 恢复。
 SDK 不再导出 `loadLocalEnv`；使用 `resolveApiKey` 读取配置目录中的私有凭据，不要导出到宿主环境。
+
+v0.4.1 在既有 v2 队列上增量加入显式 edit 类型与结果列、宿主会话失败记录。旧 observation 不升级为 edit；Bundle、lease、receipt 与恢复协议继续保留。输入限制改为完整来源 UTF-8 投影：旧 `maxCandidateBytes` 作为弃用兼容项仍取更严格上限，不会静默放宽。见[编辑与输入契约](edit-and-input-contract.md)。
+项目登记不授权；受管 MCP 固定路径＋项目 ID，删除或同路径重新登记后需重新确认绑定。升级不自动改个人客户端配置，也不授予 `memory_init` 或项目权限。
+本地工作树验证只能对应其基线 SHA＋保留的完整改动快照；正式发布仍须验证最终提交，不能把本地 tarball 当成 registry 产物。
 
 ## 升级、备份和卸载
 

@@ -1,8 +1,9 @@
+import { inputLimits } from '../core/safety/external-preflight.js';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { CommonMemoryConfig } from '../config/config.js';
-import { externalPreflight } from '../core/safety/external-preflight.js';
+import { queueMemoryEdit, validateMemoryEdit } from '../v2/edit-ingress.js';
 import { RuntimeStore } from '../v2/runtime.js';
 import { ProjectRegistry } from '../v2/registry.js';
 import { readAuthorizedMemory } from '../v2/reader.js';
@@ -37,7 +38,7 @@ export class PiMemoryService {
       captureEnabled:config.disclosure.allowedProvenance.includes('user_explicit') && this.contexts(host).length>0,
       initEnabled:config.disclosure.allowedProvenance.includes('agent_observation') && contexts.length>0,
       adjustmentContexts:contexts.filter(c => config.disclosure.allowedProvenance.includes('user_explicit') && config.writableScopes.includes(c.id)),
-      maxInputBytes:config.disclosure.maxTotalBytes ?? null,
+      ...inputLimits(config.disclosure),
     };
   }
   #withStore<T>(create: boolean, fn: (store:RuntimeStore)=>T): T | null {
@@ -58,14 +59,17 @@ export class PiMemoryService {
       const outcome = this.#withStore(false,s=>s.observationOutcome(this.#namespace(host,identity.importId!==undefined?'init':'adjust'),id,contexts));
       return {...info,item:outcome,next:nextForOutcome(outcome,identity,modelContexts)};
     }
-    const queue = this.#withStore(false,s=>scopedQueueStatus(s,contexts)) ?? {observations:[],jobs:[]};
-    const recent = this.#withStore(false,s=>s.db.prepare('SELECT entryId,sessionId,scope FROM observations WHERE sessionId IN (?,?) ORDER BY id DESC LIMIT 20')
-      .all(this.#namespace(host,'init'),this.#namespace(host,'adjust'))
-      .filter(r=>contexts.includes(String(r.scope))).map(r=>{
-        const identity = r.sessionId===this.#namespace(host,'init') ? {importId:String(r.entryId)} : {requestId:String(r.entryId)};
-        const outcome = s.observationOutcome(String(r.sessionId),String(r.entryId),contexts)!;
-        return {...identity,contextId:String(r.scope),outcome,next:nextForOutcome(outcome,identity,modelContexts)};
-      })) ?? [];
+    const queue = this.#withStore(false,s=>scopedQueueStatus(s,contexts)) ?? {observations:[],jobStates:[],jobs:[]};
+    const recent = this.#withStore(false,s=>{
+      if(!contexts.length)return [];
+      const placeholders=contexts.map(()=>'?').join(',');
+      return s.db.prepare(`SELECT entryId,sessionId,scope FROM observations WHERE sessionId IN (?,?) AND scope IN (${placeholders}) ORDER BY id DESC LIMIT 20`)
+        .all(this.#namespace(host,'init'),this.#namespace(host,'adjust'),...contexts).map(r=>{
+          const identity = r.sessionId===this.#namespace(host,'init') ? {importId:String(r.entryId)} : {requestId:String(r.entryId)};
+          const outcome = s.observationOutcome(String(r.sessionId),String(r.entryId),contexts)!;
+          return {...identity,contextId:String(r.scope),outcome,next:nextForOutcome(outcome,identity,modelContexts)};
+        });
+    }) ?? [];
     return {...info,queue,recent,next:{action:'discover' as const,message:'User turns are captured automatically; do not submit summaries or duplicate them. Open /memory to browse, adjust, import or recover. Processed does not mean remembered. Use memory_read to verify authorized destinations.'}};
   }
   /** Call only after an actual host user confirmation, never a model-supplied approved flag. */
@@ -74,23 +78,18 @@ export class PiMemoryService {
     // Check before creating any queue. Core rechecks all input constraints at enqueue.
     if (!info.initEnabled) throw new Error('INIT_DISABLED');
     if (!info.contexts.some(c=>c.id===input.contextId)) throw new Error('CONTEXT_UNAVAILABLE');
-    const accepted = this.#withStore(true,s=>queueAgentImport(s,this.#namespace(host,'init'),input,{contexts:info.contexts.map(c=>c.id),enabled:info.initEnabled,maxBytes:config.disclosure.maxTotalBytes},signal))!;
+    const accepted = this.#withStore(true,s=>queueAgentImport(s,this.#namespace(host,'init'),input,{contexts:info.contexts.map(c=>c.id),enabled:info.initEnabled,maxBytes:config.disclosure.maxTotalBytes,limits:config.disclosure},signal))!;
     this.#wake();
     return {...accepted,importId:input.importId,next:nextForAcceptance(accepted.state,{importId:input.importId})};
   }
   /** Only text entered in the native user editor reaches this method; no model write tool. */
-  adjust(host: MemoryHost, scope: string, prompt: string, requestId = randomUUID()) {
+  adjust(host: MemoryHost, scope: string, prompt: string, requestId: string = randomUUID()) {
     const config = this.options.config(), info = this.info(host,true);
     if (!info.adjustmentContexts.some(c=>c.id===scope)) throw new Error('ADJUSTMENT_DISABLED');
-    if (!prompt.trim()) throw new Error('INVALID_TEXT_SIZE');
-    externalPreflight({excerpts:[{text:prompt}]},config.disclosure);
-    const accepted = this.#withStore(true,store=>store.transaction(()=>{
-      const sessionId=this.#namespace(host,'adjust'),duplicate=store.observationStatus(sessionId,requestId)!==null;
-      let observation;
-      try { observation=store.enqueue({sessionId,entryId:requestId,text:prompt,scope,source:'interactive',observedAt:new Date().toISOString()}); }
-      catch(error){if(error instanceof Error && error.message==='Conflicting observation identity')throw new Error('SUBMISSION_CONFLICT');throw error;}
-      store.requestFlush();return {accepted:true as const,duplicate,state:observation.state,contextId:scope};
-    }))!;
+    const input = {sessionId:this.#namespace(host,'adjust'),requestId,text:prompt,scope};
+    const access = {allowedScopes:info.adjustmentContexts.map(c=>c.id),writableScopes:config.writableScopes,allowedProvenance:config.disclosure.allowedProvenance,limits:config.disclosure};
+    validateMemoryEdit(input,access);
+    const accepted = this.#withStore(true,store=>queueMemoryEdit(store,input,access))!;
     this.#wake();return {...accepted,requestId,next:nextForAcceptance(accepted.state,{requestId})};
   }
   flush() {

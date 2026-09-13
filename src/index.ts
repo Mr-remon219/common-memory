@@ -17,3 +17,6 @@ export type { MemoryAgentRuntime, MemoryTask, MemoryReadPort, MemoryDecision, Me
 
 export type { ModelUsage, ModelDiagnosticContext, ModelCapabilityRecord } from './core/contracts/model-output.js';
 export { normalizeOpenAICompatibleBaseUrl } from "./memory-agent-runtime/endpoint.js";
+
+export { queueMemoryEdit, validateMemoryEdit, type EditSubmission, type EditAccess } from './v2/edit-ingress.js';
+export type { EditResult } from './v2/contract.js';

@@ -3,7 +3,7 @@ import { Type } from 'typebox';
 import { StringEnum } from '@earendil-works/pi-ai';
 import { IMPORT_BASES, IMPORT_LABEL_PATTERN } from '../v2/import.js';
 import { PiMemoryService, nativeFailure } from './memory-service.js';
-import { MEMORY_READ_GUIDANCE, MEMORY_READ_DESCRIPTION } from '../v2/read-guidance.js';
+import { MEMORY_READ_GUIDANCE, MEMORY_READ_DESCRIPTION, MEMORY_READ_REPLACEMENT_GUIDANCE } from '../v2/read-guidance.js';
 import { launchSessionDrain } from '../cli/session-drain.js';
 const snapshots = (globalThis as typeof globalThis & {__commonMemoryPiSnapshots?:Map<string,MemoryView|string>}).__commonMemoryPiSnapshots ??= new Map<string,MemoryView|string>();
 const NO_AUTO_READ = 'Automatic memory read was not requested for this session lifecycle action. '+MEMORY_READ_GUIDANCE;
@@ -79,7 +79,7 @@ export function createCommonMemoryPiExtension(options: {runtimeFactory?: () => P
       feedbackGeneration++;uiContext=ctx;if(feedbackTimer)clearInterval(feedbackTimer);
       if(ctx.hasUI){updateFeedback();feedbackTimer=setInterval(updateFeedback,2000);feedbackTimer.unref();}
     });
-    pi.registerTool({name:'memory_read',label:'Read memory',description:MEMORY_READ_DESCRIPTION,promptSnippet:'Read authorized personal and project memory when needed.',promptGuidelines:[MEMORY_READ_GUIDANCE],parameters:Type.Object({contextId:Type.Optional(Type.String({maxLength:160}))}),execute:async(_id,input,_signal,_update,ctx)=>{try{const view=read(ctx,input.contextId);return {content:[{type:'text',text:renderMemoryView(view)}],details:view};}catch(error){throw nativeFailure(error);}}});
+    pi.registerTool({name:'memory_read',label:'Read memory',description:MEMORY_READ_DESCRIPTION,promptSnippet:'Read authorized personal and project memory when needed.',promptGuidelines:[MEMORY_READ_GUIDANCE],parameters:Type.Object({contextId:Type.Optional(Type.String({maxLength:160}))}),execute:async(_id,input,_signal,_update,ctx)=>{try{const view=read(ctx,input.contextId);return {content:[{type:'text',text:`${MEMORY_READ_REPLACEMENT_GUIDANCE}\n\n${renderMemoryView(view)}`}],details:view};}catch(error){throw nativeFailure(error);}}});
     pi.on("input", (event,ctx)=>{
       safe(r=>{ if(!ctx.hasPendingMessages())r.cancelInputs(ctx.sessionManager.getSessionId()); const project = registry?.resolve(ctx.cwd); const scope = options.resolveScope?.(ctx.cwd) ?? (project ? `project:${project.id}` : "global"); r.input({sessionId:ctx.sessionManager.getSessionId(),text:event.text,source:event.source,scope,parentEntryId:ctx.sessionManager.getLeafId(),hasUnsupportedContent:(event.images?.length??0)>0,...(event.streamingBehavior?{streamingBehavior:event.streamingBehavior}:{})}); });
       return {action:"continue"};

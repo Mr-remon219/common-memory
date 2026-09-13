@@ -5,7 +5,8 @@ import { installationOverview } from './installation-overview.js';
 import { configureModel } from './model-configuration.js';
 import { integrationsScreen } from './tui-integrations.js';
 import { memoryControlScreen } from './tui-memory.js';
-import { runAdvancedWizard, runNetworkWizard } from './tui-settings.js';
+import { runAdvancedWizard, runCredentialsWizard, runNetworkWizard, runPermissionsWizard } from './tui-settings.js';
+import { runWorkspaceWizard } from './tui-workspace.js';
 import { runSetupFlow, setupPending } from './setup.js';
 import { recoverPendingInstallation } from './installation-files.js';
 import { attempt, log, menu, note, requireInteractive, UserCancelled, viewText } from './tui-prompts.js';
@@ -25,6 +26,9 @@ async function configurationScreen(): Promise<boolean> {
     const action = await menu('Model & Configuration', [
       { value: 'current', label: 'Current Configuration', hint: '当前完整配置与 API Key 状态' },
       { value: 'model', label: 'Change Model / Provider' },
+      { value: 'credentials', label: 'API Key', hint: '独立更换密钥，不改变模型' },
+      { value: 'permissions', label: 'Read / Write Permissions', hint: '显式授权项目及材料' },
+      { value: 'workspace', label: 'MCP Fixed Workspace', hint: '固定读取绑定；Hooks 仍按 cwd' },
       { value: 'network', label: 'Network Configuration', hint: '代理与证书' },
       { value: 'test', label: 'Test Connection' },
       { value: 'advanced', label: 'Advanced Settings', hint: '思考方式、输入/输出上限与处理设置' },
@@ -38,6 +42,9 @@ async function configurationScreen(): Promise<boolean> {
       const config = configured();
       if (action === 'current') await viewText('Current Configuration', `${await installationOverview(config)}\n\n${currentConfiguration(config)}`);
       else if (action === 'model') await configureModel(config);
+      else if (action === 'credentials') await runCredentialsWizard(config);
+      else if (action === 'permissions') await runPermissionsWizard(config);
+      else if (action === 'workspace') await runWorkspaceWizard();
       else if (action === 'network') await runNetworkWizard(config);
       else if (action === 'advanced') await runAdvancedWizard(config);
       else if (action === 'test') {

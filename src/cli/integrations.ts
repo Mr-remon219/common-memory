@@ -42,6 +42,10 @@ export function readInstallationState(home = configDirectory()): InstallationSta
   if (!object(value) || value.version !== 1 || typeof value.setupComplete !== 'boolean' || !Array.isArray(value.targets) || !Array.isArray(value.resources)
     || value.dataRoot !== undefined && (typeof value.dataRoot !== 'string' || !isAbsolute(value.dataRoot))) throw new Error('安装记录损坏，未修改任何客户端。');
   for (const target of value.targets) if (!object(target) || !integrationIds.includes(String(target.id)) || typeof target.name !== 'string' || typeof target.root !== 'string' || !isAbsolute(target.root) || !['posix', 'windows-wsl'].includes(String(target.mode)) || typeof target.hooks !== 'boolean' || target.init !== undefined && (typeof target.init !== 'boolean' || target.id === 'pi' && target.init)) throw new Error('客户端安装记录损坏。');
+  for (const target of value.targets) {
+    const binding = (target as Record<string, unknown>).readWorkspace, projectId = (target as Record<string, unknown>).readWorkspaceProjectId;
+    if ((binding === undefined) !== (projectId === undefined) || binding !== undefined && (typeof binding !== 'string' || !isAbsolute(binding) || typeof projectId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/u.test(projectId) || (target as Record<string, unknown>).id === 'pi')) throw new Error('客户端固定工作区记录损坏。');
+  }
   for (const resource of value.resources) {
     if (!object(resource) || typeof resource.path !== 'string' || !isAbsolute(resource.path) || !['file', 'toml', 'array'].includes(String(resource.kind)) || !Array.isArray(resource.owners) || !resource.owners.length || resource.owners.some(id => !integrationIds.includes(String(id)))) throw new Error('安装文件归属记录损坏。');
     if (resource.kind !== 'array' && typeof resource.content !== 'string') throw new Error('安装内容记录损坏。');
@@ -96,7 +100,7 @@ function desiredResources(target: IntegrationTarget, home: string, env: NodeJS.P
     ];
   }
   let command = process.execPath;
-  let args = [cli, 'mcp', '--client-id', 'common-memory-local', '--capability', 'read', '--global'];
+  let args = [cli, 'mcp', '--client-id', 'common-memory-local', '--capability', 'read', '--global', ...(target.readWorkspace ? ['--workspace', target.readWorkspace, '--workspace-project-id', target.readWorkspaceProjectId!] : [])];
   let environment: Record<string, string> | undefined = { COMMON_MEMORY_HOME: home };
   if (target.mode === 'windows-wsl') {
     if (!env.WSL_DISTRO_NAME) throw new Error('无法确定当前 WSL 发行版，未写入 Windows 客户端。');
@@ -111,6 +115,11 @@ function desiredResources(target: IntegrationTarget, home: string, env: NodeJS.P
     const initArgs = [...args];
     initArgs[initArgs.indexOf('--capability') + 1] = 'init';
     initArgs[initArgs.indexOf('--client-id') + 1] = 'common-memory-local-init';
+    // A read binding never changes the separately opted-in import scope.
+    for (const flag of ['--workspace', '--workspace-project-id']) {
+      const workspaceIndex = initArgs.indexOf(flag);
+      if (workspaceIndex >= 0) initArgs.splice(workspaceIndex, 2);
+    }
     const initConfig = stringifyToml({ mcp_servers: { common_memory_init: {
       command, args: initArgs, ...(environment ? { env: environment } : {}),
       enabled_tools: ['memory_init', 'memory_status'], default_tools_approval_mode: 'approve',
@@ -168,6 +177,11 @@ function integrationPlan(): IntegrationPlan {
 
 /** Stage semantic JSON additions and exact TOML fragments without changing unrelated settings. */
 function stageInstall(state: InstallationState, targets: IntegrationTarget[], home: string, env: NodeJS.ProcessEnv, plan: IntegrationPlan): void {
+  const finalTargets = [...state.targets.filter(t => !targets.some(next => next.id === t.id)), ...targets];
+  for (const target of finalTargets) {
+    if ((target.readWorkspace === undefined) !== (target.readWorkspaceProjectId === undefined) || target.readWorkspace !== undefined && (target.id === 'pi' || !isAbsolute(target.readWorkspace) || !/^[A-Za-z0-9_-]{1,128}$/u.test(target.readWorkspaceProjectId!))) throw new Error('固定工作区必须包含绝对路径与项目 ID，且仅用于受管 read MCP。');
+    if (target.id !== 'pi' && finalTargets.some(other => other.id !== 'pi' && other.root === target.root && (other.readWorkspace !== target.readWorkspace || other.readWorkspaceProjectId !== target.readWorkspaceProjectId))) throw new Error('共享配置目录的固定工作区冲突；请在固定工作区页面明确确认全部 owners，未修改任何接入。');
+  }
   const { get, put } = plan;
   for (const target of targets) {
     const desired = desiredResources(target, home, env);
@@ -325,6 +339,7 @@ export function reconcileIntegrations(targets: IntegrationTarget[], dataRoot: st
       state.resources=state.resources.filter(r=>r!==resource);
     }
     // Reconcile retained metadata and missing resources, not just newly selected products.
+    state.targets = state.targets.filter(t => !removed.includes(t.id));
     stageInstall(state, targets, home, env, plan);
     stageRemove(state, removed, home, plan);
     for(const resource of state.resources)resource.owners=resource.owners.filter(id=>desired.some(r=>r.owners.includes(id)&&sameResource(r,resource)));

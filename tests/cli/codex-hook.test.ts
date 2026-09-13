@@ -1,4 +1,5 @@
 import { ProjectRegistry } from '../../src/v2/registry.js';
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { appendFileSync,mkdirSync,mkdtempSync,rmSync,writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -7,7 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { afterEach,expect,it } from 'vitest';
 import { defaultConfig } from '../../src/config/config.js';
 import { codexHook,MAX_HOOK_INPUT_BYTES } from '../../src/cli/codex-hook.js';
-import { consumeCodexInbox } from '../../src/cli/codex-session.js';
+import { consumeCodexInbox, recoverCodexInbox } from '../../src/cli/codex-session.js';
 import { RuntimeStore } from '../../src/v2/runtime.js';
 import { SessionIngress,sessionKey } from '../../src/v2/session.js';
 const roots:string[]=[];afterEach(()=>roots.splice(0).forEach(p=>rmSync(p,{recursive:true,force:true})));
@@ -40,7 +41,7 @@ it('SessionEnd persists the tail body before the transcript disappears and close
  const store=new RuntimeStore(f.config.dataRoot);try {const key=sessionKey({client:'codex',processInstance:'test-process',sessionId:'s'});expect(store.pending()[0]!.text).toBe('Delivered tail');expect(new SessionIngress(store).status(key)).toMatchObject({closing:true,complete:false,batches:1});}finally{store.close();}
 });
 it('unknown transcript preserves inbox body and recovery position; unsupported version and partial end fail explicitly',async()=>{
- const f=fixture();f.read();f.append({type:'x'},'unknown');f.read('SessionEnd');await expect(consumeCodexInbox(f.config)).rejects.toThrow('CODEX_UNKNOWN_TRANSCRIPT');
+ const f=fixture();f.read();f.append({type:'x'},'unknown');f.read('SessionEnd');expect(await consumeCodexInbox(f.config)).toMatchObject({complete:false,inbox:1,isolated:1,recoveries:[{issue:'CODEX_UNKNOWN_TRANSCRIPT'}]});
  const store=new RuntimeStore(f.config.dataRoot);try{expect(store.db.prepare('SELECT body FROM codex_inbox ORDER BY id DESC LIMIT 1').get()!.body).toContain('unknown');}finally{store.close();}
  const g=fixture();writeFileSync(g.path,JSON.stringify({type:'session_meta',payload:{cli_version:'unknown'}})+'\n');expect(()=>g.read()).toThrow('CODEX_UNSUPPORTED_VERSION');
  const h=fixture();h.read();appendFileSync(h.path,'{"unfinished":');expect(()=>h.read('SessionEnd')).toThrow('CODEX_PARTIAL_TRANSCRIPT');
@@ -57,8 +58,34 @@ it.skipIf(process.platform==='win32')('generated hooks cover lifecycle with thre
  const commands=[...result.stdout.matchAll(/^command = (.+)$/gm)].map(m=>JSON.parse(m[1]!));expect(commands).toHaveLength(7);expect(commands[0]).toContain("'\"'\"'");
 });
 it('requires an independently captured input candidate and never advances over unconfirmed delivery',async()=>{
- const f=fixture();f.read();f.append({type:'task_started',turn_id:'t'});f.append({type:'user_message',message:'No candidate'});f.read('SessionEnd');await expect(consumeCodexInbox(f.config)).rejects.toThrow('CODEX_UNCONFIRMED_DELIVERY');
+ const f=fixture();f.read();f.append({type:'task_started',turn_id:'t'});f.append({type:'user_message',message:'No candidate'});f.read('SessionEnd');expect(await consumeCodexInbox(f.config)).toMatchObject({complete:false,isolated:1,recoveries:[{issue:'CODEX_UNCONFIRMED_DELIVERY'}]});
  const store=new RuntimeStore(f.config.dataRoot);try{expect(store.pending()).toHaveLength(0);expect(store.db.prepare('SELECT body FROM codex_inbox ORDER BY id DESC LIMIT 1').get()!.body).toContain('No candidate');}finally{store.close();}
+});
+it('isolates a bad activation behind its retained row, drains a healthy session, and retries the original identity without duplicates',async()=>{
+ const f=fixture(),aKey=sessionKey({client:'codex',processInstance:'test-process',sessionId:'s'}),bKey=sessionKey({client:'codex',processInstance:'test-process',sessionId:'b'}),aText='Unconfirmed A';
+ f.read();f.append({type:'task_started',turn_id:'t'});f.append({type:'user_message',message:aText});f.append({type:'task_complete',turn_id:'t'});f.read('SessionEnd');
+ const bPath=join(f.home,'healthy.jsonl');writeFileSync(bPath,JSON.stringify({type:'session_meta',payload:{cli_version:'0.153.4',id:'b'}})+'\n');
+ const bHook=(event:string,prompt='')=>codexHook(JSON.stringify({hook_event_name:event,cwd:f.home,prompt,source:'startup',transcript_path:bPath,session_id:'b',turn_id:'tb'}),f.home,'test-process');
+ bHook('SessionStart');bHook('UserPromptSubmit','Healthy B');
+ for(const payload of [{type:'task_started',turn_id:'tb'},{type:'user_message',message:'Healthy B'},{type:'task_complete',turn_id:'tb'}])appendFileSync(bPath,JSON.stringify({timestamp:'2026-09-09T00:00:00.000Z',type:'event_msg',payload})+'\n');
+ bHook('SessionEnd');
+ const finishHealthy=async()=>{const writerStore=new RuntimeStore(f.config.dataRoot);try{for(let job=writerStore.claim({force:true});job;job=writerStore.claim({force:true}))writerStore.finish(job);}finally{writerStore.close();}};
+ const isolated=await consumeCodexInbox(f.config,finishHealthy);expect(isolated).toMatchObject({complete:false,isolated:1,recoveries:[{issue:'CODEX_UNCONFIRMED_DELIVERY'}]});
+ const recoveryId=isolated.recoveries[0]!.id;let cursor:number,inboxId:number;
+ const store=new RuntimeStore(f.config.dataRoot);try{
+  cursor=Number(store.db.prepare('SELECT offset FROM codex_cursors WHERE sessionId=?').get(aKey)!.offset);
+  const row=store.db.prepare('SELECT id,body FROM codex_inbox WHERE sessionId=?').get(aKey)!;inboxId=Number(row.id);expect(row.body).toContain(aText);
+  expect(store.db.prepare("SELECT text,state FROM observations WHERE sessionId=?").get(bKey)).toEqual({text:'Healthy B',state:'processed'});expect(new SessionIngress(store).status(bKey).complete).toBe(true);expect(JSON.stringify(isolated)).not.toContain(aText);expect(JSON.stringify(isolated)).not.toContain('Healthy B');
+ }finally{store.close();}
+ recoverCodexInbox(f.config,recoveryId);const repeated=await consumeCodexInbox(f.config);expect(repeated.recoveries[0]!.id).toBe(recoveryId);
+ const repaired=new RuntimeStore(f.config.dataRoot);try{
+  expect(repaired.db.prepare('SELECT id FROM codex_inbox WHERE sessionId=?').get(aKey)!.id).toBe(inboxId);
+  expect(repaired.db.prepare('SELECT offset FROM codex_cursors WHERE sessionId=?').get(aKey)!.offset).toBe(cursor);
+  repaired.db.prepare('INSERT INTO codex_candidates(sessionId,turnId,digest,text,scope) VALUES(?,?,?,?,?)').run(aKey,'t',createHash('sha256').update(aText).digest('hex'),aText,'global');
+ }finally{repaired.close();}
+ recoverCodexInbox(f.config,recoveryId);expect(await consumeCodexInbox(f.config,finishHealthy)).toMatchObject({complete:true,inbox:0,isolated:0});
+ const done=new RuntimeStore(f.config.dataRoot);try{expect(done.db.prepare('SELECT text,state FROM observations ORDER BY id').all()).toEqual([{text:'Healthy B',state:'processed'},{text:aText,state:'processed'}]);expect(done.db.prepare('SELECT COUNT(*) AS n FROM observations WHERE sessionId=?').get(aKey)!.n).toBe(1);}finally{done.close();}
+ expect((await consumeCodexInbox(f.config)).complete).toBe(true);
 });
 
 it('freezes source scope at input, not the cwd of a later Stop or SessionEnd',async()=>{
@@ -91,7 +118,7 @@ it.each([
  const f=fixture();f.read();await consumeCodexInbox(f.config);f.read('UserPromptSubmit','startup','s','test-process','Synthetic delivery');
  f.append({type:'task_started',turn_id:'t'});f.append({type:'user_message',message:'Synthetic delivery'});f.append(payload,type);f.read('SessionEnd');
  const store=new RuntimeStore(f.config.dataRoot);try{
-  const before=store.db.prepare('SELECT * FROM codex_cursors').all();await expect(consumeCodexInbox(f.config)).rejects.toThrow();
+  const before=store.db.prepare('SELECT * FROM codex_cursors').all();expect(await consumeCodexInbox(f.config)).toMatchObject({complete:false,isolated:1});
   expect(store.db.prepare('SELECT * FROM codex_cursors').all()).toEqual(before);expect(store.db.prepare('SELECT * FROM observations').all()).toEqual([]);
   expect(store.db.prepare('SELECT text FROM codex_candidates').get()!.text).toBe('Synthetic delivery');expect(store.db.prepare('SELECT body FROM codex_inbox ORDER BY id DESC LIMIT 1').get()!.body).toContain('Synthetic delivery');
  }finally{store.close();}
@@ -102,7 +129,7 @@ it.each(['no-active-turn','missing-item-turn','bad-time'] as const)('source-defi
  if(kind==='missing-item-turn')f.append({type:'item_completed',item:{type:'UserMessage',id:'u',content:[{type:'text',text:'Synthetic delivery'}]}});
  else if(kind==='bad-time')appendFileSync(f.path,JSON.stringify({type:'event_msg',timestamp:'not-a-time',payload:{type:'user_message',message:'Synthetic delivery'}})+'\n');
  else f.append({type:'user_message',message:'Synthetic delivery'});
- f.read('SessionEnd');await expect(consumeCodexInbox(f.config)).rejects.toThrow('CODEX_UNCONFIRMED_DELIVERY');
+ f.read('SessionEnd');expect(await consumeCodexInbox(f.config)).toMatchObject({complete:false,isolated:1,recoveries:[{issue:'CODEX_UNCONFIRMED_DELIVERY'}]});
  const store=new RuntimeStore(f.config.dataRoot);try{expect(store.db.prepare('SELECT * FROM observations').all()).toEqual([]);expect(store.db.prepare('SELECT text FROM codex_candidates').get()!.text).toBe('Synthetic delivery');}finally{store.close();}
 });
 it('0.154.0 ten-turn item/legacy duplicate fixture has exactly ten observations, never retained context evidence',async()=>{

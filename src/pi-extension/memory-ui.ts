@@ -1,3 +1,4 @@
+import { editResultMessage } from '../v2/service-guidance.js';
 import type { ExtensionCommandContext } from '@earendil-works/pi-coding-agent';
 import { getMarkdownTheme, getSettingsListTheme } from '@earendil-works/pi-coding-agent';
 import { Container, Markdown, SettingsList, Text, matchesKey, truncateToWidth, type Component, type SettingItem } from '@earendil-works/pi-tui';
@@ -57,8 +58,9 @@ async function processing(ctx:ExtensionCommandContext,host:MemoryHost,service:Pi
   for(;;) {
     valid();const status=service.status(host,{},true);
     if(!('queue' in status))return;
-    const items:SettingItem[]=[{id:'summary',label:'状态汇总',currentValue:status.queue.observations.map(r=>`${state(r.state)} ${r.count}`).join(' · ') || '暂无请求',description:'已处理不等于已记住。任务最多展示最近/活跃的 20 个；这里不展示原始对话。'},action('refresh','刷新状态','读取 Core 当前状态，不重复提交材料。')];
-    for(const [index,request] of status.recent.entries())items.push(action(`request:${index}`,`${request.importId?'导入':'调整'} ${request.importId ?? request.requestId}`,`${state(request.outcome.state)} · ${request.contextId}`));
+    const summary=[...status.queue.observations.map(r=>`${state(r.state)} ${r.count}`),...status.queue.jobStates.map(r=>`任务${state(r.state)} ${r.count}`)];
+    const items:SettingItem[]=[{id:'summary',label:'状态汇总',currentValue:summary.join(' · ') || '暂无请求',description:'汇总覆盖全部当前可见任务；明细最多展示最近/活跃的 20 个。已处理不等于已记住；这里不展示原始对话。'},action('refresh','刷新状态','读取 Core 当前状态，不重复提交材料。')];
+    for(const [index,request] of status.recent.entries())items.push(action(`request:${index}`,`${request.importId?'导入':'调整'} ${request.importId ?? request.requestId}`,`${request.outcome.editResult ? editResultMessage(request.outcome.editResult) : state(request.outcome.state)} · ${request.contextId}`));
     for(const job of status.queue.jobs)items.push(action(`job:${job.id}`,`任务 ${job.id.slice(0,8)}`,`${state(job.state)} · 尝试 ${job.attempts}${job.diagnostic?` · ${job.diagnostic.reason}`:''}`));
     selected=await page(ctx,'Common Memory · 处理状态',items,selected);if(!selected)return;
     if(selected==='refresh')continue;

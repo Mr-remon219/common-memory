@@ -13,7 +13,7 @@ Common Memory 将背景、偏好和项目上下文保存在本机 Markdown 中�
 - **不支持**：ChatGPT 普通 Chat、网页版或网页版 Plugins；没有 HTTP MCP 服务。
 - **不必常开管理界面**：完成接入后，日常直接使用助手。`common-memory` 是配置和管理入口，不是每次聊天前都要手动启动的服务。
 
-**当前版本：v0.4.0** · npm 包名：`common-memory-core` · 命令：`common-memory`。
+**当前版本：v0.4.1** · npm 包名：`common-memory-core` · 命令：`common-memory`。
 这是早期版本；测试通过不代表所有真实客户端交互或模型的记忆判断都已验证。
 
 ## 1. 安装
@@ -26,8 +26,10 @@ Common Memory 将背景、偏好和项目上下文保存在本机 Markdown 中�
 | Linux / macOS | 本机终端 |
 | Windows | **WSL 终端**；Windows 桌面助手通过生成的桥接调用 WSL 中的 Common Memory |
 
+使用 npm 安装，或按[源码构建说明](docs/releasing.md#从-github-使用源码路径)运行。
+
 ```sh
-npm install -g common-memory-core@0.4.0
+npm install -g common-memory-core@0.4.1
 common-memory
 ```
 
@@ -55,7 +57,7 @@ Provider → Base URL → API Key → Model → Enter 保存
 **API Key 只能在 TUI 中配置并保存到私有 `.env`。所有运行入口都只读取这份凭据，
 包括旧配置；终端或助手进程中的同名 API Key 环境变量不会覆盖它。**
 
-如果获取模型列表失败，本次输入的 Key **尚未保存**。网络排查方法见文末常见问题。
+如果获取模型列表失败，URL / Key 留在**未保存的草稿**中。可调整 direct / env / custom 代理与 CA 后重试，也可手填同 Provider / API 的模型；最终选择模型才一起保存，退出草稿不落盘。已有配置可保留当前私有 Key，或从独立 API Key 页面更换。
 
 ### 第二步：选择要接入的助手
 
@@ -115,6 +117,10 @@ Provider → Base URL → API Key → Model → Enter 保存
 | **Memory Control → Adjust Memory** | 用自然语言新增、纠正或删除记忆 |
 | **Adjust Memory → Processing Status** | 查看已提交请求，继续处理或重试失败任务 |
 | **Model & Configuration** | 查看配置、更换模型/Key、设置网络、测试连接、卸载 |
+| **Search / View Memory → Projects** | 登记 / 移除项目、单独设置读写与来源授权；移除不删除 Markdown |
+| **Model & Configuration → MCP Fixed Workspace** | 确认受管 read MCP 的固定项目绑定；共享配置根的全部 owners 一起更新 |
+
+项目登记和 MCP 绑定都**不会自动授予权限**。受管 read MCP 固定路径与项目 ID，读取范围是 global＋所选项目与现有授权的交集；移除或同路径重新登记后不会静默换绑，需重新确认。Hook / Pi 仍按 cwd 选择项目，独立 init MCP 仍仅 global。修改绑定后重启相关宿主。
 
 ### Pi 原生记忆页面
 
@@ -134,6 +140,8 @@ Provider → Base URL → API Key → Model → Enter 保存
 
 Pi / Codex / Desktop Work 的会话接入按 **每 10 次已完成交互**封批处理，正常真实退出时交接不足 10 次的尾批。
 异常杀进程或断电不保证正常退出事件已交付；已持久保存的队列仍保留。
+普通 Flush 不强制封批不足十轮的材料，状态会区分 buffered、待处理任务、宿主 inbox 和隔离。
+坏宿主会话保留原输入与游标，不阻塞健康会话；可在 Processing Status 分页查看并按原恢复 ID 重试。
 
 **不是每句话都会立即写入，也不是保存完整聊天记录。** 模型会判断是否值得保留，助手和工具内容不能冒充你的声明。
 默认只授权个人记忆和用户表达，项目及导入材料需要另行显式授权。
@@ -146,8 +154,13 @@ Pi / Codex / Desktop Work 的会话接入按 **每 10 次已完成交互**封批
 
 > 删除关于我使用某个旧工具的偏好。
 
+TUI / Pi 的显式编辑独立于自动学习，返回「已修改 / 已满足 / 需要澄清 / 拒绝」之一；普通 ignore 不能冒充编辑完成。
 提交后查看处理结果，再到 **Search / View Memory** 核实。提交后取消等待不会撤销持久请求；
 不要因为没有立即看到变化，就重复提交相同内容。
+
+启动 Hook 是初始快照；`memory_read` 按需读取当前磁盘，最新读取替换**同一 scope** 的旧快照（包括删除），不影响其它 scope。没有轮询、推送或每轮自动重读。
+尚未建立复杂的历史优先级仲裁：晚到的旧对话材料仍可能被模型用于覆盖较新的编辑意图。
+完整来源字节限额与编辑契约见[编辑与输入契约](docs/edit-and-input-contract.md)。
 
 ### 从其他助手导入已有理解
 
@@ -193,7 +206,7 @@ common-memory import notes.md --author user
 2. 在原来安装 Common Memory 的环境中执行：
 
    ```sh
-   npm install -g common-memory-core@0.4.0
+   npm install -g common-memory-core@0.4.1
    common-memory --version
    ```
 

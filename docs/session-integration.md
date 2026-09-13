@@ -51,9 +51,9 @@ reload/new/resume/fork 的 extension shutdown 只关闭本地资源。进程随�
 首次维护请求才初始化固定网络路由、CA 和 dispatcher；初始化失败保留持久工作，绝不改走直连。
 Pi 捕获/维护诊断只打印受控原因与修复入口；相同原因去重，每个报告器最多八种，不打印异常正文。
 
-Pi 原生管理（当前源码，未发布）：`/memory` 使用官方 `SettingsList` / `ctx.ui.custom`，在页面内浏览 Profile、Preferences、全部已授权项目及关键词结果；正文滚动完整可达。页面展示不会追加模型消息或扩大 Agent 的当前项目范围。自然语言调整由用户 editor/confirm 提交，使用独立稳定 `pi-adjust:<session>` / requestId 身份，以原文 `interactive` observation 进入同一 Core；返回接受不代表已落档。导入页面与原生 `memory_init` 共同使用 `queueAgentImport`，要求配置 `agent_observation` 授权及实际用户确认；使用 `pi-init:<session>` / importId，保留幂等、冲突及来源保护，非交互模型调用不能自行批准。
+Pi 原生管理（当前源码，未发布）：`/memory` 使用官方 `SettingsList` / `ctx.ui.custom`，在页面内浏览 Profile、Preferences、全部已授权项目及关键词结果；正文滚动完整可达。页面展示不会追加模型消息或扩大 Agent 的当前项目范围。自然语言调整由用户 editor/confirm 提交，使用独立稳定 `pi-adjust:<session>` / requestId 身份，以原文 `interactive` 来源和可信 `taskKind: edit` 进入同一 Core；单请求单任务，返回接受不代表已落档。普通 interactive 捕获和旧观察仍是 observation；四类有界编辑结果见[编辑与限制契约](edit-and-input-contract.md)。导入页面与原生 `memory_init` 共同使用 `queueAgentImport`，要求配置 `agent_observation` 授权及实际用户确认；使用 `pi-init:<session>` / importId，保留幂等、冲突及来源保护，非交互模型调用不能自行批准。
 
-`memory_status` 发现当前 global/project 权限，并提供无正文的有界队列/近期请求结果、原 ID 状态及共享 `next` 指引。用户页面可以查看全部已授权项目，模型工具不能因此读取其他项目。部分范围不可见的任务不展示 job ID，也不可重试；只有完整来源与范围仍授权的 dead 任务能由用户确认重试，不清除自动退避、不解除 quarantine。原生页面刷新/继续处理不依赖用户捕获权限。
+`memory_status` 发现当前 global/project 权限，并提供无正文的有界队列/近期请求结果、原 ID 状态及共享 `next` 指引。近期请求和任务明细最多 20 项，但 observation/job 状态汇总覆盖全部当前可见项，不因明细 LIMIT 漏报未完成；编辑结果在 TUI 中附原 request ID 或稳定 job ID，避免相同结果无法对应。用户页面可以查看全部已授权项目，模型工具不能因此读取其他项目。部分范围不可见的任务不展示 job ID，也不可重试；只有完整来源与范围仍授权的 dead 任务能由用户确认重试，不清除自动退避、不解除 quarantine。原生页面刷新/继续处理不依赖用户捕获权限。
 
 有 UI 的会话每两秒读取无正文状态，更新扩展自己的状态栏条目；失败终态通知去重，不触发模型轮次，不记录正文、状态消息或额外 canonical 副本。shutdown 清理定时器；等待确认期间发生会话替换会拒绝提交。原生读取每次重新核验权限；冻结快照在撤权/项目移除时丢弃不再授权的文档，不自动重读或在重新授权后复活已丢弃内容。运行中的维护配置仍是启动快照，修改配置后须重启。新增覆盖见 `tests/v2/pi-memory.test.ts`。
 
@@ -80,6 +80,17 @@ busy timeout，生成器给三秒宿主期限；不在 hook 内运行模型。�
 它先事务性将 inbox 正文转为 session 状态，同事务删除副本；Stop 核对会继续读取后续
 终态记录，不等待下一输入。单次核对最多 60 秒，失败保留 durable watch。消费者使用
 `src/v2/session-drain.ts` 等待正常租约、退避，直到已封工作处理或 dead/quarantined。
+
+Codex-host 的解析、游标或交付认证失败按 activation 持久隔离：失败事务整体回滚，原 inbox、cursor、
+candidate 与正文都保留；消费者越过该 activation 继续处理其他健康会话。状态只展示固定错误码、
+inbox/watch 数量和有界恢复 ID，不展示正文。恢复列表每页最多 20 项；TUI 可选「更多宿主恢复项」，CLI 用 `status --after-recovery <nextRecoveryId>` 继续翻页，总数不截断。
+失败记录写入前在事务内复核原 inbox 的 id/session/start 或原 watch/cursor，避免并发成功后写入过期隔离。修复协议/候选原因后，从 TUI Processing Status 或
+`common-memory session-drain --recover <id>` 显式重试同一原始行；再失败保留同一恢复 ID，成功后
+原子消费且不重复创建 observation。未知 transcript 与未认证交付仍 fail-closed；不在固定宿主协议错误
+集合中的 SQLite、文件 I/O 和瞬时容量错误直接上抛，不会被误记成某个坏会话。
+
+普通 `common-memory flush` 不封不足十轮的 settled 会话；buffered、host inbox/isolation/watch 都使
+命令返回 incomplete，状态分别覆盖 buffered、pending/claimed、running/retry、dead、processed。
 消费者崩溃后可由下一次写端事件或 `common-memory session-drain` 恢复；不会清空数据。
 父宿主与 MCP 退出不会撤销独立消费者。kill、重启、磁盘失败不承诺正常结束保证。
 
@@ -98,6 +109,7 @@ busy timeout，生成器给三秒宿主期限；不在 hook 内运行模型。�
 - `tests/v2/pi-integration.test.ts` 和 `pi-sdk-capture.test.ts`：真实 SDK 合成 provider 及
   事件级十轮/尾批、网络不可用时仍持久捕获、诊断去重；保留交付认证、队列来源、图片隔离；冻结附加块与
   宿主新 systemPrompt 组合、reload 保留快照。
+- `tests/cli/host-recovery-boundaries.test.ts`：连续进展仍遵守整次期限、并发成功及 rowid 复用不留过期隔离、超过二十条恢复项可分页访问。
 - `tests/cli/session-drain.test.ts`：实际 Node 宿主退出与 MCP EOF 后才释放本地假提供者，
   独立消费者仍提交 canonical Markdown、receipt 与完成状态；强杀消费者后显式重启恢复。
   这不是只验证 Node 子进程能存活，而是执行实际 configured Writer 与 Core 提交。

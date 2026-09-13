@@ -72,7 +72,7 @@ it('recovers files-before-DB process death into source links and session complet
     const recovered = new Writer(options);
     try {
       expect(await recovered.run()).toEqual({ outcome: 'idle' });
-      expect(new SessionIngress(recovered.store).status(key)).toEqual({ closing: true, complete: true, pending: 0, failed: 0, batches: 1 });
+      expect(new SessionIngress(recovered.store).status(key)).toEqual({ closing: true, complete: true, pending: 0, failed: 0, batches: 1, states: { processed: 1 } });
       expect(recovered.store.sources(sourceKey('profile', 'Background'))).toEqual([sourceId]);
       expect(recovered.store.sources(sourceKey('preferences', 'Style'))).toEqual([sourceId]);
       expect(recovered.store.db.prepare('SELECT COUNT(*) AS n FROM receipts').get()!.n).toBe(1);

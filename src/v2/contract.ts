@@ -7,7 +7,9 @@ export type Decision = CommonDecision & (
   | { kind: 'forget' | 'maintain'; operations: SectionOperation[] }
   | { kind: 'ignore' }
 );
-export interface MaintenanceDecision { version: 'memory_maintenance_v2'; request_id: string; decisions: Decision[] }
+export const EDIT_RESULTS = ['modified', 'already_satisfied', 'clarification_required', 'refused'] as const;
+export type EditResult = typeof EDIT_RESULTS[number];
+export interface MaintenanceDecision { edit_result?: EditResult; version: 'memory_maintenance_v2'; request_id: string; decisions: Decision[] }
 // Explicit types on string const/enum fields preserve their value domain and satisfy strict remote schema parsers.
 const string = { type: 'string' };
 const operationSchema = { anyOf: [
@@ -25,15 +27,21 @@ export const maintenanceSchema: Readonly<Record<string, unknown>> = {
     ] } },
   },
 };
+export const editMaintenanceSchema = { ...maintenanceSchema, required: ['version', 'request_id', 'decisions', 'edit_result'], properties: { ...(maintenanceSchema.properties as Record<string, unknown>), edit_result: { type: 'string', enum: [...EDIT_RESULTS] } } };
+const validateEdit = new Ajv2020({ strict: false, allErrors: true }).compile(editMaintenanceSchema);
 const validate = new Ajv2020({ strict: false, allErrors: true }).compile(maintenanceSchema);
-export function validateDecision(body: unknown, requestId: string, documents: DocumentSnapshot[], evidenceScopes: Map<string,string>): MaintenanceDecision {
-  if (!validate(body)) throw new Error('INVALID_DECISION');
+export function validateDecision(body: unknown, requestId: string, documents: DocumentSnapshot[], evidenceScopes: Map<string,string>, taskKind: 'observation' | 'edit' = 'observation'): MaintenanceDecision {
+  if (!(taskKind === 'edit' ? validateEdit(body) : validate(body))) throw new Error('INVALID_DECISION');
   const result = body as MaintenanceDecision;
   if (result.request_id !== requestId) throw new Error('INVALID_REQUEST_REFERENCE');
+  if (taskKind === 'edit') {
+    const changes = result.decisions.some(d => d.kind !== 'ignore');
+    if (changes !== (result.edit_result === 'modified')) throw new Error('INVALID_EDIT_RESULT');
+  }
   const touched = new Set<string>();
   for (const decision of result.decisions) {
     if (decision.evidence.some(ref => !evidenceScopes.has(ref))) throw new Error('INVALID_EVIDENCE_REFERENCE');
-    if ((decision.kind === 'retain' || decision.kind === 'forget') && !decision.evidence.length) throw new Error('MISSING_EVIDENCE');
+    if ((decision.kind === 'retain' || decision.kind === 'forget' || taskKind === 'edit' && decision.kind !== 'ignore') && !decision.evidence.length) throw new Error('MISSING_EVIDENCE');
     if (decision.kind === 'ignore') continue;
     for (const op of decision.operations) {
       const doc = documents.find(doc => doc.target === op.target);

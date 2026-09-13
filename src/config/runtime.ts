@@ -1,3 +1,4 @@
+import { inputLimits } from '../core/safety/external-preflight.js';
 import { ProviderMemoryAgent, type ProviderOptions } from '../memory-agent-runtime/provider.js';
 import { NetworkClient } from '../memory-agent-runtime/network/client.js';
 import { resolveRoute, networkSecret, networkConfigError, type RouteDescription } from '../memory-agent-runtime/network/route.js';
@@ -57,7 +58,7 @@ class ConfiguredWriter extends Writer {
   readonly #runs = new Set<Promise<{outcome:string;reason?:string}>>();
   #closing: Promise<void> | undefined;
   constructor(config: CommonMemoryConfig, readonly agent: ReturnType<typeof createConfiguredMemoryAgent>) {
-    super({ modelVersion: config.remote.model, ...(config.disclosure.maxTotalBytes == null ? {} : {maxRequestBytes: config.disclosure.maxTotalBytes}), dataRoot: config.dataRoot, agent, allowedScopes: config.disclosure.allowedScopes, writableScopes: config.writableScopes, allowedProvenance: config.disclosure.allowedProvenance, scheduler: config.scheduler, ...(config.sessionCache ? {sessionCache:config.sessionCache} : {}) });
+    super({ maxSourceBytes:inputLimits(config.disclosure).maxSourceBytes ?? undefined, modelVersion: config.remote.model, ...(config.disclosure.maxTotalBytes == null ? {} : {maxRequestBytes: config.disclosure.maxTotalBytes}), dataRoot: config.dataRoot, agent, allowedScopes: config.disclosure.allowedScopes, writableScopes: config.writableScopes, allowedProvenance: config.disclosure.allowedProvenance, scheduler: config.scheduler, ...(config.sessionCache ? {sessionCache:config.sessionCache} : {}) });
   }
   override run(options: {force?:boolean;signal?:AbortSignal} = {}) {
     if (this.#abort.signal.aborted) return Promise.reject(new Error('CANCELLED'));

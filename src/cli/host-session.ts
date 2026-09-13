@@ -17,8 +17,70 @@ export function setupHostAdapter(store:RuntimeStore):void {
     CREATE TABLE IF NOT EXISTS codex_cursors(sessionId TEXT PRIMARY KEY,path TEXT NOT NULL,offset INTEGER NOT NULL,turnId TEXT);
     CREATE TABLE IF NOT EXISTS codex_inbox(id INTEGER PRIMARY KEY,sessionId TEXT NOT NULL,event TEXT NOT NULL,turnId TEXT,start INTEGER NOT NULL,body TEXT NOT NULL,scope TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS codex_candidates(sessionId TEXT NOT NULL,turnId TEXT NOT NULL,digest TEXT NOT NULL,text TEXT,PRIMARY KEY(sessionId,turnId,digest));
-    CREATE TABLE IF NOT EXISTS codex_watches(sessionId TEXT NOT NULL,turnId TEXT NOT NULL,PRIMARY KEY(sessionId,turnId));`);
+    CREATE TABLE IF NOT EXISTS codex_watches(sessionId TEXT NOT NULL,turnId TEXT NOT NULL,PRIMARY KEY(sessionId,turnId));
+    CREATE TABLE IF NOT EXISTS codex_failures(sessionId TEXT PRIMARY KEY,inboxId INTEGER,recoveryId TEXT NOT NULL UNIQUE,issue TEXT NOT NULL,failedAt INTEGER NOT NULL,retryRequested INTEGER NOT NULL DEFAULT 0);`);
   store.transaction(()=>{if(!store.db.prepare('PRAGMA table_info(codex_candidates)').all().some(r=>r.name==='scope'))store.db.exec('ALTER TABLE codex_candidates ADD COLUMN scope TEXT');});
+}
+
+const HOST_SESSION_FAILURES = new Set([
+  'CODEX_UNKNOWN_TRANSCRIPT','CODEX_UNKNOWN_COMPLETION','CODEX_UNSUPPORTED_VERSION','CODEX_CURSOR_CONFLICT','CODEX_UNCONFIRMED_DELIVERY','CODEX_UNSETTLED_TURN',
+  'CODEX_UNSAFE_TRANSCRIPT','CODEX_TRANSCRIPT_REPLACED',
+  'INVALID_SESSION_MESSAGE','SESSION_MESSAGE_CONFLICT','SESSION_CLOSED','SESSION_TURN_CLOSED','SESSION_SETTLE_CONFLICT',
+]);
+export interface HostRecoveryStatus { id:string; issue:string; event:string; failedAt:number; retryRequested:boolean }
+export interface HostQueueStatus {
+  complete:boolean; inbox:number; isolated:number; watches:number;
+  recoveries:HostRecoveryStatus[]; nextRecoveryId:string|null;
+  sessions:{sessionId:string;inbox:number;isolated:number;watches:number}[];
+}
+function hostFailureCode(error:unknown):string|null {
+  const code=error instanceof Error?error.message:'';
+  return HOST_SESSION_FAILURES.has(code)?code:null;
+}
+function recordHostFailure(store:RuntimeStore,sessionId:string,inboxId:number|null,error:unknown,identity:{start:number}|{turnId:string;offset:number}):boolean {
+  const issue=hostFailureCode(error);if(!issue)return false;
+  store.transaction(()=>{
+    // The failed transaction has rolled back. Another consumer may already have
+    // resolved this exact work; rowid alone can also have been reused meanwhile.
+    const pending='start' in identity
+      ? store.db.prepare('SELECT 1 FROM codex_inbox WHERE id=? AND sessionId=? AND start=?').get(inboxId,sessionId,identity.start)
+      : store.db.prepare('SELECT 1 FROM codex_watches w JOIN codex_cursors c ON c.sessionId=w.sessionId WHERE w.sessionId=? AND w.turnId=? AND c.offset=?').get(sessionId,identity.turnId,identity.offset);
+    if(!pending)return;
+    store.db.prepare(`INSERT INTO codex_failures(sessionId,inboxId,recoveryId,issue,failedAt,retryRequested) VALUES(?,?,?,?,?,0)
+      ON CONFLICT(sessionId) DO UPDATE SET inboxId=excluded.inboxId,issue=excluded.issue,failedAt=excluded.failedAt,retryRequested=0`)
+      .run(sessionId,inboxId,randomUUID(),issue,Date.now());
+  });
+  return true;
+}
+function hasHostTable(store:RuntimeStore,name:string):boolean {
+  return Boolean(store.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name));
+}
+/** Body-free status for host admission. Failure reasons are fixed local enums, never exception text. */
+export function hostQueueStatus(store:RuntimeStore,afterRecoveryId=''):HostQueueStatus {
+  if(afterRecoveryId&&!/^[0-9a-f-]{36}$/iu.test(afterRecoveryId))throw new Error('CODEX_RECOVERY_UNAVAILABLE');
+  if(!hasHostTable(store,'codex_inbox'))return {complete:true,inbox:0,isolated:0,watches:0,recoveries:[],nextRecoveryId:null,sessions:[]};
+  const hasFailures=hasHostTable(store,'codex_failures'),hasWatches=hasHostTable(store,'codex_watches');
+  const inboxRows=store.db.prepare('SELECT sessionId,COUNT(*) AS n FROM codex_inbox GROUP BY sessionId').all();
+  const failureRows=hasFailures?store.db.prepare('SELECT sessionId FROM codex_failures').all():[];
+  const watchRows=hasWatches?store.db.prepare('SELECT sessionId,COUNT(*) AS n FROM codex_watches GROUP BY sessionId').all():[];
+  const inbox=inboxRows.reduce((n,r)=>n+Number(r.n),0),isolated=failureRows.length,watches=watchRows.reduce((n,r)=>n+Number(r.n),0);
+  const recoveries=hasFailures?store.db.prepare(`SELECT f.recoveryId,f.issue,f.failedAt,f.retryRequested,COALESCE(i.event,'Reconcile') AS event FROM codex_failures f
+    LEFT JOIN codex_inbox i ON i.id=f.inboxId AND i.sessionId=f.sessionId WHERE f.recoveryId>? ORDER BY f.recoveryId LIMIT 21`).all(afterRecoveryId)
+    .map(r=>({id:String(r.recoveryId),issue:String(r.issue),event:String(r.event),failedAt:Number(r.failedAt),retryRequested:Boolean(r.retryRequested)})):[];
+  const bySession=new Map<string,{sessionId:string;inbox:number;isolated:number;watches:number}>();
+  const session=(id:unknown)=>{const key=String(id),prior=bySession.get(key);if(prior)return prior;const created={sessionId:key,inbox:0,isolated:0,watches:0};bySession.set(key,created);return created;};
+  for(const row of inboxRows)session(row.sessionId).inbox=Number(row.n);
+  for(const row of failureRows)session(row.sessionId).isolated=1;
+  for(const row of watchRows)session(row.sessionId).watches=Number(row.n);
+  const sessions=[...bySession.values()].sort((a,b)=>a.sessionId.localeCompare(b.sessionId));
+  return {complete:inbox===0&&isolated===0&&watches===0,inbox,isolated,watches,recoveries:recoveries.slice(0,20),nextRecoveryId:recoveries.length>20?recoveries[19]!.id:null,sessions};
+}
+/** Explicitly retries the same retained inbox/watch identity. It never edits or discards host material. */
+export function recoverCodexInbox(config:CommonMemoryConfig,recoveryId:string):void {
+  if(!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(recoveryId))throw new Error('CODEX_RECOVERY_UNAVAILABLE');
+  const store=new RuntimeStore(config.dataRoot);
+  try {setupHostAdapter(store);const result=store.db.prepare('UPDATE codex_failures SET retryRequested=1 WHERE recoveryId=?').run(recoveryId);if(result.changes!==1)throw new Error('CODEX_RECOVERY_UNAVAILABLE');}
+  finally{store.close();}
 }
 export const codexProcessInstance = hostProcessInstance;
 function transcript(path:string,offset:number|null,cap:number):{text:string;end:number} {
@@ -78,53 +140,72 @@ export function enqueueCodexEvent(config:CommonMemoryConfig,event:CodexEvent,ins
   });}finally{store.close();}
 }
 function fstatSize(path:string):number {const fd=openSync(path,constants.O_RDONLY|constants.O_NOFOLLOW);try{return fstatSync(fd).size;}finally{closeSync(fd);}}
-export async function consumeCodexInbox(config:CommonMemoryConfig, progressCallback?:()=>Promise<void>):Promise<void> {
+export async function consumeCodexInbox(config:CommonMemoryConfig, progressCallback?:()=>Promise<void>):Promise<HostQueueStatus> {
   const store=new RuntimeStore(config.dataRoot);
   try {
     setupHostAdapter(store);
     const ingress=new SessionIngress(store,config.sessionCache);
     const deadline=Date.now()+60000;
     for(;;) {
-      if(Date.now()>deadline)throw new Error('CODEX_COMPLETION_UNCONFIRMED');
-      const consumed=store.transaction(()=>{
-        const row=decodeText(store.db.prepare('SELECT *, CAST(body AS BLOB) AS body FROM codex_inbox ORDER BY id LIMIT 1').get(), ['body']);if(!row)return false;
-        const key=String(row.sessionId),cursor=store.db.prepare('SELECT * FROM codex_cursors WHERE sessionId=?').get(key)!;
-        if(row.start!==cursor.offset)throw new Error('CODEX_CURSOR_CONFLICT');
-        const parsed=parseTranscript(String(row.body),{offset:Number(cursor.offset),turnId:cursor.turnId===null?null:String(cursor.turnId)},String(row.scope));
-        // Replacing the inbox body by session rows is one transaction, without duplicate durable bodies.
-        store.db.prepare('DELETE FROM codex_inbox WHERE id=?').run(row.id!);
-        for(const action of parsed.actions) {if(action.kind==='message'){
-          if(action.message.role==='user'){
-            const digest=createHash('sha256').update(action.message.text).digest('hex');
-            const candidate=store.db.prepare('SELECT digest,scope,text FROM codex_candidates WHERE sessionId=? AND turnId=? AND digest=?').get(key,action.message.turnId,digest);
-            if(!candidate||typeof candidate.scope!=='string')throw new Error('CODEX_UNCONFIRMED_DELIVERY');
-            if(candidate.text===null)continue;
-            action.message.scope=candidate.scope;
-            store.db.prepare('UPDATE codex_candidates SET text=NULL WHERE sessionId=? AND turnId=? AND digest=?').run(key,action.message.turnId,digest);
-          }
-          ingress.capture(key,action.message);
-        }else ingress.settle(key,action.turnId,action.state);}
-        store.db.prepare('UPDATE codex_cursors SET offset=?,turnId=? WHERE sessionId=?').run(parsed.state.offset,parsed.state.turnId,key);
-        if((row.event==='Stop'||row.event==='Interrupt')&&row.turnId)store.db.prepare('INSERT OR IGNORE INTO codex_watches VALUES(?,?)').run(key,row.turnId);
-        if(row.event==='SessionEnd') {ingress.end(key);store.db.prepare('UPDATE codex_candidates SET text=NULL WHERE sessionId=?').run(key);store.db.prepare('DELETE FROM codex_watches WHERE sessionId=?').run(key);}
-        return true;
-      });
-      if(consumed){await progressCallback?.();continue;}
-      const watches=store.db.prepare('SELECT w.*,c.path,c.offset,c.turnId AS activeTurn FROM codex_watches w JOIN codex_cursors c ON c.sessionId=w.sessionId').all();
-      if(!watches.length)return;
+      if(Date.now()>=deadline)return hostQueueStatus(store);
+      const next=store.db.prepare(`SELECT i.id,i.sessionId,i.start FROM codex_inbox i LEFT JOIN codex_failures f ON f.sessionId=i.sessionId
+        WHERE f.sessionId IS NULL OR f.retryRequested=1 ORDER BY i.id LIMIT 1`).get();
+      if(next){
+        let consumed=false;
+        try {consumed=store.transaction(()=>{
+          const row=decodeText(store.db.prepare(`SELECT i.*,CAST(i.body AS BLOB) AS body FROM codex_inbox i LEFT JOIN codex_failures f ON f.sessionId=i.sessionId
+            WHERE i.id=? AND i.sessionId=? AND i.start=? AND (f.sessionId IS NULL OR f.retryRequested=1)`).get(next.id!,next.sessionId!,next.start!), ['body']);if(!row)return false;
+          const key=String(row.sessionId),cursor=store.db.prepare('SELECT * FROM codex_cursors WHERE sessionId=?').get(key);
+          if(!cursor||row.start!==cursor.offset)throw new Error('CODEX_CURSOR_CONFLICT');
+          const parsed=parseTranscript(String(row.body),{offset:Number(cursor.offset),turnId:cursor.turnId===null?null:String(cursor.turnId)},String(row.scope));
+          // Replacing the inbox body by session rows is one transaction, without duplicate durable bodies.
+          store.db.prepare('DELETE FROM codex_inbox WHERE id=?').run(row.id!);
+          for(const action of parsed.actions) {if(action.kind==='message'){
+            if(action.message.role==='user'){
+              const digest=createHash('sha256').update(action.message.text).digest('hex');
+              const candidate=store.db.prepare('SELECT digest,scope,text FROM codex_candidates WHERE sessionId=? AND turnId=? AND digest=?').get(key,action.message.turnId,digest);
+              if(!candidate||typeof candidate.scope!=='string')throw new Error('CODEX_UNCONFIRMED_DELIVERY');
+              if(candidate.text===null)continue;
+              action.message.scope=candidate.scope;
+              store.db.prepare('UPDATE codex_candidates SET text=NULL WHERE sessionId=? AND turnId=? AND digest=?').run(key,action.message.turnId,digest);
+            }
+            ingress.capture(key,action.message);
+          }else ingress.settle(key,action.turnId,action.state);}
+          store.db.prepare('UPDATE codex_cursors SET offset=?,turnId=? WHERE sessionId=?').run(parsed.state.offset,parsed.state.turnId,key);
+          if((row.event==='Stop'||row.event==='Interrupt')&&row.turnId)store.db.prepare('INSERT OR IGNORE INTO codex_watches VALUES(?,?)').run(key,row.turnId);
+          if(row.event==='SessionEnd') {ingress.end(key);store.db.prepare('UPDATE codex_candidates SET text=NULL WHERE sessionId=?').run(key);store.db.prepare('DELETE FROM codex_watches WHERE sessionId=?').run(key);}
+          store.db.prepare('DELETE FROM codex_failures WHERE sessionId=?').run(key);
+          return true;
+        });}catch(error){if(!recordHostFailure(store,String(next.sessionId),Number(next.id),error,{start:Number(next.start)}))throw error;}
+        if(consumed)await progressCallback?.();
+        continue;
+      }
+      const watches=store.db.prepare(`SELECT w.*,c.path,c.offset,c.turnId AS activeTurn FROM codex_watches w JOIN codex_cursors c ON c.sessionId=w.sessionId
+        LEFT JOIN codex_failures f ON f.sessionId=w.sessionId WHERE f.sessionId IS NULL OR f.retryRequested=1`).all();
+      if(!watches.length)return hostQueueStatus(store);
       let progress=false;
-      for(const w of watches)store.transaction(()=>{
-        const state=store.db.prepare('SELECT state FROM session_turns WHERE sessionId=? AND turnId=?').get(w.sessionId!,w.turnId!);
-        if(state&&state.state!=='open') {store.db.prepare('DELETE FROM codex_watches WHERE sessionId=? AND turnId=?').run(w.sessionId!,w.turnId!);progress=true;return;}
-        if(store.db.prepare('SELECT 1 FROM codex_inbox WHERE sessionId=?').get(w.sessionId!))return;
-        const cursor=store.db.prepare('SELECT * FROM codex_cursors WHERE sessionId=?').get(w.sessionId!)!;
-        const snapshot=transcript(String(cursor.path),Number(cursor.offset),ingress.limits.maxSessionBytes);
-        if(!snapshot.text)return;
-        const scope=String(store.db.prepare('SELECT scope FROM session_messages WHERE sessionId=? ORDER BY id DESC LIMIT 1').get(w.sessionId!)?.scope??'global');
-        ingress.reserve(String(w.sessionId),Buffer.byteLength(snapshot.text));
-        store.db.prepare("INSERT INTO codex_inbox(sessionId,event,start,body,scope) VALUES(?,'Reconcile',?,?,?)").run(w.sessionId!,cursor.offset!,snapshot.text,scope);progress=true;
-      });
-      if(!progress){await progressCallback?.();await setTimeout(100);}
+      for(const w of watches){
+        if(Date.now()>=deadline)return hostQueueStatus(store);
+        try {store.transaction(()=>{
+          if(!store.db.prepare('SELECT 1 FROM codex_watches WHERE sessionId=? AND turnId=?').get(w.sessionId!,w.turnId!))return;
+          const failure=store.db.prepare('SELECT retryRequested FROM codex_failures WHERE sessionId=?').get(w.sessionId!);if(failure&&!failure.retryRequested)return;
+          const state=store.db.prepare('SELECT state FROM session_turns WHERE sessionId=? AND turnId=?').get(w.sessionId!,w.turnId!);
+          if(state&&state.state!=='open') {store.db.prepare('DELETE FROM codex_watches WHERE sessionId=? AND turnId=?').run(w.sessionId!,w.turnId!);store.db.prepare('DELETE FROM codex_failures WHERE sessionId=?').run(w.sessionId!);progress=true;return;}
+          if(store.db.prepare('SELECT 1 FROM codex_inbox WHERE sessionId=?').get(w.sessionId!))return;
+          const cursor=store.db.prepare('SELECT * FROM codex_cursors WHERE sessionId=?').get(w.sessionId!);
+          if(!cursor)throw new Error('CODEX_CURSOR_CONFLICT');
+          const snapshot=transcript(String(cursor.path),Number(cursor.offset),ingress.limits.maxSessionBytes);
+          if(!snapshot.text)return;
+          const scope=String(store.db.prepare('SELECT scope FROM session_messages WHERE sessionId=? ORDER BY id DESC LIMIT 1').get(w.sessionId!)?.scope??'global');
+          ingress.reserve(String(w.sessionId),Buffer.byteLength(snapshot.text));
+          store.db.prepare("INSERT INTO codex_inbox(sessionId,event,start,body,scope) VALUES(?,'Reconcile',?,?,?)").run(w.sessionId!,cursor.offset!,snapshot.text,scope);progress=true;
+        });}catch(error){if(!recordHostFailure(store,String(w.sessionId),null,error,{turnId:String(w.turnId),offset:Number(w.offset)}))throw error;progress=true;}
+      }
+      if(!progress){
+        await progressCallback?.();
+        if(Date.now()>deadline)return hostQueueStatus(store);
+        await setTimeout(100);
+      }
     }
   }finally{store.close();}
 }

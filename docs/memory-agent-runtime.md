@@ -49,7 +49,7 @@ kind 仅表示 section、paragraph、quote、code、list、table 等结构，绝
 
 ## MemoryTask 与 Tools
 
-`src/core/contracts/memory-agent.ts` 定义可替换的运行边界。Task 只有请求 ID、时间、Bundle 概要、snapshot handle 和输出 schema；**没有输入或 canonical 正文**。
+`src/core/contracts/memory-agent.ts` 定义可替换的运行边界。Task 只有请求 ID、时间、Bundle 概要、snapshot handle、输出 schema 与可选的 trusted task_kind；**没有输入或 canonical 正文**。
 
 | 工具 | 能力 |
 | --- | --- |
@@ -115,3 +115,5 @@ Linux 自动检查不证明 Windows/WSL、Desktop UI 信任和真实模型语义
 内部新增的 `inspect_ingest/read_ingest/inspect_memory/processing_state/record_working_notes/submit_memory_decision` 只存在于一次 Memory Agent 尝试。MCP `memory_read` 及 Pi 用户读取工具不会被重新命名或变成这些私有工具。对外 MCP 另提供同一授权 canonical read 的 Resources/template/completion（仅 `read` profile），不是 Bundle 访问权；工具的 schema、错误恢复与 `next` 调用指引见 [MCP 使用说明](usage.md#agent-call-flow-and-resources-current-source-unreleased)。
 
 显式输入 cap 分两个检查：Core 的完整授权源字节预算，以及 Runtime 每个实际序列化 HTTP payload 的预算（包含系统/工具/schema/当前上下文）。Core 先移除可选前轮上下文，再将末尾**完整**观察/会话 turn 放回 pending；当前 user/steer/assistant/tool 组不可拆开。仅真正单组超限才整体 quarantine，不能因为两组相加超限而隔离本可单独处理的一组。Schema/模型上下文本身导致的 wire 超限仍会明确失败，不偷偷扩大显式 cap。
+
+当前 v0.4.1 源码补充：[显式编辑、输入字节限制与按需读取](edit-and-input-contract.md)。旧观察默认 observation；原生编辑单请求单任务，结果随原回执恢复。maxExcerptBytes 统一约束完整序列化来源，deprecated maxCandidateBytes 仍取更严格约束；maxTotalBytes 仍约束完整批次与总 wire。新 memory_read 同范围替代旧快照，不自动刷新。

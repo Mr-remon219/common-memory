@@ -79,3 +79,16 @@ it('selection-time capability records cannot promote a custom endpoint to an off
  expect(modelCapability(validateConfig(config).remote).source).toBe('unknown/custom');
  expect(()=>validateConfig({...config,remote:{...config.remote,capability:{...config.remote.capability,digest:'invalid'}}})).toThrow('capability');
 });
+
+it.each(['responses','chat_completions'] as const)('checks the exact complete serialized %s payload, including system/tools, at its byte boundary',async api=>{
+  let raw='';
+  const capture:typeof fetch=async(_input,init)=>{raw=String(init?.body);return new Response('{}',{status:400});};
+  const options={api,baseUrl:'https://provider.test/v1',apiKey:'synthetic',model:'fake'};
+  await expect(probeMemoryAgent(new ProviderMemoryAgent({...options,fetch:capture}),new AbortController().signal)).rejects.toMatchObject({code:'INVALID_RESPONSE'});
+  const cap=Buffer.byteLength(raw);expect(cap).toBeGreaterThan(1000);expect(raw).toContain('inspect_ingest');
+  for(const delta of [0,-1]) {
+    const fetch=vi.fn(capture);
+    await expect(probeMemoryAgent(new ProviderMemoryAgent({...options,fetch,maxInputBytes:cap+delta}),new AbortController().signal)).rejects.toMatchObject({code:delta===0?'INVALID_RESPONSE':'SENSITIVE_CONTENT_REJECTED'});
+    expect(fetch).toHaveBeenCalledTimes(delta===0?1:0);
+  }
+});

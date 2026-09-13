@@ -56,6 +56,29 @@ it.each(['permission','scope','size','cancel'])('denies native import %s without
   expect(()=>service.import(host,imported,signal.signal)).toThrow();
   if(existsSync(join(config.dataRoot,'runtime.sqlite'))){const s=new RuntimeStore(config.dataRoot);try{expect(s.status().observations).toEqual([]);}finally{s.close();}}
 });
+it('an accepted explicit adjustment ID remains queryable unchanged, while colon IDs are rejected',()=>{
+  const {service,host,store}=fixture(true);const requestId='edit_original-1';
+  const accepted=service.adjust(host,'global','A complete editing request.',requestId);
+  expect(accepted).toMatchObject({accepted:true,requestId,next:{arguments:{requestId}}});
+  expect(service.status(host,{requestId})).toMatchObject({item:{state:'pending'},next:{arguments:{requestId}}});
+  expect(service.adjust(host,'global','A complete editing request.',requestId)).toMatchObject({duplicate:true,requestId});
+  expect(()=>service.adjust(host,'global','Another request.','not:queryable')).toThrow('INVALID_SUBMISSION_ID');
+  expect(store!.pending()).toHaveLength(1);
+});
+it('bounds recent requests without truncating aggregate unfinished counts',()=>{
+  const {service,host,store}=fixture(true);
+  for(let i=0;i<25;i++)service.adjust(host,'global',`Complete editing request ${i}.`,`edit-${i}`);
+  const status=service.status(host);
+  expect('recent' in status && status.recent).toHaveLength(20);
+  if(!('recent' in status))throw new Error('missing recent status');
+  expect(status.recent.map(row=>row.requestId)).toEqual(Array.from({length:20},(_,i)=>`edit-${24-i}`));
+  expect(status.queue.observations).toContainEqual({state:'pending',count:25});
+  expect(store!.db.prepare("SELECT COUNT(*) AS n FROM observations WHERE state='pending'").get()!.n).toBe(25);
+  for(let i=0;i<25;i++){const job=store!.claim({force:true})!;store!.db.prepare("UPDATE jobs SET state='dead' WHERE id=?").run(job.id);store!.db.prepare("UPDATE observations SET state='dead' WHERE jobId=?").run(job.id);}
+  const failed=service.status(host);if(!('recent' in failed))throw new Error('missing failed status');
+  expect(failed.recent).toHaveLength(20);expect(failed.queue.jobs).toHaveLength(20);
+  expect(failed.queue.observations).toContainEqual({state:'dead',count:25});expect(failed.queue.jobStates).toContainEqual({state:'dead',count:25});
+});
 it('prompt adjustment is verbatim user evidence, with Core retain/correct/forget and observable outcomes',async()=>{
   const {config,service,host}=fixture();let phase=0;
   const writer=new Writer({dataRoot:config.dataRoot,allowedScopes:['global'],writableScopes:['global'],allowedProvenance:['user_explicit'],agent:{decide:async(task,reads)=>{
@@ -63,13 +86,13 @@ it('prompt adjustment is verbatim user evidence, with Core retain/correct/forget
     expect(projection.observations[0]!.text).toBe(['  Only during review: use A.\n','Replace A with B, only during review.','Forget that review preference.'][phase]);
     const section=projection.documents.find(d=>d.target==='preferences')!.sections[0]?.ref??null;
     const decision=phase===2?{kind:'forget',operations:[{op:'remove_section',target:'preferences',section}]}:{kind:'retain',admission:phase?'correct':'remember',lifetime:'stable',operations:[{op:'put_section',target:'preferences',section,title:'Review',body:phase?'During review, use B.':'During review, use A.'}]};
-    return {body:{version:'memory_maintenance_v2',request_id:task.request_id,decisions:[{...decision,applicability:'global',confidence:1,evidence:projection.observations.map(o=>o.ref),reason:'synthetic'}]},usage:{},promptDigest:'a'.repeat(64)};
+    return {body:{edit_result:'modified',version:'memory_maintenance_v2',request_id:task.request_id,decisions:[{...decision,applicability:'global',confidence:1,evidence:projection.observations.map(o=>o.ref),reason:'synthetic'}]},usage:{},promptDigest:'a'.repeat(64)};
   }}});close.push(()=>writer.close());
   for(const prompt of ['  Only during review: use A.\n','Replace A with B, only during review.','Forget that review preference.']){
     const accepted=service.adjust(host,'global',prompt);expect(accepted.next.action).toBe('poll');
     expect(service.status(host,{requestId:accepted.requestId})).toMatchObject({item:{state:'pending'}});
     expect(await writer.run({force:true})).toMatchObject({outcome:'committed'});
-    expect(service.status(host,{requestId:accepted.requestId})).toMatchObject({item:{state:'processed'},next:{action:'read'}});phase++;
+    expect(service.status(host,{requestId:accepted.requestId})).toMatchObject({item:{state:'processed',editResult:'modified'},next:{action:'read'}});phase++;
   }
   expect(readFileSync(join(config.dataRoot,'memory/preferences.md'),'utf8')).not.toContain('## Review');
 });

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { CommonMemoryConfig } from '../config/config.js';
 import { createConfiguredWriter } from '../config/runtime.js';
-import { externalPreflight } from '../core/safety/external-preflight.js';
+import { queueMemoryEdit, validateMemoryEdit } from '../v2/edit-ingress.js';
 import { ProjectRegistry } from '../v2/registry.js';
 import type { ObservationOutcome } from '../v2/runtime.js';
 
@@ -32,18 +32,20 @@ export async function modifyMemory(
     throw new Error('当前记忆范围未授权读取或修改，没有提交修改。');
   }
   // Reject sensitive/oversized input before opening storage or constructing a model client.
-  externalPreflight({ excerpts: [{ text: prompt }] }, config.disclosure);
+  const requestId = `tui:${randomUUID()}`, entryId = 'submitted';
+  const input = {sessionId:requestId,requestId:entryId,text:prompt,scope};
+  const access = {allowedScopes:config.disclosure.allowedScopes,writableScopes:config.writableScopes,allowedProvenance:config.disclosure.allowedProvenance,limits:config.disclosure};
+  validateMemoryEdit(input, access);
   options.signal?.throwIfAborted();
   const writer = createConfiguredWriter(config);
   const controller = new AbortController();
   const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(60_000), ...(options.signal ? [options.signal] : [])]);
   const cancel = () => controller.abort();
   process.on('SIGINT', cancel); process.on('SIGTERM', cancel);
-  const requestId = `tui:${randomUUID()}`, entryId = 'submitted';
   let admitted = false;
   try {
     signal.throwIfAborted();
-    writer.store.enqueue({ sessionId: requestId, entryId, text: prompt, scope, source: 'interactive', observedAt: new Date().toISOString() });
+    queueMemoryEdit(writer.store, input, access);
     admitted = true;
     writer.store.requestFlush();
     for (;;) {
@@ -54,7 +56,7 @@ export async function modifyMemory(
       if (!['committed', 'noop', 'ignored', 'quarantined'].includes(result.outcome)) break;
     }
     const outcome = writer.store.observationOutcome(requestId, entryId)!;
-    return { requestId, complete: outcome.state === 'processed', outcome, cancelled: signal.aborted };
+    return { requestId, complete: outcome.state === 'processed' && ['modified','already_satisfied'].includes(outcome.editResult ?? ''), outcome, cancelled: signal.aborted };
   } catch (error) {
     if (admitted) throw new Error('请求已提交，但未能确认处理结果。请在 Memory Control → Adjust Memory → Processing Status 检查并继续处理；不要重复提交。', { cause: error });
     throw error;

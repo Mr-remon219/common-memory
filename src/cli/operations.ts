@@ -6,6 +6,7 @@ import { withRepositoryLock } from '../v2/lock.js';
 import { RuntimeStore } from '../v2/runtime.js';
 import { SessionIngress } from '../v2/session.js';
 import { readAuthorizedMemory, renderMemoryView } from '../v2/reader.js';
+import { hostQueueStatus, recoverCodexInbox } from './host-session.js';
 
 /** CLI and TUI use identical scope selection. Reading never opens the queue. */
 export function memoryView(config: CommonMemoryConfig, workspace?: string) {
@@ -24,14 +25,18 @@ export function showMemory(config: CommonMemoryConfig, workspace?: string, log: 
 }
 
 /** Like the existing status command, opens existing RuntimeStore only; never initializes absent storage. */
-export function runtimeStatus(config: CommonMemoryConfig) {
+export function runtimeStatus(config: CommonMemoryConfig, afterRecoveryId?: string) {
   if (!existsSync(join(config.dataRoot, 'runtime.sqlite'))) return null;
   const store = new RuntimeStore(config.dataRoot);
   try {
     const ingress = new SessionIngress(store, config.sessionCache);
+    const host = hostQueueStatus(store, afterRecoveryId);
     const sessions = store.db.prepare('SELECT id FROM sessions ORDER BY rowid DESC').all()
-      .map(row => ({ id: String(row.id), ...ingress.status(String(row.id)) }));
-    return { ...store.status(), sessions };
+      .map(row => {
+        const id=String(row.id),hostSession=host.sessions.find(session=>session.sessionId===id);
+        return { id, ...ingress.status(id), host:hostSession?{inbox:hostSession.inbox,isolated:hostSession.isolated,watches:hostSession.watches}:{inbox:0,isolated:0,watches:0} };
+      });
+    return { ...store.status(), host, sessions };
   } finally { store.close(); }
 }
 
@@ -39,6 +44,8 @@ export function retryJob(config: CommonMemoryConfig, id: string): void {
   const store = new RuntimeStore(config.dataRoot);
   try { store.retry(id); store.requestFlush(); } finally { store.close(); }
 }
+
+export function recoverHostInbox(config: CommonMemoryConfig, id: string): void { recoverCodexInbox(config,id); }
 
 export function listProjects(config: CommonMemoryConfig) { return new ProjectRegistry(config.dataRoot).list(); }
 export function registerProject(config: CommonMemoryConfig, root: string, name: string) {

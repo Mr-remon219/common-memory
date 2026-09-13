@@ -62,7 +62,8 @@ export async function chooseIntegrations(config: CommonMemoryConfig, options: { 
       if (authorize && !await confirm('允许将其他 AI 整理的材料发送给配置的模型（agent_observation），并安装所选导入接入？')) throw new UserCancelled();
       const selectedTargets = available.filter(t => selected.includes(t.id)).map((t): IntegrationTarget => {
         const { init: _init, ...base } = t;
-        return importIds.includes(t.id) ? { ...base, init: true } : base;
+        const binding = prior?.targets.find(p => p.id === t.id);
+        return { ...base, ...(binding?.readWorkspace ? { readWorkspace: binding.readWorkspace, readWorkspaceProjectId: binding.readWorkspaceProjectId! } : {}), ...(importIds.includes(t.id) ? { init: true } : {}) };
       });
       checkConfigUnchanged(config);
       const changes = reconcileIntegrations(selectedTargets, config.dataRoot, { expectedState: prior,

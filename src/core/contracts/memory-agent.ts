@@ -28,6 +28,8 @@ export interface ContentPage { block_id: string; content: string; offset: number
 export interface IngestContentPage extends ContentPage { descriptor: StructuralBlock }
 export interface MemoryTask {
   version: 'memory_task_v1';
+  /** Absent on legacy tasks means observation, never inferred from interactive provenance. */
+  task_kind?: 'observation' | 'edit';
   request_id: string;
   now: string;
   bundles: BundleSummary[];

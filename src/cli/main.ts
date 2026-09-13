@@ -32,6 +32,7 @@ common-memory config       Reopen Model Configuration
 common-memory uninstall    Remove integrations / remove application
 common-memory show --plain  Plain authorized memory output
 common-memory --version    Installed version
+common-memory status [--after-recovery <id>]  Queue status / next recovery page
 
 Existing automation and protocol commands remain supported; see docs/usage.md.`);
     return;
@@ -73,7 +74,7 @@ Existing automation and protocol commands remain supported; see docs/usage.md.`)
     await runTui();return;
   }
   if(command==="config" && !args.length) {await (await import('./model-configuration.js')).configureModel();return;}
-  if(command==="status" && !args.length) {printStatus();const config=loadConfig();if(config){const status=runtimeStatus(config);if(status)console.log(JSON.stringify(status,null,2));}return;}
+  if(command==="status" && (!args.length || args.length===2 && args[0]==='--after-recovery')) {printStatus();const config=loadConfig();if(config){const status=runtimeStatus(config,args[1]);if(status)console.log(JSON.stringify(status,null,2));}return;}
   const config=loadConfig();if(!config)throw new Error("Run common-memory first");
   if(command==="flush" && !args.length) {process.exitCode=await runFlush(config);return;}
   if(command==="retry" && args.length===1){retryJob(config,args[0]!);return;}

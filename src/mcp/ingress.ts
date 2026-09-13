@@ -1,3 +1,4 @@
+import { preflightSource } from '../core/safety/external-preflight.js';
 import { isAbsolute } from 'node:path';
 import type { CommonMemoryConfig } from '../config/config.js';
 import { RuntimeStore } from '../v2/runtime.js';
@@ -8,7 +9,7 @@ import { readAuthorizedMemory, type MemoryView } from '../v2/reader.js';
 
 export type McpCapability = 'relay' | 'init' | 'read';
 export const MCP_CAPABILITIES: readonly McpCapability[] = ['relay', 'init', 'read'];
-export interface McpOptions { clientId: string; workspaces: string[]; global: boolean; accept: boolean; capabilities: McpCapability[] }
+export interface McpOptions { clientId: string; workspaces: string[]; workspaceProjectIds?: string[]; global: boolean; accept: boolean; capabilities: McpCapability[] }
 export interface SubmissionIdentity { submissionId: string; conversationId?: string | undefined }
 export interface Submission extends SubmissionIdentity { contextId: string; text: string }
 export interface InitSubmission extends AgentImportPayload { importId: string; contextId: string }
@@ -27,8 +28,13 @@ export class McpIngress {
     if (!store && options.capabilities.some(c => c !== 'read')) throw new Error('STORE_REQUIRED');
     this.#options = { ...options, workspaces: [...options.workspaces], capabilities: [...new Set(options.capabilities)] };
     this.#registry = new ProjectRegistry(config.dataRoot);
-    this.#projects = options.workspaces.map(workspace => {
+    if (options.workspaceProjectIds && (options.workspaceProjectIds.length !== options.workspaces.length || options.workspaceProjectIds.some(id => !validId(id)))) throw new Error('INVALID_WORKSPACE_BINDING');
+    this.#projects = options.workspaces.map((workspace, index) => {
       if (!isAbsolute(workspace)) throw new Error('WORKSPACE_MUST_BE_ABSOLUTE');
+      // Generated native launches pin the registered identity, not just its path.
+      // Removed/replaced projects become unavailable; global remains usable.
+      const pinnedId = options.workspaceProjectIds?.[index];
+      if (pinnedId) return { workspace, contextId: `project:${pinnedId}` };
       const project = this.#registry.resolve(workspace);
       if (!project) throw new Error('UNREGISTERED_WORKSPACE');
       return { workspace, contextId: `project:${project.id}` };
@@ -79,6 +85,7 @@ export class McpIngress {
     if (!this.info().submissionEnabled) throw new Error('SUBMISSION_DISABLED');
     if (!this.contexts().includes(input.contextId)) throw new Error('CONTEXT_UNAVAILABLE');
     if (!input.text.trim() || Buffer.byteLength(input.text) > (this.config.disclosure.maxTotalBytes ?? Number.MAX_SAFE_INTEGER)) throw new Error('INVALID_TEXT_SIZE');
+    preflightSource(input.text, this.config.disclosure);
     if (signal?.aborted) throw new Error('CANCELLED');
     return this.#enqueue(sessionId, input.submissionId, input.contextId, input.text, 'mcp_user_submission', true);
   }
@@ -87,7 +94,7 @@ export class McpIngress {
     const sessionId = this.#initSession(input.importId);
     // Preserve profile failure before accessing a read-only launch's absent queue.
     if (!this.info().initEnabled) throw new Error('INIT_DISABLED');
-    return queueAgentImport(this.#store(), sessionId, input, {contexts:this.contexts(),enabled:true,maxBytes:this.config.disclosure.maxTotalBytes}, signal);
+    return queueAgentImport(this.#store(), sessionId, input, {contexts:this.contexts(),enabled:true,maxBytes:this.config.disclosure.maxTotalBytes,limits:this.config.disclosure}, signal);
   }
   read(contextId?: string): MemoryView {
     if (!this.info().readEnabled) throw new Error('READ_DISABLED');

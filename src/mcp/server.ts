@@ -1,3 +1,4 @@
+import { inputLimits } from '../core/safety/external-preflight.js';
 import { readFileSync } from 'node:fs';
 import { MEMORY_READ_GUIDANCE, MEMORY_READ_DESCRIPTION } from '../v2/read-guidance.js';
 import { McpServer } from '@modelcontextprotocol/server';
@@ -88,7 +89,7 @@ export function createMcpServer(ingress: McpIngress): McpServer {
         const outcome = ingress.status({submissionId:input.submissionId,conversationId:input.conversationId});
         return result({submission:outcome,next:nextForOutcome(outcome,input,readContexts())});
       }
-      return result({...ingress.info(),limits:{maxInputBytes:ingress.config.disclosure.maxTotalBytes ?? null,maxMessageBytes:MCP_MAX_MESSAGE_BYTES},next:{action:'discover',message:'Choose an enabled tool for the user’s purpose and an exact listed context. Permissions are fixed at launch/configuration; registration or a guessed ID does not grant access.'}});
+      return result({...ingress.info(),limits:{...inputLimits(ingress.config.disclosure),maxMessageBytes:MCP_MAX_MESSAGE_BYTES},next:{action:'discover',message:'Choose an enabled tool for the user’s purpose and an exact listed context. Permissions are fixed at launch/configuration; registration or a guessed ID does not grant access.'}});
     } catch (error) { return toolFailure(error); }
   });
   return server;

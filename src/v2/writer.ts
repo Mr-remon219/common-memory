@@ -8,7 +8,7 @@ import { withRepositoryLock } from './lock.js';
 import { sanitizeDiagnostic, type FailureDiagnostic, type DiagnosticStage } from '../core/contracts/diagnostic.js';
 import { failureDiagnostic, failureCode } from './errors.js';
 import { validateDecision, type Decision } from './contract.js';
-import { externalPreflight } from '../core/safety/external-preflight.js';
+import { externalPreflight, serializedSourceBytes } from '../core/safety/external-preflight.js';
 import { isImportSource, provenanceOf, type ProvenanceKind } from './import.js';
 import type { MemoryAgentRuntime } from '../core/contracts/memory-agent.js';
 import { openMemoryTask } from './memory-task.js';
@@ -18,7 +18,7 @@ export interface WriterOptions {
   /** Provenance classes that may be sent to the remote model; a batch outside it is quarantined, never disclosed. Omitted means all. */
   allowedProvenance?: readonly ProvenanceKind[];
   documentSoftBytes?: number; documentHardBytes?: number; retentionMs?: number;
-  sessionCache?: SessionCacheOptions; scheduler?: RuntimeOptions; deadlineMs?: number; maxRequestBytes?: number; modelVersion?: string;
+  sessionCache?: SessionCacheOptions; scheduler?: RuntimeOptions; deadlineMs?: number; maxRequestBytes?: number; maxSourceBytes?: number | undefined; modelVersion?: string;
   checkpoint?: (phase: 'files_committed') => void;
 }
 /** Network runs outside both locks. Canonical commits are fenced inside lock -> DB. */
@@ -28,7 +28,7 @@ export class Writer {
   readonly #options: WriterOptions;
   constructor(options: WriterOptions) {
     this.#options = { ...options, allowedScopes: [...options.allowedScopes], writableScopes: [...(options.writableScopes ?? options.allowedScopes)] };
-    for (const n of [options.deadlineMs ?? 60000, options.maxRequestBytes ?? Number.MAX_SAFE_INTEGER, options.retentionMs ?? 604800000, options.documentSoftBytes ?? 8192]) if (!Number.isSafeInteger(n) || n <= 0) throw new Error('INVALID_WRITER_LIMIT');
+    for (const n of [options.deadlineMs ?? 60000, options.maxRequestBytes ?? Number.MAX_SAFE_INTEGER, options.maxSourceBytes ?? Number.MAX_SAFE_INTEGER, options.retentionMs ?? 604800000, options.documentSoftBytes ?? 8192]) if (!Number.isSafeInteger(n) || n <= 0) throw new Error('INVALID_WRITER_LIMIT');
     if ((options.documentSoftBytes ?? 8192) > (options.documentHardBytes ?? 16384)) throw new Error('INVALID_DOCUMENT_BUDGET');
     this.canonical = new CanonicalStore(options.dataRoot, {hardLimitBytes:options.documentHardBytes ?? 16384});
     this.store = new RuntimeStore(options.dataRoot, options.scheduler);
@@ -81,28 +81,34 @@ export class Writer {
         .filter(doc => this.#options.allowedScopes.includes(documentScope(doc)));
       const cap = this.#options.maxRequestBytes ?? Number.MAX_SAFE_INTEGER;
       for (const observation of job.observations) {
-        try { externalPreflight({text:observation.text}, {maxExcerptBytes:cap,maxCandidateBytes:cap,maxTotalBytes:Number.MAX_SAFE_INTEGER}); }
+        try { externalPreflight({text:observation.text}, {}); }
         catch { this.store.quarantine(job, observation.id, 'SENSITIVE_INPUT'); return {outcome:'quarantined'}; }
+      }
+      const sourceCap = this.#options.maxSourceBytes ?? Number.MAX_SAFE_INTEGER;
+      for (const observation of job.observations) {
+        if (serializedSourceBytes(observation.text) > sourceCap) { this.store.quarantine(job, observation.id, 'OVERSIZED_COMPLETE_SOURCE'); return {outcome:'quarantined'}; }
       }
       let contextTail = this.#options.sessionCache?.contextTailTurns ?? 2;
       const open = () => openMemoryTask(this.store, job, documents, {
         signal, contextAuthorized: this.#options.allowedProvenance?.includes('conversation_context') === true,
-        contextTail, writableScopes: this.#options.writableScopes!,
-        softBytes: this.#options.documentSoftBytes ?? 8192, hardBytes: this.canonical.hardLimitBytes,
+        contextTail, writableScopes: job.observations[0]!.taskKind === 'edit' ? this.#options.writableScopes!.filter(s => s === scope) : this.#options.writableScopes!,
+        maxSourceBytes:sourceCap, softBytes: this.#options.documentSoftBytes ?? 8192, hardBytes: this.canonical.hardLimitBytes,
       });
       let grant = open();
-      const sourceBytes = () => grant.task.bundles.reduce((n, b) => n + b.bytes, 0);
+      const sourceBytes = () => grant.sourceBytes;
       let result;
       let promptDigest: string;
       try {
         // Optional previous context yields first. Never drop current qualifiers or split a turn.
-        if (sourceBytes() > cap && contextTail > 0) { grant.close(); contextTail = 0; grant = open(); }
+        if ((sourceBytes() > cap || grant.oversizedContext()) && contextTail > 0) { grant.close(); contextTail = 0; grant = open(); }
         while (sourceBytes() > cap && job.observations.length > 1) {
           const last = sessionGroup(this.store, job.observations.at(-1)!);
           const count = last ? job.observations.findIndex(o => sessionGroup(this.store, o)?.turn === last.turn) : job.observations.length - 1;
           if (count === 0) break;
           grant.close(); job = this.store.trim(job, count); grant = open();
         }
+        const oversized = grant.oversizedContext();
+        if (oversized?.observationId != null) { this.store.quarantine(job, oversized.observationId, 'OVERSIZED_COMPLETE_SOURCE'); return {outcome:'quarantined'}; }
         if (sourceBytes() > cap) return this.#quarantine(job, 'OVERSIZED_COMPLETE_TURN');
         result = await abortable(this.#options.agent.decide(grant.task, grant.reads, {
           deadlineAt, signal,
@@ -112,16 +118,18 @@ export class Writer {
         const suppliedDigest: unknown = result?.promptDigest;
         if (typeof suppliedDigest !== 'string' || !/^[a-f0-9]{64}$/.test(suppliedDigest)) throw new Error('INVALID_PROMPT_DIGEST');
         promptDigest = suppliedDigest;
-        const checked = validateDecision(result.body, job.id, documents, new Map(job.observations.map(o => [`ev_${o.id}`, o.scope])));
-        grant.assertCoverage(checked.decisions);
+        const checked = validateDecision(result.body, job.id, documents, new Map(job.observations.map(o => [`ev_${o.id}`, o.scope])), job.observations[0]!.taskKind);
+        grant.assertCoverage(checked);
       } finally { grant.close(); }
       const evidence = new Map(job.observations.map(o => [`ev_${o.id}`,o.scope]));
-      const decision = validateDecision(result.body, job.id, documents, evidence);
+      const decision = validateDecision(result.body, job.id, documents, evidence, job.observations[0]!.taskKind);
       this.#guardImports(job, decision.decisions, documents);
       const operations = decision.decisions.flatMap(d => d.kind === 'ignore' ? [] : d.operations);
+      if (job.observations[0]!.taskKind === 'edit' && operations.some(op => (op.target.startsWith('project:') ? op.target : 'global') !== scope)) throw new Error('UNAUTHORIZED_WRITE');
       for (const op of operations) if (op.target.startsWith('project:') && op.target !== scope) throw new Error('UNAUTHORIZED_SCOPE');
       for (const op of operations) if (!this.#options.writableScopes!.includes(op.target.startsWith('project:') ? op.target : 'global')) throw new Error('UNAUTHORIZED_WRITE');
       const updates = this.canonical.apply(documents, operations);
+      if (decision.edit_result === 'modified' && !documents.some(doc => updates.has(doc.target) && updates.get(doc.target) !== doc.content)) throw new Error('INVALID_EDIT_RESULT');
       externalPreflight(Object.fromEntries(updates), {maxExcerptBytes:cap,maxCandidateBytes:cap,maxTotalBytes:cap});
       stage = 'commit';
       withRepositoryLock(this.#options.dataRoot, () => this.store.transaction(() => {
@@ -130,7 +138,7 @@ export class Writer {
         // Even ignore is tied to the complete snapshot, never consume a stale analysis.
         const current = this.canonical.snapshot(scope === 'global' ? [] : [scope.slice(8)]);
         if (documents.some(doc => current.find(d => d.target === doc.target)?.hash !== doc.hash)) throw new Error('STALE_REVISION');
-        const receipt = this.#receipt(job, documents, decision.decisions, updates);
+        const receipt = { ...this.#receipt(job, documents, decision.decisions, updates), ...(decision.edit_result ? {editResult: decision.edit_result} : {}) };
         if (!operations.length) { this.store.finish(job, receipt); return; }
         this.canonical.commit(documents, updates, { ...receipt, id:job.id, version:2, decisions:decision.decisions.map(d => d.kind),
           promptDigest, modelVersion:this.#options.modelVersion ?? 'configured-model', timestamp:new Date().toISOString(), usage:sanitizeModelUsage(result.usage),

@@ -11,8 +11,10 @@ import { integrationsScreen } from '../../src/cli/tui-integrations.js';
 import { runNetworkTest } from '../../src/cli/network-test.js';
 import { runCompleteUninstall } from '../../src/cli/uninstall-tui.js';
 import { runFlush } from '../../src/cli/flush-command.js';
+import { launchSessionDrain } from '../../src/cli/session-drain.js';
+import { setupHostAdapter } from '../../src/cli/host-session.js';
 import * as settings from '../../src/cli/tui-settings.js';
-import { registerProject } from '../../src/cli/operations.js';
+import { listProjects, registerProject } from '../../src/cli/operations.js';
 import { terminalText, UserCancelled, viewText } from '../../src/cli/tui-prompts.js';
 import { runAdvancedWizard, runCredentialsWizard, runNetworkWizard, runPermissionsWizard, runSetupWizard, saveSettings } from '../../src/cli/tui-settings.js';
 import { RuntimeStore } from '../../src/v2/runtime.js';
@@ -27,6 +29,7 @@ vi.mock('../../src/cli/tui-integrations.js', () => ({ integrationsScreen: vi.fn(
 vi.mock('../../src/cli/network-test.js', () => ({ runNetworkTest: vi.fn() }));
 vi.mock('../../src/cli/uninstall-tui.js', () => ({ runCompleteUninstall: vi.fn() }));
 vi.mock('../../src/cli/flush-command.js', () => ({ runFlush: vi.fn() }));
+vi.mock('../../src/cli/session-drain.js', () => ({ launchSessionDrain: vi.fn() }));
 
 let home: string;
 const originalIn = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
@@ -111,6 +114,34 @@ it('routes integration, model, network, connection test and uninstall from the m
   expect(existsSync(config.dataRoot)).toBe(false);
 });
 
+it('reaches explicit permissions, credentials and fixed workspace from configuration', async () => {
+  const config = fixture();
+  const permissions = vi.spyOn(settings, 'runPermissionsWizard').mockResolvedValue();
+  const credentials = vi.spyOn(settings, 'runCredentialsWizard').mockResolvedValue();
+  const done = choices('configuration', 'permissions', 'credentials', 'workspace', 'back', 'exit');
+  await runTui(); done();
+  expect(permissions).toHaveBeenCalledWith(config); expect(credentials).toHaveBeenCalledWith(config);
+  expect(notes()).toContain('请先在 Agent Integration');
+});
+it('registers from empty Projects without authorization and removes only the registration, never Markdown', async () => {
+  const config = fixture(), markdown = join(config.dataRoot, 'memory/profile.md');
+  mkdirSync(join(config.dataRoot, 'memory'), { recursive: true }); writeFileSync(markdown, '# Keep\n');
+  texts(home, 'New project'); vi.mocked(clack.confirm).mockResolvedValue(true);
+  const done = choices('memory', 'browse', 'projects', 'register', 'back', 'back', 'back', 'exit');
+  await runTui(); done();
+  const [project] = listProjects(config); expect(project!.name).toBe('New project'); expect(loadConfig()).toEqual(config);
+  const projectMarkdown = join(config.dataRoot, `memory/projects/${project!.id}.md`);
+  mkdirSync(join(config.dataRoot, 'memory/projects')); writeFileSync(projectMarkdown, '# Retained project\n');
+  const removed = choices('memory', 'browse', 'projects', 'remove', project!.id, 'back', 'back', 'back', 'exit');
+  await runTui(); removed();
+  expect(listProjects(config)).toEqual([]); expect(readFileSync(projectMarkdown, 'utf8')).toBe('# Retained project\n');
+  expect(readFileSync(markdown, 'utf8')).toBe('# Keep\n'); expect(loadConfig()).toEqual(config);
+});
+it('declining project registration from the menu writes neither registry nor permissions', async () => {
+  const config = fixture(); texts(home, 'Cancelled project'); vi.mocked(clack.confirm).mockResolvedValue(false);
+  const done = choices('memory', 'browse', 'projects', 'register', 'back', 'back', 'back', 'exit');
+  await runTui(); done(); expect(listProjects(config)).toEqual([]); expect(loadConfig()).toEqual(config); expect(existsSync(config.dataRoot)).toBe(false);
+});
 it('saves advanced settings from the main workbench and uses them for the next connection test', async () => {
   const config = fixture();
   const done = choices('configuration', 'advanced', 'tuning', 'turns', 'test', 'back', 'exit');
@@ -180,7 +211,7 @@ it('shows only authorized projects and returns from document and project cancell
   await runShowTui(); done();
   const menus = vi.mocked(clack.select).mock.calls.map(call => call[0]);
   expect(menus.find(menu => menu.message === 'Memory')!.options.map(o => o.value)).toEqual(['search', 'projects', 'back']);
-  expect(menus.find(menu => menu.message === 'Projects')!.options.map(o => o.value)).toEqual([a.id, 'back']);
+  expect(menus.find(menu => menu.message === 'Projects')!.options.map(o => o.value)).toEqual([a.id, 'register', 'remove', 'permissions', 'back']);
   expect(notes()).toContain('Visible');
 });
 
@@ -288,6 +319,33 @@ it('shows and retries a persisted failed request without submitting its text aga
   expect(notes()).toContain('任务 1 · 处理失败'); expect(notes()).not.toContain(jobId); expect(notes()).not.toContain('Private correction from an earlier launch'); expect(notes()).not.toContain('private transport detail');
   expect(runFlush).toHaveBeenCalledTimes(1); expect(modifyMemory).not.toHaveBeenCalled(); expect(clack.text).not.toHaveBeenCalled();
   expect(clack.log.success).toHaveBeenCalledWith(expect.stringContaining('也可能没有变化'));
+});
+
+it('labels identical edit results with each stable task id in processing status',async()=>{
+  const config=fixture(),store=new RuntimeStore(config.dataRoot);const ids:string[]=[];
+  try {
+    for(const entryId of ['edit-a','edit-b']){
+      store.enqueue({taskKind:'edit',sessionId:entryId,entryId:'submitted',text:`Synthetic ${entryId}`,source:'interactive',scope:'global',observedAt:new Date().toISOString()});
+      const job=store.claim({force:true})!;ids.push(job.id);store.finish(job,{jobId:job.id,observationIds:job.observations.map(row=>row.id),editResult:'already_satisfied'});
+    }
+  }finally{store.close();}
+  const done=choices('memory','modify','processing','back','back','back','exit');await runTui();done();
+  for(const id of ids)expect(notes()).toContain(`编辑任务 ${id} ·`);
+  expect(notes().match(/当前记忆已满足请求/g)).toHaveLength(2);
+});
+
+it('shows bounded host isolation and explicitly retries the retained inbox without disclosing its body', async () => {
+  const config=fixture(),store=new RuntimeStore(config.dataRoot),recoveryId='11111111-1111-4111-8111-111111111111';
+  try {
+    setupHostAdapter(store);const key='session-host-test';store.db.prepare('INSERT INTO sessions(id) VALUES(?)').run(key);
+    const inbox=store.db.prepare("INSERT INTO codex_inbox(sessionId,event,start,body,scope) VALUES(?,'SessionEnd',0,?,'global')").run(key,'PRIVATE_HOST_BODY');
+    store.db.prepare('INSERT INTO codex_failures(sessionId,inboxId,recoveryId,issue,failedAt) VALUES(?,?,?,?,?)').run(key,inbox.lastInsertRowid,recoveryId,'CODEX_UNKNOWN_TRANSCRIPT',1);
+  } finally {store.close();}
+  const done=choices('memory','modify','processing',`recover-host:${recoveryId}`,'back','back','back','exit');
+  await runTui();done();
+  const status=new RuntimeStore(config.dataRoot);try{expect(status.db.prepare('SELECT retryRequested FROM codex_failures').get()!.retryRequested).toBe(1);}finally{status.close();}
+  expect(notes()).toContain('宿主收件箱 1 · 会话隔离 1');expect(notes()).toContain('CODEX_UNKNOWN_TRANSCRIPT');expect(notes()).not.toContain('PRIVATE_HOST_BODY');
+  expect(launchSessionDrain).toHaveBeenCalledWith(home);expect(runFlush).not.toHaveBeenCalled();
 });
 
 it('keeps an incomplete persisted request visible and does not report continuation as success', async () => {

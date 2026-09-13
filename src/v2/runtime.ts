@@ -1,3 +1,4 @@
+import { EDIT_RESULTS, type EditResult } from './contract.js';
 import { initializeIngest, normalizeIngest } from './ingest.js';
 import { initializeSessions, sessionGroup } from './session.js';
 import { sanitizeDiagnostic, type FailureDiagnostic } from '../core/contracts/diagnostic.js';
@@ -10,13 +11,13 @@ import { randomUUID, createHash } from "node:crypto";
 import { safeDirectory } from "./lock.js";
 import { provenanceOf } from "./import.js";
 
-export interface ObservationInput { sessionId: string; entryId: string; text: string; scope: string; observedAt: string; source: string }
+export interface ObservationInput { /** Trusted local ingress only; never inferred from source. */ taskKind?: 'observation' | 'edit'; sessionId: string; entryId: string; text: string; scope: string; observedAt: string; source: string }
 export interface Observation extends Omit<ObservationInput, "text"> { id: number; text: string | null; state: string; enqueuedAt: number }
 export interface RuntimeJob { id: string; token: string; generation: number; observations: Observation[] }
-export interface RuntimeReceipt { documents?: {target:string;after:string}[]; id?: string; token?: string; generation?: number; requestId?: string; jobId: string; observationIds: number[]; associations?: {target: string; sourceIds: number[]}[]; forgetSourceIds?: number[]; removeTargets?: string[] }
+export interface RuntimeReceipt { editResult?: EditResult; documents?: {target:string;after:string}[]; id?: string; token?: string; generation?: number; requestId?: string; jobId: string; observationIds: number[]; associations?: {target: string; sourceIds: number[]}[]; forgetSourceIds?: number[]; removeTargets?: string[] }
 export interface RuntimeOptions { sqliteTimeoutMs?:number; now?: () => number; turnThreshold?: number; byteThreshold?: number; idleMs?: number; maxWaitMs?: number; leaseMs?: number; maxAttempts?: number }
-export interface JobStatus { id: string; state: string; attempts: number; issue: string | null; diagnostic: FailureDiagnostic | null; retryAt: number | null }
-export interface ObservationOutcome { state: string; issue: string | null; retainedIn: string[]; jobId: string | null; jobState: string | null; attempts: number; retryAt: number | null; diagnostic: FailureDiagnostic | null }
+export interface JobStatus { editResult?: EditResult; id: string; state: string; attempts: number; issue: string | null; diagnostic: FailureDiagnostic | null; retryAt: number | null }
+export interface ObservationOutcome { editResult?: EditResult; state: string; issue: string | null; retainedIn: string[]; jobId: string | null; jobState: string | null; attempts: number; retryAt: number | null; diagnostic: FailureDiagnostic | null }
 type Row = Record<string, string | number | null>;
 
 function enableWal(db: DatabaseSync, timeout=5000): void {
@@ -69,6 +70,8 @@ export class RuntimeStore {
       initializeIngest(this);
       // BEGIN IMMEDIATE serializes the introspection and ALTER across old/new concurrent opens.
       this.transaction(() => {
+        if (!this.db.prepare('PRAGMA table_info(observations)').all().some(row => row.name === 'taskKind')) this.db.exec("ALTER TABLE observations ADD COLUMN taskKind TEXT NOT NULL DEFAULT 'observation'");
+        if (!this.db.prepare('PRAGMA table_info(jobs)').all().some(row => row.name === 'editResult')) this.db.exec('ALTER TABLE jobs ADD COLUMN editResult TEXT');
         if (!this.db.prepare('PRAGMA table_info(jobs)').all().some(row => row.name === 'diagnostic')) this.db.exec('ALTER TABLE jobs ADD COLUMN diagnostic TEXT');
       });
     } catch (error) { this.db.close(); throw error; }
@@ -81,12 +84,14 @@ export class RuntimeStore {
     finally { this.#depth--; }
   }
   enqueue(input: ObservationInput): Observation {
+    const taskKind = input.taskKind ?? 'observation';
+    if (!['observation', 'edit'].includes(taskKind) || taskKind === 'edit' && input.source !== 'interactive') throw new Error('INVALID_TASK_KIND');
     const digest = createHash("sha256").update(input.text).digest("hex");
     return this.transaction(() => {
       const existing = decodeText(this.db.prepare("SELECT *, CAST(text AS BLOB) AS text FROM observations WHERE sessionId=? AND entryId=?").get(input.sessionId,input.entryId)) as Row | undefined;
-      if (existing) { if (existing.digest !== digest || existing.scope !== input.scope || existing.source !== input.source) throw new Error("Conflicting observation identity"); return existing as unknown as Observation; }
+      if (existing) { if (existing.digest !== digest || existing.scope !== input.scope || existing.source !== input.source || existing.taskKind !== taskKind) throw new Error("Conflicting observation identity"); return existing as unknown as Observation; }
       const state = provenanceOf(input.source) !== null ? "pending" : "quarantined";
-      const result = this.db.prepare("INSERT INTO observations(sessionId,entryId,text,digest,scope,observedAt,source,state,enqueuedAt) VALUES(?,?,?,?,?,?,?,?,?)").run(input.sessionId,input.entryId,input.text,digest,input.scope,input.observedAt,input.source,state,this.#now());
+      const result = this.db.prepare("INSERT INTO observations(sessionId,entryId,text,digest,scope,observedAt,source,state,enqueuedAt,taskKind) VALUES(?,?,?,?,?,?,?,?,?,?)").run(input.sessionId,input.entryId,input.text,digest,input.scope,input.observedAt,input.source,state,this.#now(),taskKind);
       const observation = decodeText(this.db.prepare("SELECT *, CAST(text AS BLOB) AS text FROM observations WHERE id=?").get(result.lastInsertRowid)) as unknown as Observation;
       normalizeIngest(this, observation);
       return observation;
@@ -99,17 +104,19 @@ export class RuntimeStore {
   }
   /** Outcome without bodies: which documents currently link Sections to this observation, plus the diagnostic code. */
   observationOutcome(sessionId: string, entryId: string, allowedScopes?: readonly string[]): ObservationOutcome | null {
-    const row = this.db.prepare("SELECT o.id,o.scope,o.state,o.issue,o.jobId,j.state AS jobState,j.attempts,j.available,j.issue AS jobIssue,j.diagnostic FROM observations o LEFT JOIN jobs j ON j.id=o.jobId WHERE o.sessionId=? AND o.entryId=?").get(sessionId, entryId);
+    const row = this.db.prepare("SELECT o.id,o.scope,o.state,o.issue,o.jobId,j.state AS jobState,j.attempts,j.available,j.issue AS jobIssue,j.diagnostic,j.editResult FROM observations o LEFT JOIN jobs j ON j.id=o.jobId WHERE o.sessionId=? AND o.entryId=?").get(sessionId, entryId);
     if (!row || allowedScopes && !allowedScopes.includes(String(row.scope))) return null;
     const targets = this.db.prepare("SELECT DISTINCT target FROM associations WHERE sourceId=?").all(row.id!).map(link => String(link.target).replace(/:[a-f0-9]{64}$/, ''));
     const processed = row.state === 'processed';
-    return {state:String(row.state), issue:processed ? null : nullableString(row.issue ?? row.jobIssue), retainedIn:[...new Set(targets)].sort(), jobId:nullableString(row.jobId), jobState:nullableString(row.jobState), attempts:Number(row.attempts ?? 0), retryAt:row.jobState === 'retry' && !processed ? Number(row.available) : null, diagnostic:processed ? null : readDiagnostic(row.diagnostic)};
+    return {...editResultField(row.editResult), state:String(row.state), issue:processed ? null : nullableString(row.issue ?? row.jobIssue), retainedIn:[...new Set(targets)].sort(), jobId:nullableString(row.jobId), jobState:nullableString(row.jobState), attempts:Number(row.attempts ?? 0), retryAt:row.jobState === 'retry' && !processed ? Number(row.available) : null, diagnostic:processed ? null : readDiagnostic(row.diagnostic)};
   }
   hasReceipt(jobId: string): boolean { return Boolean(this.db.prepare('SELECT 1 FROM receipts WHERE id=?').get(jobId)); }
   /** Current incomplete work only. Retired jobs and historical quarantine do not block a flush. */
   hasIncompleteWork(): boolean {
     return Boolean(this.db.prepare("SELECT 1 FROM observations WHERE state IN ('pending','claimed','dead') LIMIT 1").get());
   }
+  /** Settled turns below the ten-turn seal remain durable session work; flush must not call them complete. */
+  hasBufferedSessionWork(): boolean { return Boolean(this.db.prepare("SELECT 1 FROM observations WHERE state='buffered' LIMIT 1").get()); }
   hasWork(): boolean { return Boolean(this.db.prepare("SELECT 1 FROM observations WHERE state IN ('pending','claimed') LIMIT 1").get()); }
   pending(): Observation[] { return this.db.prepare("SELECT *, CAST(text AS BLOB) AS text FROM observations WHERE state='pending' ORDER BY id").all().map(row => decodeText(row)) as unknown as Observation[]; }
   context(observation: Observation): Observation[] {
@@ -161,6 +168,7 @@ export class RuntimeStore {
         // One batch shares a scope and a provenance class: imports never ride along with user turns,
         // and agent summaries never share a batch with imported documents.
         if (sessionGroup(this, observation)?.batch !== group?.batch || observation.scope !== head[0]!.scope || provenanceOf(observation.source) !== provenanceOf(head[0]!.source)) break;
+        if ((observation.taskKind ?? 'observation') !== (head[0]!.taskKind ?? 'observation') || observations.length && observation.taskKind === 'edit') break;
         observations.push(observation);
       }
       const id=randomUUID(),token=randomUUID();
@@ -178,7 +186,7 @@ export class RuntimeStore {
     return this.transaction(()=>{this.assertLease(job);if(!Number.isSafeInteger(count)||count<1||count>job.observations.length)throw new Error("Invalid batch size");for(const o of job.observations.slice(count))this.db.prepare("UPDATE observations SET state='pending',jobId=NULL WHERE id=? AND jobId=?").run(o.id,job.id);return {...job,observations:job.observations.slice(0,count)};});
   }
   renew(job: RuntimeJob): void { this.transaction(()=>{this.assertLease(job);this.db.prepare("UPDATE jobs SET expires=? WHERE id=?").run(this.#now()+this.#options.leaseMs,job.id);}); }
-  finish(job: RuntimeJob, receipt?: RuntimeReceipt): void { this.transaction(()=>{this.assertLease(job);if(receipt) {if(receipt.jobId!==job.id || JSON.stringify([...receipt.observationIds].sort())!==JSON.stringify(job.observations.map(o=>o.id).sort())) throw new Error("Receipt batch mismatch");this.recoverReceipt(receipt);} else this.#consume(job.id);}); }
+  finish(job: RuntimeJob, receipt?: RuntimeReceipt): void { this.transaction(()=>{this.assertLease(job);if(receipt) {if(receipt.jobId!==job.id || JSON.stringify([...receipt.observationIds].sort())!==JSON.stringify(job.observations.map(o=>o.id).sort())) throw new Error("Receipt batch mismatch");this.recoverReceipt(receipt);} else { if(job.observations.some(o=>o.taskKind==='edit')) throw new Error('Missing edit receipt result'); this.#consume(job.id); }}); }
   #consume(id: string): void {this.db.prepare("UPDATE observations SET state='processed',processedAt=? WHERE jobId=?").run(this.#now(),id);this.db.prepare("UPDATE jobs SET state='done' WHERE id=?").run(id);}
   recoverReceipt(receipt: RuntimeReceipt): void {
     this.transaction(()=>{
@@ -187,6 +195,12 @@ export class RuntimeStore {
       if(!actual.length || JSON.stringify(actual)!==JSON.stringify([...receipt.observationIds].sort((a,b)=>a-b))) throw new Error("Receipt batch mismatch");
       for(const link of receipt.associations ?? []) for(const sourceId of link.sourceIds) if(!this.db.prepare("SELECT id FROM observations WHERE id=?").get(sourceId)) throw new Error("Receipt source unknown");
       for(const id of receipt.observationIds) {const row=this.db.prepare("SELECT jobId FROM observations WHERE id=?").get(id);if(!row || row.jobId!==receipt.jobId) throw new Error("Receipt references unknown batch");}
+      const sources = this.db.prepare('SELECT taskKind FROM observations WHERE jobId=?').all(receipt.jobId);
+      if (sources.some(s => s.taskKind === 'edit') && receipt.editResult === undefined) throw new Error('Missing edit receipt result');
+      if (receipt.editResult !== undefined) {
+        if (!EDIT_RESULTS.includes(receipt.editResult) || sources.length !== 1 || sources[0]!.taskKind !== 'edit') throw new Error('Invalid edit receipt');
+        this.db.prepare('UPDATE jobs SET editResult=? WHERE id=?').run(receipt.editResult, receipt.jobId);
+      }
       this.#consume(receipt.jobId);
       for (const doc of receipt.documents ?? []) this.db.prepare("INSERT INTO document_versions VALUES(?,?) ON CONFLICT(target) DO UPDATE SET hash=excluded.hash").run(doc.target,doc.after);
       for(const target of receipt.removeTargets ?? []) this.db.prepare("DELETE FROM associations WHERE target=?").run(target);
@@ -252,9 +266,11 @@ export class RuntimeStore {
     });
   }
   bind(sessionId:string,entries:readonly {id:string;text:string;timestamp:number}[], admit?: (input:ObservationInput)=>void): void {this.transaction(()=>{const deliveries=this.db.prepare("SELECT *, CAST(text AS BLOB) AS text FROM deliveries WHERE sessionId=? AND state='unbound' ORDER BY id").all(sessionId).map(row => decodeText(row)) as Row[];for(const delivery of deliveries){const matches=entries.filter(e=>e.text===delivery.text && e.timestamp===delivery.timestamp);if(matches.length>1){this.db.prepare("UPDATE deliveries SET state='quarantined' WHERE id=?").run(delivery.id!);continue;}if(matches.length===0)continue;this.db.prepare("UPDATE deliveries SET state='bound',text='' WHERE id=?").run(delivery.id!);(admit ?? ((input:ObservationInput)=>this.enqueue(input)))({sessionId,entryId:matches[0]!.id,text:String(delivery.text),scope:String(delivery.scope),source:String(delivery.source),observedAt:new Date(Number(delivery.timestamp)).toISOString()});}});}
-  status(): {observations:Row[];jobs:JobStatus[];unbound:number;quarantinedDeliveries:number} {return {observations:this.db.prepare("SELECT state,COUNT(*) AS count FROM observations GROUP BY state").all() as Row[],jobs:this.db.prepare("SELECT id,state,attempts,issue,diagnostic,available FROM jobs ORDER BY rowid").all().map(row => ({id:String(row.id),state:String(row.state),attempts:Number(row.attempts),issue:nullableString(row.issue),diagnostic:readDiagnostic(row.diagnostic),retryAt:row.state === 'retry' ? Number(row.available) : null})),quarantinedDeliveries:Number(this.db.prepare("SELECT COUNT(*) AS n FROM deliveries WHERE state='quarantined'").get()!.n),unbound:Number(this.db.prepare("SELECT COUNT(*) AS n FROM deliveries WHERE state='unbound'").get()!.n)};}
+  status(): {observations:Row[];jobStates:Row[];jobs:JobStatus[];unbound:number;quarantinedDeliveries:number} {return {observations:this.db.prepare("SELECT state,COUNT(*) AS count FROM observations GROUP BY state").all() as Row[],jobStates:this.db.prepare("SELECT state,COUNT(*) AS count FROM jobs GROUP BY state").all() as Row[],jobs:this.db.prepare("SELECT id,state,attempts,issue,diagnostic,available,editResult FROM jobs ORDER BY rowid").all().map(row => ({...editResultField(row.editResult),id:String(row.id),state:String(row.state),attempts:Number(row.attempts),issue:nullableString(row.issue),diagnostic:readDiagnostic(row.diagnostic),retryAt:row.state === 'retry' ? Number(row.available) : null})),quarantinedDeliveries:Number(this.db.prepare("SELECT COUNT(*) AS n FROM deliveries WHERE state='quarantined'").get()!.n),unbound:Number(this.db.prepare("SELECT COUNT(*) AS n FROM deliveries WHERE state='unbound'").get()!.n)};}
   close(): void {this.db.close();}
 }
 
 function nullableString(value: unknown): string | null { return value === null || value === undefined ? null : String(value); }
 function readDiagnostic(value: unknown): FailureDiagnostic | null { if (typeof value !== 'string') return null; try { return sanitizeDiagnostic(JSON.parse(value)); } catch { return null; } }
+
+export function editResultField(value: unknown): {editResult?: EditResult} { return EDIT_RESULTS.includes(value as EditResult) ? {editResult:value as EditResult} : {}; }

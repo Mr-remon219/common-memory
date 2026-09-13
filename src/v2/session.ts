@@ -106,15 +106,16 @@ export class SessionIngress {
       this.store.cancelInputs(key);
     });
   }
-  status(key:string):{closing:boolean;complete:boolean;pending:number;failed:number;batches:number} {
+  status(key:string):{closing:boolean;complete:boolean;pending:number;failed:number;batches:number;states:Record<string,number>} {
     const closing=Boolean(this.store.db.prepare('SELECT closing FROM sessions WHERE id=?').get(key)?.closing);
     const rows=this.store.db.prepare('SELECT state,COUNT(*) AS n FROM observations WHERE sessionId=? GROUP BY state').all(key);
+    const states=Object.fromEntries(rows.map(r=>[String(r.state),Number(r.n)]));
     const unbound=Number(this.store.db.prepare("SELECT COUNT(*) AS n FROM deliveries WHERE sessionId=? AND state='unbound'").get(key)!.n);
     const isolated=Number(this.store.db.prepare("SELECT COUNT(*) AS n FROM deliveries WHERE sessionId=? AND state='quarantined'").get(key)!.n);
     const pending=unbound+rows.filter(r=>['buffered','pending','claimed'].includes(String(r.state))).reduce((n,r)=>n+Number(r.n),0);
     const failed=isolated+rows.filter(r=>['dead','quarantined'].includes(String(r.state))).reduce((n,r)=>n+Number(r.n),0);
     const incomplete=Boolean(this.store.db.prepare("SELECT 1 FROM session_turns WHERE sessionId=? AND state='incomplete' LIMIT 1").get(key));
-    return {closing,complete:closing&&!pending&&!failed&&!incomplete,pending,failed,batches:Number(this.store.db.prepare('SELECT COUNT(*) AS n FROM session_batches WHERE sessionId=?').get(key)!.n)};
+    return {closing,complete:closing&&!pending&&!failed&&!incomplete,pending,failed,batches:Number(this.store.db.prepare('SELECT COUNT(*) AS n FROM session_batches WHERE sessionId=?').get(key)!.n),states};
   }
 }
 export function sessionGroup(store:RuntimeStore,o:Observation):{turn:number;batch:number}|null {

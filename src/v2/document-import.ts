@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from 'node:fs';
 import { basename, extname, resolve } from 'node:path';
-import { externalPreflight } from '../core/safety/external-preflight.js';
+import { externalPreflight, preflightSource, type ExternalSizeCaps } from '../core/safety/external-preflight.js';
 import { DOCUMENT_IMPORT_SOURCE } from './import.js';
 import type { RuntimeStore } from './runtime.js';
 
@@ -64,7 +64,7 @@ export function decodeDocumentChunk(text: string): DocumentImportChunk | null {
  * The scan is the Writer's own outbound preflight run early, so a rejected file is reported before
  * anything is queued (the Writer repeats it before any network call).
  */
-export function prepareDocumentImport(path: string, options: { label?: string | undefined; author?: DocumentAuthor | undefined; maxTotalBytes?: number | null | undefined } = {}): PreparedDocumentImport {
+export function prepareDocumentImport(path: string, options: { label?: string | undefined; author?: DocumentAuthor | undefined; maxTotalBytes?: number | null | undefined; limits?: ExternalSizeCaps } = {}): PreparedDocumentImport {
   const file = readMarkdownFile(path);
   const declaredAuthor = options.author ?? 'unknown';
   if (!DOCUMENT_AUTHORS.includes(declaredAuthor)) throw new Error('INVALID_IMPORT_AUTHOR');
@@ -78,7 +78,9 @@ export function prepareDocumentImport(path: string, options: { label?: string | 
   const chunks = parts.map((part, i) => {
     const text = encodeDocumentChunk({ importId, sourceLabel, declaredAuthor, fileName: file.fileName, contentDigest, part: { index: i + 1, count: parts.length }, headingPath: part.headingPath, text: part.text });
     if (Buffer.byteLength(text) > cap) throw new Error('IMPORT_CHUNK_TOO_LARGE');
-    try { externalPreflight({ text: part.text, heading_path: part.headingPath, source_label: sourceLabel }, { maxExcerptBytes: cap, maxCandidateBytes: cap, maxTotalBytes: Number.MAX_SAFE_INTEGER }); }
+    try {
+      preflightSource(text, options.limits ?? {maxTotalBytes:options.maxTotalBytes ?? null});
+      externalPreflight({ text: part.text, heading_path: part.headingPath, source_label: sourceLabel }, { maxExcerptBytes: cap, maxCandidateBytes: cap, maxTotalBytes: Number.MAX_SAFE_INTEGER }); }
     catch (error) {
       const violations = (error as { details?: { violations?: { rule_id: string }[] } }).details?.violations ?? [];
       throw new Error(`SENSITIVE_CONTENT_REJECTED part ${i + 1}/${parts.length}: ${[...new Set(violations.map(v => v.rule_id))].join(', ') || 'disclosure policy'}`);

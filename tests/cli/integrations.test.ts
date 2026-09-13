@@ -8,6 +8,10 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { installIntegrations, integrationHealth, readInstallationState, reconcileIntegrations, removeIntegrations } from '../../src/cli/integrations.js';
 import { installationTransaction, readInstallationFile, writeInstallationFile } from '../../src/cli/installation-files.js';
 import { scanIntegrationTargets, type IntegrationTarget } from '../../src/cli/integration-targets.js';
+import { defaultConfig } from '../../src/config/config.js';
+import { ProjectRegistry } from '../../src/v2/registry.js';
+import { McpIngress } from '../../src/mcp/ingress.js';
+import { parseMcpOptions } from '../../src/mcp/stdio.js';
 
 vi.mock('node:child_process', async importOriginal => {const actual=await importOriginal<typeof import('node:child_process')>();return {...actual,execFileSync:vi.fn(actual.execFileSync)};});
 const nativePlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
@@ -56,6 +60,47 @@ it('shares a read MCP resource but not Codex hooks between Codex CLI and Desktop
   removeIntegrations(['codex']);
   expect(existsSync(join(codex.root, 'hooks.json'))).toBe(false); expect(integrationHealth(readInstallationState()!, 'chatgpt')).toBe(true);
   removeIntegrations(['chatgpt']); expect(existsSync(join(codex.root, 'config.toml'))).toBe(false);
+});
+it('binds read launches to project A/B without widening authorization or the independent init launch', () => {
+  const registry = new ProjectRegistry(dataRoot);
+  const aRoot = join(root, 'A'), bRoot = join(root, 'B'); mkdirSync(aRoot); mkdirSync(bRoot);
+  const a = registry.register(aRoot, 'A'), b = registry.register(bRoot, 'B');
+  const codex = { ...target('codex', false), init: true, readWorkspace: a.root, readWorkspaceProjectId: a.id };
+  const work = { ...target('chatgpt'), root: join(root, 'work'), readWorkspace: b.root, readWorkspaceProjectId: b.id };
+  install([codex, work]);
+  const config = defaultConfig(); config.dataRoot = dataRoot; config.disclosure.allowedScopes = ['global', `project:${a.id}`, `project:${b.id}`];
+  const servers = (t: IntegrationTarget) => parse(readFileSync(join(t.root, 'config.toml'), 'utf8')).mcp_servers as any;
+  const ingress = (t: IntegrationTarget) => new McpIngress(null, config, parseMcpOptions(servers(t).common_memory.args.slice(2)));
+  expect(ingress(codex).contexts()).toEqual(['global', `project:${a.id}`]);
+  expect(ingress(work).contexts()).toEqual(['global', `project:${b.id}`]);
+  expect(() => ingress(codex).read(`project:${b.id}`)).toThrow('CONTEXT_UNAVAILABLE');
+  expect(servers(codex).common_memory_init.args).not.toContain('--workspace');
+  expect(servers(codex).common_memory_init.args).not.toContain('--workspace-project-id');
+  const running = ingress(codex);
+  registry.remove(a.id);
+  expect(running.contexts()).toEqual(['global']);
+  expect(ingress(codex).contexts()).toEqual(['global']);
+  const replacement = registry.register(a.root, 'Replacement');
+  config.disclosure.allowedScopes = [...config.disclosure.allowedScopes, `project:${replacement.id}`];
+  expect(running.contexts()).toEqual(['global']);
+  expect(ingress(codex).contexts()).toEqual(['global']);
+  reconcileIntegrations([{...codex,readWorkspaceProjectId:replacement.id},work],dataRoot);
+  expect(ingress(codex).contexts()).toEqual(['global',`project:${replacement.id}`]);
+  config.disclosure.allowedScopes = ['global'];
+  expect(ingress(codex).contexts()).toEqual(['global']);
+  expect(existsSync(join(dataRoot, 'runtime.sqlite'))).toBe(false);
+});
+it('updates an explicitly selected shared root atomically, retains owners, and rejects conflicting shared bindings', () => {
+  const codex = target('codex', false), work = target('chatgpt'); install([codex, work]);
+  const bound = [codex, work].map(t => ({ ...t, readWorkspace: join(root, 'A'), readWorkspaceProjectId: 'project-a' }));
+  reconcileIntegrations(bound, dataRoot);
+  const path = join(codex.root, 'config.toml'), before = readFileSync(path, 'utf8'), state = readInstallationState();
+  expect(state!.resources.find(r => r.kind === 'toml')!.owners).toEqual(['codex', 'chatgpt']);
+  expect(() => reconcileIntegrations([bound[0]!, { ...bound[1]!, readWorkspace: join(root, 'B') }], dataRoot)).toThrow('固定工作区冲突');
+  expect(() => reconcileIntegrations([bound[0]!, { ...bound[1]!, readWorkspaceProjectId: 'project-b' }], dataRoot)).toThrow('固定工作区冲突');
+  expect(readFileSync(path, 'utf8')).toBe(before); expect(readInstallationState()).toEqual(state);
+  removeIntegrations(['codex']);
+  expect(readFileSync(path, 'utf8')).toBe(before); expect(readInstallationState()!.resources[0]!.owners).toEqual(['chatgpt']);
 });
 it('read-only clients do not get unsupported hooks or import authority', () => {
   const codex = target('codex', false); install([codex]);

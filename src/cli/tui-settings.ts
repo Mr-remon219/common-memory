@@ -4,7 +4,8 @@ import { MemoryModelError } from '../core/contracts/errors.js';
 import { describeConfiguredNetwork } from '../config/runtime.js';
 import { localApiKey, readPrivateEnv } from '../config/private-env.js';
 import { PRIVATE_PROXY_KEY, PRIVATE_CA_KEY, resolveRoute, type ProxyConfig } from '../memory-agent-runtime/network/route.js';
-import { defaultConfig, envFilePath, loadConfig, saveNetworkSecret, saveApiKeyToEnvFile, saveConfig, validateConfig, type CommonMemoryConfig } from '../config/config.js';
+import { apiKeyEnvContents, configDirectory, configFilePath, defaultConfig, envFilePath, loadConfig, saveApiKeyToEnvFile, saveConfig, validateConfig, type CommonMemoryConfig } from '../config/config.js';
+import { installationTransaction, readInstallationFile } from './installation-files.js';
 import { normalizeOpenAICompatibleBaseUrl } from '../memory-agent-runtime/endpoint.js';
 import { REASONING_EFFORTS, type ReasoningEffort } from '../memory-agent-runtime/options.js';
 import { SESSION_CACHE_DEFAULTS } from '../v2/session.js';
@@ -114,9 +115,11 @@ export async function runPermissionsWizard(current: CommonMemoryConfig): Promise
   if (await confirm('保存这些权限？')) saveSettings({ ...current, writableScopes, disclosure: { ...current.disclosure, allowedScopes, allowedProvenance } }, current);
 }
 
-export async function runNetworkWizard(existing: CommonMemoryConfig | null = loadConfig()): Promise<CommonMemoryConfig> {
+export interface NetworkDraft { config: CommonMemoryConfig; secrets: Record<string, string> }
+
+/** Collect only: model discovery can retry before any config or secret exists on disk. */
+export async function collectNetworkDraft(existing: CommonMemoryConfig, secrets: Record<string, string> = {}): Promise<NetworkDraft> {
   requireInteractive();
-  if (!existing) throw new Error('请先配置模型，再设置网络。');
   const mode = unwrap(await clack.select({ message: '怎样连接模型？', initialValue: existing.remote.proxy?.mode ?? 'direct', options: [
     { value: 'direct' as const, label: '正常系统网络路由（推荐）', hint: '不使用应用代理变量；系统路由、VPN/TUN 仍生效' },
     { value: 'env' as const, label: '跟随环境代理', hint: '使用 HTTPS_PROXY 等变量和 NO_PROXY' },
@@ -138,12 +141,27 @@ export async function runNetworkWizard(existing: CommonMemoryConfig | null = loa
   const { caFileEnv, ...remote } = existing.remote;
   const next: CommonMemoryConfig = { ...existing, remote: { ...remote, proxy, ...(ca ? { caFileEnv: PRIVATE_CA_KEY } : caAction === 'keep' && caFileEnv ? { caFileEnv } : {}) } };
   note(`连接方式：${{ env: '跟随环境代理', direct: '正常系统网络路由', custom: '指定代理' }[mode]}\n证书：${{ keep: '保持当前设置', set: '使用所选 PEM 文件', remove: '仅使用默认信任' }[caAction]}\n只影响 Common Memory 的模型请求；保存不会测试连接。`, '确认网络设置');
+  if (process.env[PRIVATE_PROXY_KEY] !== undefined || process.env[PRIVATE_CA_KEY] !== undefined) note('环境中同名网络变量优先于私有草稿及保存值；测试与运行沿用此顺序。不会修改当前进程环境。', '环境覆盖');
+  const nextSecrets = { ...secrets, ...(secret !== undefined ? { [PRIVATE_PROXY_KEY]: secret } : {}), ...(ca ? { [PRIVATE_CA_KEY]: ca } : {}) };
+  if (mode !== 'custom') delete nextSecrets[PRIVATE_PROXY_KEY];
+  if (caAction === 'remove') delete nextSecrets[PRIVATE_CA_KEY];
+  return { config: next, secrets: nextSecrets };
+}
+
+export async function runNetworkWizard(existing: CommonMemoryConfig | null = loadConfig()): Promise<CommonMemoryConfig> {
+  if (!existing) throw new Error('请先配置模型，再设置网络。');
+  const draft = await collectNetworkDraft(existing);
   if (!await confirm('保存网络设置？')) throw new UserCancelled();
-  validateConfig(next);
-  checkConfigUnchanged(existing);
-  if (secret !== undefined) saveNetworkSecret(PRIVATE_PROXY_KEY, secret);
-  if (ca) saveNetworkSecret(PRIVATE_CA_KEY, ca);
-  saveConfig(next);
+  const next = validateConfig(draft.config);
+  installationTransaction(configDirectory(), commit => {
+    checkConfigUnchanged(existing);
+    const before = readInstallationFile(envFilePath());
+    const after = Object.entries(draft.secrets).reduce((body, [key, value]) => apiKeyEnvContents(key, value, body), before ?? '');
+    commit([
+      ...(Object.keys(draft.secrets).length ? [{ path: envFilePath(), before, after }] : []),
+      { path: configFilePath(), before: readInstallationFile(configFilePath()), after: JSON.stringify(next, null, 2) + '\n' },
+    ]);
+  });
   clack.log.success('网络设置已保存。请重启助手；可用「测试模型连接」检查。');
   return loadConfig()!;
 }
@@ -230,9 +248,9 @@ export async function runAdvancedWizard(current: CommonMemoryConfig): Promise<vo
       { value: 'maxTotalBytes', label: '所有会话暂存上限', unit: '字节' },
       { value: 'contextTailTurns', label: '保留上下文轮数', unit: '轮' },
     ] : [
-      { value: 'maxExcerptBytes', label: '单条材料上限', unit: '字节' },
-      { value: 'maxCandidateBytes', label: '候选材料上限', unit: '字节' },
-      { value: 'maxTotalBytes', label: '总内容上限', unit: '字节' },
+      { value: 'maxExcerptBytes', label: '完整来源序列化上限', unit: '字节' },
+      { value: 'maxCandidateBytes', label: '旧候选上限（已弃用，仍约束完整来源）', unit: '字节' },
+      { value: 'maxTotalBytes', label: '完整批次 / 总序列化请求上限', unit: '字节' },
     ];
     const values: Record<string, unknown> = group === 'scheduler' ? current.scheduler : group === 'sessionCache' ? { ...SESSION_CACHE_DEFAULTS, ...current.sessionCache } : { ...current.disclosure };
     const field = await menu('选择要修改的值', [

@@ -22,12 +22,12 @@ it.each<SessionTurnState>(['settled', 'interrupted', 'incomplete'])('keeps %s se
     key = ingress.open(identity);
     ingress.capture(key, message);
     if (terminal !== 'incomplete') ingress.settle(key, 'turn', terminal);
-    expect(ingress.status(key)).toEqual({ closing: false, complete: false, pending: 1, failed: 0, batches: 0 });
+    expect(ingress.status(key)).toEqual({ closing: false, complete: false, pending: 1, failed: 0, batches: 0, states: { buffered: 1 } });
     ingress.end(key); // An open turn becomes incomplete; it is not a successful settlement.
     expect((await failed.run()).outcome).toBe('failed');
     deadJob = failed.store.status().jobs[0]!.id;
     expect(failed.store.status().jobs[0]!.state).toBe('dead');
-    expect(ingress.status(key)).toEqual({ closing: true, complete: false, pending: 0, failed: 1, batches: 1 });
+    expect(ingress.status(key)).toEqual({ closing: true, complete: false, pending: 0, failed: 1, batches: 1, states: { dead: 1 } });
   } finally { failed.close(); }
 
   const requests: ApprovedModelRequest[] = [];
@@ -61,7 +61,7 @@ it.each<SessionTurnState>(['settled', 'interrupted', 'incomplete'])('keeps %s se
     ingress.end(key);
     expect(await restarted.run()).toEqual({ outcome: 'idle' });
     expect(requests).toHaveLength(1);
-    expect(ingress.status(key)).toEqual({ closing: true, complete: terminal !== 'incomplete', pending: 0, failed: 0, batches: 1 });
+    expect(ingress.status(key)).toEqual({ closing: true, complete: terminal !== 'incomplete', pending: 0, failed: 0, batches: 1, states: { processed: 1 } });
     expect(restarted.store.db.prepare('SELECT COUNT(*) AS n FROM observations').get()!.n).toBe(1);
     expect(restarted.store.db.prepare('SELECT COUNT(*) AS n FROM receipts').get()!.n).toBe(1);
   } finally { restarted.close(); }

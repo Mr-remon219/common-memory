@@ -65,6 +65,27 @@ it('uses an isolated real network client and rejects credential-forwarding redir
   try { await expect(discoverModels(provider, key, config)).rejects.toThrow('模型发现失败'); expect(hits).toBe(1); }
   finally { server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())); }
 });
+it('uses unsaved proxy draft secrets through NetworkClient without changing environment or writing files', async () => {
+  const { createServer } = await import('node:http');
+  const { getGlobalDispatcher } = await import('undici');
+  const dispatcher = getGlobalDispatcher(), environment = { ...process.env };
+  let connections = 0, request = '', authorization: string | undefined;
+  const proxy = createServer((req, res) => {
+    connections++; request = req.url!; authorization = req.headers.authorization;
+    res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ data: [{ id: 'draft-model' }] }));
+  });
+  proxy.listen(0, '127.0.0.1'); await once(proxy, 'listening');
+  const config = defaultConfig(); config.remote.proxy = { mode: 'custom', urlEnv: 'COMMON_MEMORY_PROXY_URL' };
+  const provider = { ...PROVIDERS[0], baseUrl: 'http://synthetic.invalid/v1' };
+  try {
+    await expect(discoverModels(provider, key, config)).rejects.toThrow('模型发现失败');
+    const models = await discoverModels(provider, key, config, { secrets: { COMMON_MEMORY_PROXY_URL: `http://127.0.0.1:${(proxy.address() as { port: number }).port}` } });
+    expect(models).toEqual([{ id: 'draft-model', api: 'chat_completions' }]); expect(connections).toBe(1);
+    expect(request).toBe('http://synthetic.invalid/v1/models'); expect(authorization).toBe(`Bearer ${key}`);
+    expect(process.env).toEqual(environment); expect(getGlobalDispatcher()).toBe(dispatcher);
+    expect(existsSync(join(home, '.env'))).toBe(false); expect(existsSync(join(home, 'config.json'))).toBe(false);
+  } finally { proxy.closeAllConnections(); await new Promise<void>(done => proxy.close(() => done())); }
+});
 it('legacy absent proxy remains absent during discovery and never becomes explicit env mode',async()=>{
  const config=defaultConfig();delete config.remote.proxy;
  vi.stubEnv('HTTPS_PROXY','bad-secret');vi.stubEnv('https_proxy',undefined);vi.stubEnv('NO_PROXY','malformed/private');vi.stubEnv('no_proxy',undefined);

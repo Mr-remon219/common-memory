@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.1 — 2026-09-13
+
+- Isolate malformed Codex/Work activations without blocking healthy inboxes; retain original inputs/cursors and stable explicit recovery IDs. Bound the complete drain, reject stale failure records after concurrent consumption, and page all recovery entries.
+- Report buffered turns, queued work, host inboxes and isolation separately; ordinary flush does not seal sub-ten-turn batches or claim global completion prematurely.
+- Add reachable project registration/removal, read/write/provenance authorization and managed read MCP workspace selection. Bind both path and project ID, explicitly confirm all shared-config owners, and preserve global-only init scope and existing permissions.
+- Keep first-run model discovery failures in an unsaved URL/key/network draft; support proxy/CA retries and same-provider manual models. Atomically save successful configuration and credentials; retain compatible private keys/thinking settings.
+- Separate native TUI/Pi edits from automatic learning. Persist bounded modified/already-satisfied/clarification-required/refused results with existing receipts, and require current-request evidence for every edit write. MCP profiles/tools remain compatible; no model-supplied edit authority.
+- Measure complete UTF-8 source projections consistently across ingress paths; retain the stricter deprecated candidate cap, batch/payload caps and no-truncation behavior. Clarify that on-demand reads replace older snapshots only for the same scope, including deletions.
+- Preserve the existing Service → Memory Agent → Core, Bundle, lease/CAS and recovery architecture. No polling, push synchronization or historical edit-priority arbitration; late old evidence may still override newer intent if the model proposes it.
+- Stop all old writers and back up the complete dataRoot before upgrading. Local checks do not establish registry or real Desktop UI acceptance; verify the exact published artifact and release CI separately.
+
 ## 0.4.0 — 2026-09-13
 
 - Replace the production Model Layer with an independent Pi Agent Core/pi-ai 0.85.1 Memory Agent Runtime. Core retains disclosure, provenance, admission, import guards, canonical writes, leases, receipts and recovery; Runtime owns System, providers, tools and multi-turn decisions.

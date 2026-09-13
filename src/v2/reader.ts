@@ -1,8 +1,9 @@
+import { MEMORY_READ_REPLACEMENT_GUIDANCE } from './read-guidance.js';
 import { join, resolve } from 'node:path';
 import { readRegular, targetInfo } from './canonical.js';
 
 export interface MemoryDocumentView { target: string; content: string; bytes: number; empty: boolean }
-export interface MemoryView { contexts: string[]; documents: MemoryDocumentView[]; empty: boolean }
+export interface MemoryView { guidance?: string; contexts: string[]; documents: MemoryDocumentView[]; empty: boolean }
 
 /** Documents a context is allowed to see. Global never includes any project document. */
 export function contextTargets(contextId: string): string[] {
@@ -24,7 +25,7 @@ export function readAuthorizedMemory(options: { dataRoot: string; contexts: read
     const content = readRegular(path, { createParents: false }) ?? '';
     return { target, content, bytes: Buffer.byteLength(content), empty: !hasSectionContent(content) };
   });
-  return { contexts, documents, empty: documents.every(doc => doc.empty) };
+  return { guidance:MEMORY_READ_REPLACEMENT_GUIDANCE, contexts, documents, empty: documents.every(doc => doc.empty) };
 }
 
 /** A file holding only its H1 is empty for consumers. */

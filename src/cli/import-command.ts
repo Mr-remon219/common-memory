@@ -40,7 +40,7 @@ export async function runImport(config: CommonMemoryConfig, args: string[], log:
     contextId = `project:${project.id}`;
   }
   if (!config.disclosure.allowedScopes.includes(contextId)) throw new Error(`CONTEXT_UNAVAILABLE: ${contextId} is not in disclosure.allowedScopes`);
-  const prepared = prepareDocumentImport(options.file, { label: options.label, author: options.author, maxTotalBytes: config.disclosure.maxTotalBytes });
+  const prepared = prepareDocumentImport(options.file, { label: options.label, author: options.author, maxTotalBytes: config.disclosure.maxTotalBytes, limits:config.disclosure });
   log(`file: ${prepared.fileName} (${prepared.bytes} bytes, ${prepared.chunks.length} part${prepared.chunks.length === 1 ? "" : "s"}); label: ${prepared.sourceLabel}; declared author: ${prepared.declaredAuthor}; context: ${contextId}`);
   if (!config.writableScopes.includes(contextId)) log(`note: ${contextId} is not in writableScopes; the Writer can only commit to writable targets`);
   const writer = createConfiguredWriter(config), controller = new AbortController();

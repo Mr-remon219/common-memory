@@ -112,7 +112,8 @@ it('retains an early qualified source finding across later distractor pages and 
  let turn=0,task:MemoryTask,block:StructuralBlock,evictedEarly=false;
  const source='Only while reviewing Rust changes, prefer TERSE_COMMENTS. '+'DISTRACTOR_CONTEXT '.repeat(2000);
  function results<T>(messages:readonly import('@earendil-works/pi-ai').Message[],name:string):T[]{return messages.filter(m=>m.role==='toolResult' && m.toolName===name).flatMap(m=>typeof m.content==='string'?[]:m.content.filter(b=>b.type==='text').map(b=>JSON.parse(b.text) as T));}
- const agent=new PiMemoryAgent({model:{...model,contextWindow:7000},stream:()=> (_model,context)=>{
+ // Includes the explicit-edit prompt contract; 20K synthetic usage still forces eviction.
+ const agent=new PiMemoryAgent({model:{...model,contextWindow:8000},stream:()=> (_model,context)=>{
   if(turn++===0){task=coreTask(context.messages);return response([{name:'inspect_ingest',args:{handle:task.bundles[0]!.ingest_id}},{name:'inspect_memory',args:{handle:task.snapshot.handle}}]);}
   const handle=task.bundles[0]!.ingest_id;
   if(turn===2){block=results<{blocks:StructuralBlock[]}>(context.messages,'inspect_ingest')[0]!.blocks[0]!;return response([{name:'read_ingest',args:{handle,block:block.block_id}},{name:'inspect_memory',args:{handle:task.snapshot.handle,target:'preferences'}}]);}
@@ -128,7 +129,8 @@ it('retains an early qualified source finding across later distractor pages and 
  const writer=new Writer({dataRoot:coreRoot(),allowedScopes:['global'],agent});
  try {
   writer.store.enqueue({sessionId:'s',entryId:'one',scope:'global',source:'interactive',text:source,observedAt:new Date(0).toISOString()});
-  expect(await writer.run({force:true})).toEqual({outcome:'committed'});
+  const completed = await writer.run({force:true});
+  expect(completed,JSON.stringify(writer.store.status())).toEqual({outcome:'committed'});
   expect(writer.canonical.snapshot().find(d=>d.target==='preferences')!.content).toContain('Only while reviewing Rust changes, prefers terse comments.');
   expect(writer.store.status().observations).toEqual([{state:'processed',count:1}]);expect(turn).toBeGreaterThan(4);
  } finally {writer.close();}

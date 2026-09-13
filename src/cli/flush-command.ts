@@ -1,6 +1,7 @@
 import type { CommonMemoryConfig } from '../config/config.js';
 import { createConfiguredWriter } from '../config/runtime.js';
 import type { Writer } from '../v2/writer.js';
+import { hostQueueStatus } from './host-session.js';
 /** An idle scheduler can still be waiting for backoff or another lease. Never claim that as completion. */
 export async function flushWriter(writer: Writer, log: (line: string) => void = console.log, signal?: AbortSignal): Promise<number> {
   let failed = false;
@@ -11,7 +12,7 @@ export async function flushWriter(writer: Writer, log: (line: string) => void = 
     if (['failed','cancelled','quarantined'].includes(result.outcome)) failed = true;
     if (!['committed','noop','ignored','quarantined'].includes(result.outcome)) break;
   }
-  return failed || signal?.aborted || writer.store.hasIncompleteWork() ? 1 : 0;
+  return failed || signal?.aborted || writer.store.hasIncompleteWork() || writer.store.hasBufferedSessionWork() || !hostQueueStatus(writer.store).complete ? 1 : 0;
 }
 export async function runFlush(config: CommonMemoryConfig, log: (line: string) => void = console.log): Promise<number> {
   const writer = createConfiguredWriter(config), controller = new AbortController();

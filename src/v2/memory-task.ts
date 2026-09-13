@@ -1,9 +1,9 @@
 import { randomUUID, createHash } from 'node:crypto';
 import type { MemoryTask, MemoryReadPort, StructuralBlock, ContentPage, BundleSummary } from '../core/contracts/memory-agent.js';
-import { externalPreflight } from '../core/safety/external-preflight.js';
+import { externalPreflight, serializedSourceBytes } from '../core/safety/external-preflight.js';
 import type { RuntimeStore, RuntimeJob } from './runtime.js';
 import type { DocumentSnapshot } from './canonical.js';
-import { maintenanceSchema, type Decision } from './contract.js';
+import { maintenanceSchema, editMaintenanceSchema, type MaintenanceDecision } from './contract.js';
 import { ingestSummary, material, type BlockRange } from './ingest.js';
 import { provenanceOf } from './import.js';
 import { sessionProjection } from './session.js';
@@ -13,7 +13,7 @@ const SCAN_CAPS = { maxExcerptBytes: Number.MAX_SAFE_INTEGER, maxCandidateBytes:
 interface ReadBlock { descriptor: StructuralBlock; text: string; required: boolean; covered: number }
 /** Every returned byte belongs to this attempt's authorized immutable read set. */
 export function openMemoryTask(store: RuntimeStore, job: RuntimeJob, documents: DocumentSnapshot[], options: {
-  signal: AbortSignal; contextAuthorized: boolean; contextTail: number; writableScopes: readonly string[]; softBytes: number; hardBytes: number;
+  maxSourceBytes?: number; signal: AbortSignal; contextAuthorized: boolean; contextTail: number; writableScopes: readonly string[]; softBytes: number; hardBytes: number;
 }) {
   const blocks = new Map<string, ReadBlock[]>();
   let summaries: BundleSummary[] = job.observations.map(o => ingestSummary(store, o));
@@ -99,7 +99,7 @@ export function openMemoryTask(store: RuntimeStore, job: RuntimeJob, documents: 
   // Scan complete materials and metadata before any model invocation, including qualifiers and gaps.
   for (const list of blocks.values()) for (const b of list) externalPreflight({ descriptor: b.descriptor, text: b.text }, SCAN_CAPS);
   for (const doc of documents) externalPreflight({ content: doc.content }, SCAN_CAPS);
-  const task: MemoryTask = { version: 'memory_task_v1', request_id: job.id, now: new Date().toISOString(), bundles: summaries, snapshot: { handle: snapshotHandle, document_count: documents.length }, decision_schema: structuredClone(maintenanceSchema) };
+  const task: MemoryTask = { version: 'memory_task_v1', task_kind: job.observations[0]!.taskKind ?? 'observation', request_id: job.id, now: new Date().toISOString(), bundles: summaries, snapshot: { handle: snapshotHandle, document_count: documents.length }, decision_schema: structuredClone(job.observations[0]!.taskKind === 'edit' ? editMaintenanceSchema : maintenanceSchema) };
   const reads: MemoryReadPort = {
     manifest(handle, offset = 0) {
       check(); const list = blocks.get(handle); if (!list) throw new Error('INVALID_INGEST_HANDLE'); validateOffset(offset, list.length);
@@ -126,9 +126,24 @@ export function openMemoryTask(store: RuntimeStore, job: RuntimeJob, documents: 
       return { complete: required.every(b => b.covered === b.descriptor.bytes), read_bytes: required.reduce((n, b) => n + b.covered, 0), total_bytes: required.reduce((n, b) => n + b.descriptor.bytes, 0) };
     },
   };
-  return { task, reads, close() { active = false; }, assertCoverage(decisions: Decision[]) {
+  const contextBytes = (handle: string) => serializedSourceBytes((blocks.get(handle) ?? []).map(b => b.text).join(''));
+  const sourceBytes = job.observations.reduce((n,o) => n + serializedSourceBytes(o.text),0)
+    + summaries.filter(b => b.source === 'conversation_context').reduce((n,b) => n + contextBytes(b.ingest_id),0);
+  const oversizedContext = () => {
+    for (const summary of summaries.filter(b => b.source === 'conversation_context')) {
+      if (contextBytes(summary.ingest_id) <= (options.maxSourceBytes ?? Number.MAX_SAFE_INTEGER)) continue;
+      const turnId = blocks.get(summary.ingest_id)?.[0]?.descriptor.metadata.turn_id;
+      const turn = turns.find(t => t.turn_id === turnId && !t.context_only);
+      const ref = turn?.messages.find(m => typeof m.ref === 'string')?.ref;
+      // Optional previous context has no current observation owner and yields first.
+      return {observationId:typeof ref === 'string' ? Number(ref.slice(3)) : null};
+    }
+    return undefined;
+  };
+  return { task, reads, sourceBytes, oversizedContext, close() { active = false; }, assertCoverage(decision: MaintenanceDecision) {
     check(); if (!reads.processing().complete) throw new Error('INCOMPLETE_INGEST_COVERAGE');
-    for (const decision of decisions) if (decision.kind !== 'ignore') for (const operation of decision.operations) if (!inspected.has(operation.target)) throw new Error('UNREAD_MEMORY_TARGET');
+    if (decision.edit_result === 'already_satisfied' && documents.some(doc => !inspected.has(doc.target))) throw new Error('UNREAD_MEMORY_TARGET');
+    for (const item of decision.decisions) if (item.kind !== 'ignore') for (const operation of item.operations) if (!inspected.has(operation.target)) throw new Error('UNREAD_MEMORY_TARGET');
   } };
 }
 function validateOffset(offset: number, size: number) {
