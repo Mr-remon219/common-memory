@@ -1,5 +1,6 @@
+import { stubInstalledBuild } from '../helpers/installation-build.js';
 import * as clack from '@clack/prompts';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -8,11 +9,10 @@ import { installIntegrations, readInstallationState } from '../../src/cli/integr
 import { registerProject } from '../../src/cli/operations.js';
 import { runWorkspaceWizard } from '../../src/cli/tui-workspace.js';
 import { UserCancelled } from '../../src/cli/tui-prompts.js';
-import { stubInstalledBuild } from '../helpers/installation-build.js';
 
 vi.mock('@clack/prompts', () => ({ select: vi.fn(), confirm: vi.fn(), isCancel: (v: unknown) => typeof v === 'symbol', note: vi.fn(), log: { info: vi.fn() } }));
 let home: string;
-beforeEach(() => { vi.resetAllMocks(); home = mkdtempSync(join(tmpdir(), 'cm-workspace-')); vi.stubEnv('COMMON_MEMORY_HOME', home); stubInstalledBuild(); });
+beforeEach(() => { vi.resetAllMocks(); home = realpathSync(mkdtempSync(join(tmpdir(), 'cm-workspace-'))); vi.stubEnv('COMMON_MEMORY_HOME', home); stubInstalledBuild(); });
 afterEach(() => { vi.unstubAllEnvs(); rmSync(home, { recursive: true, force: true }); });
 function fixture() {
   const config = defaultConfig(); config.remote.model = 'synthetic'; saveConfig(config);
