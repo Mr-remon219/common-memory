@@ -3,6 +3,7 @@ import { loadConfig } from '../config/config.js';
 import { createConfiguredWriter } from '../config/runtime.js';
 import { MCP_CAPABILITIES, McpIngress, type McpCapability, type McpOptions } from './ingress.js';
 import { createMcpServer } from './server.js';
+import { MCP_MAX_MESSAGE_BYTES } from './contract.js';
 
 export function parseMcpOptions(args: string[]): McpOptions {
   const options: McpOptions = { clientId: '', workspaces: [], global: false, accept: false, capabilities: [] };
@@ -51,7 +52,7 @@ export async function runMcp(args: string[]): Promise<void> {
   let transport: StdioServerTransport;
   let handle: ReturnType<typeof serveStdio>;
   try {
-    transport = new StdioServerTransport(process.stdin, process.stdout, { maxBufferSize: 1024 * 1024 });
+    transport = new StdioServerTransport(process.stdin, process.stdout, { maxBufferSize: MCP_MAX_MESSAGE_BYTES });
     handle = serveStdio(() => createMcpServer(ingress), { transport, onerror: report });
   } catch (error) { await writer?.close(); throw error; }
   const timer = setInterval(check, 1000); timer.unref();

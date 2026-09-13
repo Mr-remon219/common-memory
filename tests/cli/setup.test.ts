@@ -140,3 +140,11 @@ it('ordinary configured startup does not discover models or scan for installatio
   const config = defaultConfig(); config.remote.model = 'saved-model'; saveConfig(config); choices('exit');
   await runTui(); expect(discoverModels).not.toHaveBeenCalled(); expect(scanIntegrationTargets).not.toHaveBeenCalled();
 });
+it('persists official catalog version/digest at selection, but an edited gateway stays unknown/custom',async()=>{
+ choices('openai','gpt-5');vi.mocked(discoverModels).mockResolvedValue([{id:'gpt-5',api:'responses'}]);
+ const config=await configureModel();
+ expect(config.remote.capability).toMatchObject({source:'official-catalog',version:'pi-ai 0.85.1',digest:expect.stringMatching(/^[a-f0-9]{64}$/),contextWindow:expect.any(Number)});
+ expect(JSON.parse(readFileSync(join(home,'config.json'),'utf8')).remote.capability).toEqual(config.remote.capability);
+ choices('openai','gpt-5');vi.mocked(clack.text).mockResolvedValue('https://gateway.test/v1');
+ expect((await configureModel(loadConfig())).remote.capability).toEqual({source:'unknown/custom',contextWindow:null,maxOutput:null});
+});

@@ -6,6 +6,7 @@
 - [统一交互工作台：设计、入口清单与边界](tui-workbench.md)
 - [会话接入与验收边界](session-integration.md)
 - [数据库运行时审查与 Node 兼容性](database-runtime-audit.md)
+- [独立 Memory Agent Runtime：三层设计、官方依据与迁移](memory-agent-runtime.md)
 - [实施规格与架构决定](03-target-architecture.md)
 - [Init v0.1：跨 Agent 记忆迁移与复用 — 研究、设计与计划](init-v0.1-design.md)
 - [Init v0.1：验收记录](init-v0.1-verification.md)

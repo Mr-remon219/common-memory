@@ -81,13 +81,13 @@ export async function runProviderSmoke({config, evidence, clearNoProxy = false, 
   if (!['live','fixture'].includes(evidence)) throw new Error('Select live or fixture evidence');
   const {defaultConfig,validateConfig,resolveApiKey,envFilePath} = await import('../dist/config/config.js');
   const {readPrivateEnv,privateAssignment} = await import('../dist/config/private-env.js');
-  const {PRIVATE_NETWORK_KEYS} = await import('../dist/memory-manager/network/route.js');
+  const {PRIVATE_NETWORK_KEYS} = await import('../dist/memory-agent-runtime/network/route.js');
   const {RuntimeStore} = await import('../dist/v2/runtime.js');
   const {prepareDocumentImport,documentImportOutcome} = await import('../dist/v2/document-import.js');
   const {describeConfiguredNetwork} = await import('../dist/config/runtime.js');
-  const {sanitizeDiagnostic} = await import('../dist/memory-manager/contracts/diagnostic.js');
+  const {sanitizeDiagnostic} = await import('../dist/core/contracts/diagnostic.js');
   const {maintenanceSchema} = await import('../dist/v2/contract.js');
-  const contract = {schemaName:'memory_maintenance_v2',schemaSha256:digest(JSON.stringify(maintenanceSchema)),promptSha256:digest(readFileSync(new URL('../dist/v2/memory-maintainer.md',import.meta.url)))};
+  const contract = {schemaName:'memory_maintenance_v2',schemaSha256:digest(JSON.stringify(maintenanceSchema)),promptSha256:digest(readFileSync(new URL('../dist/memory-agent-runtime/system.md',import.meta.url)))};
   const remote = validateConfig(config).remote;
   if (!remote.proxy) throw new Error('Smoke requires an explicit remote.proxy mode');
   const sourceEnv = {...process.env,...(configHome ? {COMMON_MEMORY_HOME:configHome} : {})};
@@ -104,7 +104,7 @@ export async function runProviderSmoke({config, evidence, clearNoProxy = false, 
   const api = remote.api ?? 'responses';
   const report = {reportVersion:1,contract,scenario:'init-markdown-retention-v1',evidence,startedAt:new Date().toISOString(),node:process.versions.node,platform:process.platform,
     endpoint:`${remote.baseUrl}/${api === 'responses' ? 'responses' : 'chat/completions'}`,model:remote.model,api,apiKeyEnv:remote.apiKeyEnv,
-    maxOutputTokens:remote.maxOutputTokens ?? 4096,reasoningEffort:remote.reasoningEffort ?? 'omitted',thinking:remote.thinking ?? 'omitted',enableThinking:remote.enableThinking ?? 'omitted',
+    maxOutputTokens:remote.maxOutputTokens ?? null,reasoningEffort:remote.reasoningEffort ?? 'omitted',thinking:remote.thinking ?? 'omitted',enableThinking:remote.enableThinking ?? 'omitted',
     network:{mode:remote.proxy.mode,noProxyOverride:clearNoProxy ? 'empty' : 'inherited'},home:fixture.home,dataRoot:fixture.dataRoot,before,passed:false,retentionVerified:false};
   let step = 'init';
   try {

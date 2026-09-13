@@ -1,3 +1,4 @@
+import { readTask } from './synthetic-runtime.mjs';
 import {mkdtempSync,readFileSync,rmSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
@@ -9,9 +10,9 @@ const limitArg=process.argv.find(x=>x.startsWith('--limit='));const limit=limitA
 if(!Number.isSafeInteger(limit)||limit<1||limit>30)throw new Error('--limit must be 1..30');
 if(real && process.env.COMMON_MEMORY_EVAL_CONFIRM!=='paid-remote-disclosure')throw new Error('Real evaluation requires COMMON_MEMORY_EVAL_CONFIRM=paid-remote-disclosure and configured credentials; synthetic text will be disclosed.');
 if(scheduleOnly){console.log(JSON.stringify({fixtures:fixtures.length,policies,categories:[...new Set(fixtures.map(f=>f.category))],semanticQualityVerified:false}));process.exit(0);}
-const {Writer,ProjectRegistry,loadConfig,createConfiguredMemoryModel}=await import('../dist/index.js');
+const {Writer,ProjectRegistry,loadConfig,createConfiguredMemoryAgent}=await import('../dist/index.js');
 let realModel;
-if(real){const config=loadConfig();if(!config)throw new Error('Missing configuration');realModel=createConfiguredMemoryModel(config);}
+if(real){const config=loadConfig();if(!config)throw new Error('Missing configuration');realModel=createConfiguredMemoryAgent(config);}
 const report={mode:real?'real-opt-in':'scripted-executor',semanticQualityVerified:real,trajectories:limit,results:[]};
 let totalCalls=0;
 try {
@@ -21,23 +22,24 @@ for(const policy of policies){
   const root=mkdtempSync(join(tmpdir(),'memory-v2-eval-'));let now=0;
   const registry=new ProjectRegistry(root);const project=fixture.target==='project'?registry.register(root,'Evaluation'):null;
   const scope=project?`project:${project.id}`:'global';const target=project?scope:'preferences';
-  const model={async analyze(request,options){
+  const model={async decide(task,reads,options){
+   const request=readTask(task,reads);
    if(++totalCalls>630)throw new Error('Evaluation hard call budget exceeded');
    metrics.calls++;metrics.inputBytes+=Buffer.byteLength(JSON.stringify(request));
    const observations=request.projection.observations;for(const observation of observations){const at=Date.parse(observation.observed_at);const delay=now-at;latencyTotal+=delay;consumed++;metrics.maxLatencyMs=Math.max(metrics.maxLatencyMs,delay);}
    let result;
-   if(real)result=await realModel.analyze(request,options);
+   if(real)result=await realModel.decide(task,reads,options);
    else{
     const changes=observations.map(o=>({o,t:fixture.turns.find(t=>t.text===o.text)})).filter(x=>x.t.action!=='ignore');
     const last=changes.at(-1);const doc=request.projection.documents.find(d=>d.target===target);const section=doc.sections.find(s=>s.title==='Current');
     let decision={kind:'ignore',applicability:project?'project':'global',confidence:1,evidence:observations.map(o=>o.ref),reason:'Scripted oracle: no state change'};
     if(last?.t.action==='put')decision={...decision,kind:'retain',admission:'update',lifetime:'until_changed',operations:[{op:'put_section',target,section:section?.ref??null,title:'Current',body:last.t.value+'\n'}]};
     else if(last?.t.action==='forget' && section)decision={...decision,kind:'forget',operations:[{op:'remove_section',target,section:section.ref}]};
-    result={kind:'output',body:{version:'memory_maintenance_v2',request_id:options.requestId,decisions:[decision]},usage:{inputTokens:0,outputTokens:0,totalTokens:0}};
+    result={promptDigest: 'cce29db9f509aaaf00a9f12172a3dc6597e67eaaee96d626506faef58c6d6bc2',body:{version:'memory_maintenance_v2',request_id:task.request_id,decisions:[decision]},usage:{inputTokens:0,outputTokens:0,totalTokens:0}};
    }
    metrics.inputTokens+=result.usage?.inputTokens??0;metrics.outputTokens+=result.usage?.outputTokens??0;return result;
   }};
-  const writer=new Writer({dataRoot:root,model,allowedScopes:['global',scope],scheduler:{now:()=>now,turnThreshold:policy==='every-turn'?1:6,byteThreshold:policy==='hybrid'?16384:2147483647,idleMs:policy==='hybrid'?120000:2147483647,maxWaitMs:policy==='hybrid'?600000:2147483647}});
+  const writer=new Writer({dataRoot:root,agent:model,allowedScopes:['global',scope],scheduler:{now:()=>now,turnThreshold:policy==='every-turn'?1:6,byteThreshold:policy==='hybrid'?16384:2147483647,idleMs:policy==='hybrid'?120000:2147483647,maxWaitMs:policy==='hybrid'?600000:2147483647}});
   const run=async force=>{const result=await writer.run({force});metrics.outcomes[result.outcome]=(metrics.outcomes[result.outcome]??0)+1;if(result.outcome==='failed'){metrics.retries++;metrics.failureCodes[result.reason??'unknown']=(metrics.failureCodes[result.reason??'unknown']??0)+1;}return result;};
   try{
    for(let index=0;index<fixture.turns.length;index++){

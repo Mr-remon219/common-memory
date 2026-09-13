@@ -4,10 +4,10 @@ Current implementation and boundaries are described in `README.md` and enforced 
 
 ## Authority boundaries
 
-- Canonical Markdown under `<dataRoot>/memory/` is the fact source. Runtime SQLite is the durable queue/lease/source-link store, not a rebuildable index. Remote models return `memory_maintenance_v2` decisions; Core validates and commits writes.
+- Canonical Markdown under `<dataRoot>/memory/` is the fact source. Runtime SQLite is the durable queue/lease/source-link store, not a rebuildable index. All observations persist reference-backed structural Ingest Bundles. An independent Pi Agent Core/pi-ai Memory Agent Runtime receives Core-authorized paginated tools and proposes `memory_maintenance_v2` decisions; Core enforces complete current-source/target-read coverage, validates and commits writes. Core must not import Pi, and Runtime must not import Core storage/transaction implementations. See `docs/memory-agent-runtime.md`.
 - Pi integration is an Extension: capture user turns and inject authorized memory into the system prompt on `before_agent_start`. Memory content is data, not agent instructions.
 - MCP is stdio only, with launch-fixed capability profiles (`relay`, `init`, `read`). `read` processes never open the runtime database.
-- Other agents' summaries enter only as `agent_import` observations via `memory_init`. User-chosen local Markdown enters only as `document_import` via `common-memory import`; preprocessing validates and structurally chunks input without a second semantic model.
+- Other agents' summaries enter only as `agent_import` observations via MCP/Pi `memory_init` or the explicitly confirmed Pi import page (shared Core ingress). User-chosen local Markdown enters only as `document_import` via `common-memory import`; preprocessing validates and structurally chunks input without a second semantic model.
 - Both import classes remain attributed, never become user statements, never serve as sole evidence for forget, and are batched apart from user turns. Authorize each provenance class through `disclosure.allowedProvenance`.
 - There is no retrieval, index, HTTP transport or Recall write authority. Older notes do not authorize adding these capabilities.
 

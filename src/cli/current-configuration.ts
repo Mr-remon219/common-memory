@@ -1,3 +1,4 @@
+import { modelCapability } from '../memory-agent-runtime/capabilities.js';
 import { validateConfig, type CommonMemoryConfig } from '../config/config.js';
 import { providerFor } from '../config/providers.js';
 import { describeConfiguredNetwork } from '../config/runtime.js';
@@ -18,6 +19,10 @@ export function currentConfiguration(config: CommonMemoryConfig): string {
   return terminalText([
     `Provider: ${providerFor(current.remote.baseUrl, current.remote.preset).name}`,
     `Model: ${current.remote.model}`,
+    `Context Window: ${modelCapability(current.remote).contextWindow ?? 'Unknown/custom'} (${modelCapability(current.remote).source})`,
+    `Max Input: ${current.disclosure.maxTotalBytes == null ? 'Unlimited' : `${current.disclosure.maxTotalBytes} bytes (Common Memory cap)`}`,
+    `Max Output: ${current.remote.maxOutputTokens == null ? 'Unlimited' : `${current.remote.maxOutputTokens} tokens (Common Memory cap)`}`,
+    `Agent turns: ${current.remote.maxAgentTurns ?? 64}; whole-attempt deadline: 60 seconds`,
     `Base URL: ${current.remote.baseUrl}`,
     `API: ${current.remote.api ?? 'responses'}`,
     `API Key: ${hasApiKey(current) ? 'configured (not tested)' : 'missing'}`,

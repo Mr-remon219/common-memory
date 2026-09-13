@@ -2,10 +2,10 @@ import type { CommonMemoryConfig } from '../config/config.js';
 import { envFilePath } from '../config/config.js';
 import { readPrivateEnv } from '../config/private-env.js';
 import { modelApi, type ProviderPreset } from '../config/providers.js';
-import { NetworkClient } from '../memory-manager/network/client.js';
-import { networkSecret, resolveRoute } from '../memory-manager/network/route.js';
-import { readBoundedBody } from '../memory-manager/openai/bounded-body.js';
-import type { RemoteApi } from '../memory-manager/openai/options.js';
+import { NetworkClient } from '../memory-agent-runtime/network/client.js';
+import { networkSecret, resolveRoute } from '../memory-agent-runtime/network/route.js';
+import { readBoundedBody } from '../memory-agent-runtime/network/bounded-body.js';
+import type { RemoteApi } from '../memory-agent-runtime/options.js';
 
 export interface DiscoveredModel { id: string; api: RemoteApi }
 

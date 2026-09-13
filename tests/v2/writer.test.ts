@@ -1,15 +1,14 @@
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { tempRoots } from '../helpers/temp-roots.js';
+import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ProjectRegistry } from '../../src/v2/registry.js';
 import { createHash } from 'node:crypto';
-import { Writer } from '../../src/v2/writer.js';
+import { Writer } from '../helpers/legacy-writer.js';
 import { encodeDocumentChunk } from '../../src/v2/document-import.js';
-import type { ApprovedModelRequest, MemoryModelPort } from '../../src/memory-manager/contracts/model-port.js';
-const roots:string[]=[];
-function root() { const p=mkdtempSync(join(tmpdir(),'cm-writer-')); roots.push(p); return p; }
-afterEach(()=>{for(const p of roots.splice(0))rmSync(p,{recursive:true,force:true});});
+import type { ApprovedModelRequest, MemoryModelPort } from '../helpers/model-fixture-contracts.js';
+const { root, cleanup } = tempRoots('cm-writer-');
+afterEach(cleanup);
 function model(decide:(r:ApprovedModelRequest)=>unknown):MemoryModelPort {return {async analyze(r){return {kind:'output',body:decide(r),usage:{inputTokens:100,outputTokens:20}};}};}
 function body(r:ApprovedModelRequest,kind='retain',operations:unknown[]=[{op:'put_section',target:'preferences',section:null,title:'Language',body:'Prefers Chinese.\n'}]) {
   const observations=r.projection.observations as {ref:string}[];
@@ -48,10 +47,10 @@ describe('V2 writer',()=>{
 });
 
 describe('batch, permission and output boundaries',()=>{
- it('shrinks oversized multi-turn requests without splitting turns or losing the FIFO tail',async()=>{
+ it('pages a multi-observation batch without splitting or losing its FIFO material',async()=>{
   const sizes:number[]=[];const w=new Writer({dataRoot:root(),allowedScopes:['global'],maxRequestBytes:20000,model:model(r=>{sizes.push((r.projection.observations as unknown[]).length);return body(r,'ignore');})});
   enqueue(w,'a'.repeat(5000),'a');enqueue(w,'b'.repeat(5000),'b');
-  expect((await w.run({force:true})).outcome).toBe('ignored');expect(sizes).toEqual([1]);expect(w.store.pending().map(o=>o.entryId)).toEqual(['b']);expect((await w.run({force:true})).outcome).toBe('ignored');w.close();
+  expect((await w.run({force:true})).outcome).toBe('ignored');expect(sizes).toEqual([2]);expect(w.store.pending()).toEqual([]);expect((await w.run({force:true})).outcome).toBe('idle');w.close();
  });
  it('never stores section title content in permanent receipts',async()=>{
   const path=root();let forget=false;const title='PersonalSensitiveTitle';const w=new Writer({dataRoot:path,allowedScopes:['global'],model:model(r=>body(r,forget?'forget':'retain',forget?[{op:'remove_section',target:'preferences',section:'s1'}]:[{op:'put_section',target:'preferences',section:null,title,body:'Value'}]))});
@@ -387,15 +386,17 @@ it.each(['committed','ignored'] as const)('reports the winning lease receipt (%s
 });
 
 it.each([200,503])('retains HTTP %s context when the Writer deadline fences a stalled provider body',async status=>{
- const {OpenAIResponsesMemoryModel}=await import('../../src/memory-manager/openai/openai-responses-adapter.js');
- const model=new OpenAIResponsesMemoryModel({apiKey:'test',model:'fake',disclosurePolicy:{enabled:true,allowedScopes:['global'],allowedProvenance:['user_explicit'],maxExcerptBytes:131072,maxCandidateBytes:131072,maxTotalBytes:131072},retry:{maxRetries:0},fetch:async()=>new Response(new ReadableStream({pull:()=>new Promise(()=>{}),cancel:()=>new Promise(()=>{})}),{status})});
- const w=new Writer({dataRoot:root(),allowedScopes:['global'],deadlineMs:30,model});enqueue(w);
+ const {ProviderMemoryAgent}=await import('../../src/memory-agent-runtime/provider.js');
+ const {Writer:CoreWriter}=await import('../../src/v2/writer.js');
+ const model=new ProviderMemoryAgent({baseUrl:'https://provider.test/v1',apiKey:'test',model:'fake',maxRetries:0,fetch:async()=>new Response(new ReadableStream({pull:()=>new Promise(()=>{}),cancel:()=>new Promise(()=>{})}),{status})});
+ const w=new CoreWriter({dataRoot:root(),allowedScopes:['global'],deadlineMs:30,agent:model});enqueue(w);
  try{expect(await w.run({force:true})).toEqual({outcome:'failed',reason:'TIMEOUT'});expect(w.store.status().jobs[0]).toMatchObject({diagnostic:{stage:status===200?'response_body':'http',httpStatus:status,reason:'timeout',retryable:true}});}finally{w.close();}
 });
 
 it('clears a previous HTTP attempt context before a retry stalls in fetch',async()=>{
- const {OpenAIResponsesMemoryModel}=await import('../../src/memory-manager/openai/openai-responses-adapter.js');let calls=0;
- const model=new OpenAIResponsesMemoryModel({apiKey:'test',model:'fake',disclosurePolicy:{enabled:true,allowedScopes:['global'],allowedProvenance:['user_explicit'],maxExcerptBytes:131072,maxCandidateBytes:131072,maxTotalBytes:131072},sleeper:async()=>{},fetch:async()=>{if(++calls===1)return new Response('{}',{status:429,headers:{'retry-after':'0'}});return new Promise(()=>{});}});
- const w=new Writer({dataRoot:root(),allowedScopes:['global'],deadlineMs:40,model});enqueue(w);
+ const {ProviderMemoryAgent}=await import('../../src/memory-agent-runtime/provider.js');
+ const {Writer:CoreWriter}=await import('../../src/v2/writer.js');let calls=0;
+ const model=new ProviderMemoryAgent({baseUrl:'https://provider.test/v1',apiKey:'test',model:'fake',fetch:async()=>{if(++calls===1)return new Response('{}',{status:429,headers:{'retry-after':'0'}});return new Promise(()=>{});}});
+ const w=new CoreWriter({dataRoot:root(),allowedScopes:['global'],deadlineMs:40,agent:model});enqueue(w);
  try{expect(await w.run({force:true})).toEqual({outcome:'failed',reason:'TIMEOUT'});expect(calls).toBe(2);expect(w.store.status().jobs[0]!.diagnostic).toEqual({stage:'request',reason:'timeout',retryable:true});}finally{w.close();}
 });

@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { parseEnv } from 'node:util';
-import { networkConfigError, type NetworkEnvironment } from '../memory-manager/network/route.js';
+import { networkConfigError, type NetworkEnvironment } from '../memory-agent-runtime/network/route.js';
 
 export function readPrivateEnv(path: string): Record<string,string | undefined> {
   try { return existsSync(path) ? parseEnv(readFileSync(path,'utf8')) : {}; }

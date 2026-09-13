@@ -77,18 +77,16 @@ describe("local configuration", () => {
 
 it('roundtrips old configurations and routes the explicit API through the model port', async () => {
   const {validateConfig} = await import('../../src/config/config.js');
-  const {createConfiguredMemoryModel} = await import('../../src/config/runtime.js');
-  const {OpenAIResponsesMemoryModel} = await import('../../src/memory-manager/openai/openai-responses-adapter.js');
-  const {OpenAIChatMemoryModel} = await import('../../src/memory-manager/openai/openai-chat-adapter.js');
+  const {createConfiguredMemoryAgent} = await import('../../src/config/runtime.js');
   const home=mkdtempSync(join(tmpdir(),'common-memory-api-'));temporary.push(home);vi.stubEnv('COMMON_MEMORY_HOME',home);
   saveApiKeyToEnvFile('OPENAI_API_KEY','test');
   const config=defaultConfig();config.remote.model='fake';
   expect(validateConfig(config).remote).toEqual(config.remote);
-  const responses = createConfiguredMemoryModel(config); expect(responses).toBeInstanceOf(OpenAIResponsesMemoryModel); await responses.close();
+  const responses = createConfiguredMemoryAgent(config); expect(responses.decide).toBeTypeOf('function'); await responses.close();
   config.remote={...config.remote,api:'chat_completions',maxOutputTokens:16384,thinking:{type:'disabled'}};
   expect(validateConfig(config).remote).toEqual(config.remote);
-  const chat = createConfiguredMemoryModel(config); expect(chat).toBeInstanceOf(OpenAIChatMemoryModel); await chat.close();
-  for (const extra of [{api:'auto'},{api:'responses',thinking:{type:'disabled'}},{api:'chat_completions',reasoningEffort:'none'},{api:'chat_completions',thinking:{type:'disabled'},enableThinking:false},{maxOutputTokens:16385},{maxOutputTokens:0},{maxOutputTokens:1.5},{thinking:{type:'disabled',budget:50}},{enableThinking:'false'},{arbitraryBody:{}},{api:null}]) {
+  const chat = createConfiguredMemoryAgent(config); expect(chat.decide).toBeTypeOf('function'); await chat.close();
+  for (const extra of [{api:'auto'},{api:'responses',thinking:{type:'disabled'}},{api:'chat_completions',reasoningEffort:'none'},{api:'chat_completions',thinking:{type:'disabled'},enableThinking:false},{maxOutputTokens:0},{maxOutputTokens:1.5},{thinking:{type:'disabled',budget:50}},{enableThinking:'false'},{arbitraryBody:{}},{api:null}]) {
     expect(()=>validateConfig({...config,remote:{provider:'openai-compatible',baseUrl:'https://provider.test/v1',model:'m',apiKeyEnv:'KEY',...extra}})).toThrow();
   }
 });

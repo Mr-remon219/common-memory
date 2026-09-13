@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, expect, it } from 'vitest';
 import { RuntimeStore } from '../../src/v2/runtime.js';
-import { MemoryModelError } from '../../src/memory-manager/contracts/errors.js';
+import { MemoryModelError } from '../../src/core/contracts/errors.js';
 import { McpIngress } from '../../src/mcp/ingress.js';
 import { defaultConfig } from '../../src/config/config.js';
 import { documentImportOutcome } from '../../src/v2/document-import.js';

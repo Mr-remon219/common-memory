@@ -104,6 +104,7 @@ it('init is idempotent per importId, rejects changed payloads, flushes promptly 
   expect(init.init(imported)).toMatchObject({ duplicate: true });
   expect(() => init.init({ ...imported, understanding: 'something else' })).toThrow('SUBMISSION_CONFLICT');
   expect(() => init.init({ ...imported, importId: 'imp-2', sourceLabel: 'bad\nlabel' })).toThrow('INVALID_IMPORT_LABEL');
+  init.config.disclosure.maxTotalBytes=32768;
   expect(() => init.init({ ...imported, importId: 'imp-3', understanding: 'x'.repeat(32769) })).toThrow('INVALID_TEXT_SIZE');
   const pending = store.pending(); expect(pending).toHaveLength(1);
   expect(pending[0]).toMatchObject({ source: 'agent_import', scope: 'global', state: 'pending' });

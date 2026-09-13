@@ -13,7 +13,7 @@ Common Memory 将背景、偏好和项目上下文保存在本机 Markdown 中�
 - **不支持**：ChatGPT 普通 Chat、网页版或网页版 Plugins；没有 HTTP MCP 服务。
 - **不必常开管理界面**：完成接入后，日常直接使用助手。`common-memory` 是配置和管理入口，不是每次聊天前都要手动启动的服务。
 
-**当前版本：v0.3.9** · npm 包名：`common-memory-core` · 命令：`common-memory`。
+**当前版本：v0.4.0** · npm 包名：`common-memory-core` · 命令：`common-memory`。
 这是早期版本；测试通过不代表所有真实客户端交互或模型的记忆判断都已验证。
 
 ## 1. 安装
@@ -27,7 +27,7 @@ Common Memory 将背景、偏好和项目上下文保存在本机 Markdown 中�
 | Windows | **WSL 终端**；Windows 桌面助手通过生成的桥接调用 WSL 中的 Common Memory |
 
 ```sh
-npm install -g common-memory-core@0.3.9
+npm install -g common-memory-core@0.4.0
 common-memory
 ```
 
@@ -116,6 +116,20 @@ Provider → Base URL → API Key → Model → Enter 保存
 | **Adjust Memory → Processing Status** | 查看已提交请求，继续处理或重试失败任务 |
 | **Model & Configuration** | 查看配置、更换模型/Key、设置网络、测试连接、卸载 |
 
+### Pi 原生记忆页面
+
+在 Pi 中输入 **`/memory`**，打开类似 `/settings` 的页面：
+
+- 查看 Profile、Preferences 和已授权项目记忆；Enter 打开正文，方向键 / PgUp / PgDn 滚动，Esc 返回；支持关键词查找。
+- **调整记忆**：选择已授权的可写范围，用自然语言删除、纠正或补充，确认后交给 Core 排队处理；不是直接编辑 Markdown。
+- **处理状态**：查看近期调整/导入、队列和受控失败原因，确认后重试失败终态任务。正在退避的任务不跳过等待，隔离项不能换 ID 绕过检查。
+- **导入已有材料**：需要 `agent_observation` 配置授权，并逐次确认材料；始终作为 Agent 报告。Pi 的 `memory_init` 同样需要宿主确认，非交互模式不会替用户批准。
+- 查看授权范围、刷新当前 Agent 记忆快照、请求后台继续处理。页面不会自动增加权限。
+
+状态栏只显示简短进度，重要失败才通知；不向模型追加后台状态消息。页面中查看其他已授权项目不会把该项目内容自动注入当前 Agent；模型的 `memory_read` / `memory_status` 仍限 global 与当前项目。纯浏览不需要模型 Key，也不创建队列数据库。
+
+`/memory-refresh`、`/memory-flush` 继续保留。已接收/已处理都不等于已记住，最终请查看当前记忆。配置、模型或授权变化后仍应重启接入，避免旧维护进程继续使用启动配置。
+
 ### 自动维护对话中的长期信息
 
 Pi / Codex / Desktop Work 的会话接入按 **每 10 次已完成交互**封批处理，正常真实退出时交接不足 10 次的尾批。
@@ -179,7 +193,7 @@ common-memory import notes.md --author user
 2. 在原来安装 Common Memory 的环境中执行：
 
    ```sh
-   npm install -g common-memory-core@0.3.9
+   npm install -g common-memory-core@0.4.0
    common-memory --version
    ```
 
@@ -319,3 +333,12 @@ v0.3.9 的永久服务错误（如 401/403）首次失败即停止自动重试�
 `https://api.deepseek.com/v1` 不完全一致，可能显示 Custom。
 这个标签本身不能证明接口不可用或解释 401；实际请求取决于 **Base URL、API 和 Model**。
 需要按预置流程配置时，在 **Change Model / Provider** 重新选择 DeepSeek 并保存。
+
+## v0.4.0 架构升级
+
+当前源码分为 **Service Agents → Common Memory Core → 独立 Pi Memory Agent Runtime → Core 校验与提交**。
+所有输入都成为持久结构 Ingest Bundle；Agent 通过只读分页工具取材，不能跳过未读来源后完成任务，也没有文件/数据库写权限。
+默认 Max Input/Output 为 Unlimited；Context Window 仅来自固定官方 capability，其他显示 Unknown/custom。
+现有 CLI TUI 接入与记忆操作保持不变；Pi 增加 `/memory` 管理页面。升级前停止所有旧写端并备份整个 dataRoot；不要让新旧版本同时写同一数据库。
+JS 调用者改用 `Writer({agent: MemoryAgentRuntime, ...})`；旧 Model adapter 导出已移除，`createConfiguredWriter` 继续可用。真实模型整理质量和 token 成本尚未完成实测。
+详见 [设计、官方依据、迁移与验证边界](docs/memory-agent-runtime.md)。

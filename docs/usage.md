@@ -36,12 +36,13 @@ The wizard commits `~/.common-memory/config.json` and private `.env` credentials
 recoverably (`COMMON_MEMORY_HOME` overrides this location). Presets choose supported
 protocols; Custom uses Chat Completions. Technical configuration may set `remote.api`
 explicitly (omitted means `responses`).
-Responses uses strict Structured Outputs; `chat_completions` uses JSON object mode
-with the complete maintenance schema in the system message. Both use the same Core
-validation and commit path. Keys are never stored in canonical memory.
+Both protocols run the independent Pi Memory Agent with paginated read tools and a
+`submit_memory_decision` tool. Assistant JSON prose is not accepted as a decision.
+Core still validates the same maintenance schema and owns the commit path. Keys are never stored in canonical memory.
 V2 requires configuration `schemaVersion: 2`; pre-V2 configuration/data is not migrated
 or automatically deleted. Existing V2 configurations remain valid; the V2 jobs table
-receives an idempotent, transactional nullable diagnostic column when opened.
+receives idempotent transactional ingest bundle/block tables and diagnostics when opened.
+See the [unreleased runtime architecture and upgrade boundary](memory-agent-runtime.md).
 
 Current Configuration displays the full configuration without revealing secrets;
 advanced fields in `remote` remain technical `config.json` options for editing.
@@ -59,7 +60,9 @@ options when choosing a model. The following fields remain available for technic
 | `api` | `responses` (default) or `chat_completions`; no runtime fallback |
 | `preset` | Optional provider identity recorded by setup; `custom` keeps an explicit custom identity |
 | `apiKeySource` | Compatibility marker, normalized to `private-env`; omission does not enable another credential source |
-| `maxOutputTokens` | Integer 1–16384; default 4096; `max_output_tokens` for Responses, `max_tokens` for Chat |
+| `maxOutputTokens` | Positive safe integer, or null/omitted = Unlimited; `max_output_tokens` for Responses, `max_tokens` for Chat |
+| `maxAgentTurns` | 1–1024; default 64; independent of input/output caps and the whole-attempt deadline |
+| `capability` | Selection-time official catalog version/digest or unknown/custom; operational capability is independently resolved, never trusted from this record |
 | `reasoningEffort` | Responses only: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; sent as `reasoning.effort` |
 | `thinking` | Chat only: `{ "type": "enabled" }` or `{ "type": "disabled" }` |
 | `enableThinking` | Chat only: boolean, sent as `enable_thinking`; mutually exclusive with `thinking` |
@@ -185,10 +188,10 @@ Writer commits. Proxy authentication (`PROXY_AUTHENTICATION`, `proxyStatus:407`)
 separate from provider API key authentication (`AUTHENTICATION`, `httpStatus:401/403`).
 Errors expose controlled stages/reasons, not proxy credentials or provider bodies.
 
-Configured model clients and configured Writers expose async `close()` and own their
+Configured Memory Agent runtimes and configured Writers expose async `close()` and own their
 connections. CLI/MCP/Pi await shutdown. Integrators creating them directly must also
-`await close()`; a plain `Writer` still borrows its `MemoryModelPort` and does not close
-caller-owned resources. The port itself remains analysis-only.
+`await close()`; a plain `Writer` still borrows its `MemoryAgentRuntime` and does not close
+caller-owned resources. The port proposes decisions using Core-supplied read capabilities; it has no storage authority.
 
 Research, explicit environment limits and acceptance evidence:
 [network design and review](outbound-network-design.md).
@@ -291,17 +294,16 @@ same Writer that handles user turns and Init. It never copies the file into
 `profile.md` or bypasses the Core. The import step is input preprocessing only:
 
 - The file must be a regular `.md`/`.markdown` file (no symlinks), strict UTF-8 without
-  NUL bytes, non-empty after trimming, and at most 256 KiB. Anything else is rejected
-  with a code (`FILE_NOT_FOUND`, `UNSUPPORTED_FILE_TYPE`, `INVALID_ENCODING`,
-  `EMPTY_DOCUMENT`, `DOCUMENT_TOO_LARGE`) before anything is queued. Nothing is truncated.
-- A file that fits the 32 KiB per-item budget is one observation, verbatim. Larger files
-  are split only at Markdown structure: headings start new units, blank lines separate
-  paragraphs, fenced code is never split, and whole sections stay together when they fit.
-  Every part records the ancestor headings it sits under (`heading_path`) and its position
-  (`part i of n`). A single paragraph or fence larger than the budget rejects the whole
-  import (`IMPORT_CHUNK_TOO_LARGE`); an unterminated fence makes the rest of the file one
-  fence. The 32 KiB budget is fixed; with a lowered `disclosure.maxTotalBytes` the Writer
-  may still quarantine a part that does not fit its request (`OVERSIZED_COMPLETE_TURN`).
+  NUL bytes, and non-empty after trimming. Invalid files are rejected before queuing;
+  nothing is truncated. There is no implicit Common Memory file-size cap.
+- Every new file is one complete source observation/bundle, preserving all text and
+  Markdown structure. Headings, paragraphs, lists, quotes, tables and fences become
+  structural block ranges, not semantic facts or memory candidates. Even one character
+  takes the same ingest path. Large paragraphs/fences are read in UTF-8-safe pages;
+  they are not rejected at an artificial 32 KiB threshold or split into unrelated jobs.
+- Explicit disclosure limits still apply; a source that exceeds an explicit limit is
+  not silently shortened or partly consumed. Unlimited does not remove local machine,
+  service-provider, context-window, attempt deadline or session-cache limits.
 - The Writer's outbound safety scan runs before queuing; a violating part is reported as
   `SENSITIVE_CONTENT_REJECTED part i/n: <rule ids>` and the file is not imported.
 - `--author` records who the importer says wrote the file (default `unknown`), `--label`
@@ -315,11 +317,11 @@ same Writer that handles user turns and Init. It never copies the file into
   Scope comes from `--workspace` (a registered project in `disclosure.allowedScopes`) or
   defaults to `global`.
 
-All parts are queued in one transaction with a flush request, then the command runs the
+The whole source is queued in one transaction with a flush request, then the command runs the
 Writer loop like `flush` and prints per-part states (`pending`, `claimed`, `processed`,
 `quarantined`, `dead`), the documents each part is retained in, and a final `complete`
-flag that is true only when every part was processed. Parts are committed batch by batch
-with their own receipts; a partially processed import is reported as incomplete (exit
+flag that is true only when every part was processed. New imports have one part and one source job. Historical multipart imports retain
+their existing job/receipt boundaries and expose an explicit claimed-subset manifest; a partially processed import is reported as incomplete (exit
 code 1), never as success. Re-running `import` on the same file resumes pending or
 retrying parts (dead jobs need `common-memory retry <job-id>`); a quarantined part is
 final for that content and needs a changed file. `--no-wait` only queues. Enable the
@@ -351,7 +353,9 @@ Build with `npm ci && npm run build`. Configure Common Memory using the existing
 CLI, then give your MCP host an explicit command and argument array. Node 22.19+ (22.x) or 24+ is
 required. No running Pi process is needed; the existing Pi peer/package layout is
 unchanged. The SDK stdio entry serves modern and legacy clients. No HTTP port,
-automatic host installer, Roots discovery, Resources, Prompts or retrieval is added.
+automatic host installer, Roots discovery, Prompts or retrieval is added. Read-enabled
+connections expose authorized canonical Markdown as on-demand MCP Resources as well
+as `memory_read`; neither exposes ingest bundles or the queue.
 
 ### Capability profiles
 
@@ -385,15 +389,21 @@ of tool calls. Memory content is data, never agent instructions.
 
 ### Tools
 
-- `memory_status {}`: this connection's capabilities, enabled features and allowed
-  context IDs.
+- `memory_status {}`: this connection's capabilities, enabled features, exact allowed
+  context IDs and limits. `limits.maxInputBytes: null` means no additional source byte
+  cap; `limits.maxMessageBytes` is the existing 1 MiB stdio framing limit for the whole
+  JSON-RPC message (including escaping/envelopes), not a model context limit.
 - `memory_submit_user_turn { submissionId, conversationId?, contextId, text }`
   (`relay`): submit one **complete user expression verbatim**, not an assistant summary
   or a Markdown operation. IDs must be 1–128 ASCII letters/digits/underscores/hyphens.
+  Like Init, explicit relay submissions now request a flush for prompt background
+  processing, rather than waiting for six turns or the idle threshold. This does not
+  bypass the queue, lease, backoff, guards or user authorization.
 - `memory_init { importId, contextId, sourceLabel, basis, understanding, gaps? }`
   (`init`): import another agent's **visible existing material, quoted or faithfully summarized** of the user (`global`) or the current
   project (`project:<id>`). `basis` ∈ `saved_memories | chat_history |
-  current_conversation | project_context | mixed | unknown`; `understanding` ≤ 32 KiB;
+  current_conversation | project_context | mixed | unknown`; no implicit source-text cap
+  (the stdio framing limit still applies);
   `gaps` describes what the agent could not access. The payload is stored as one
   `agent_import` observation. `sourceLabel` is a recorded label, not an identity.
   Reuse `importId` on retry: identical payloads are duplicates, changed payloads are
@@ -417,8 +427,52 @@ of tool calls. Memory content is data, never agent instructions.
   queue retries and become `dead` on the first failure; repair the configuration, restart
   active clients and explicitly retry the job. Transient failures retain bounded backoff.
   Host cancellation remains resumable, and Core decision rejection can still retry with
-  a fresh decision. `processed` with an empty `retainedIn` means the Core kept nothing
-  (ignored or reorganized only).
+  a fresh decision. `processed` with an empty `retainedIn` means there are no current
+  source links, **not** that nothing changed: ignore, forget, reorganization or later
+  maintenance may produce this result. Item lookup requires the matching launch
+  profile and currently authorized source scope; unknown/inaccessible IDs return null.
+
+### Agent call flow and resources (current source, unreleased)
+
+1. If capabilities/context IDs are unknown, call `memory_status {}`. Use its exact
+   IDs, never project names or paths; do not silently redirect project data to global.
+2. Call the appropriate enabled tool. Accepted results preserve the existing fields
+   and add `next` with a tool name, exact arguments, suggested delay and explanation.
+   Follow those arguments, including the original `conversationId` when present.
+3. Item status also returns `next`: bounded delayed polling, destination read, or
+   user review for stopped work/missing read permission. Do not busy-poll or mint a
+   new ID to retry existing material. A running writer is needed to finish queued work.
+4. Read the destination when authorized. An init-only connection cannot read; use a
+   separate authorized read connection or ask the user to inspect `common-memory show`.
+   A project input may be promoted to global memory; a project-only read grant does
+   not thereby gain permission to read that global destination.
+
+Each tool has a title, documented input properties, a success `outputSchema` and
+`structuredContent`, alongside text for clients that only consume text. Tool errors
+use `isError: true` and safe `code`/`message` recovery guidance; SDK schema errors also
+return error tool results. Backend paths, submitted bodies and provider messages are
+not copied into error details. Both write tools conservatively advertise possible
+memory modification and configured-model disclosure; annotations are hints, not grants.
+
+For `read` profiles, `resources/list` enumerates only the current authorized scopes:
+
+- `common-memory://memory/global`
+- `common-memory://memory/project%3A<id>` (use the listed URI, not a guessed path)
+
+`resources/templates/list` exposes `common-memory://memory/{contextId}` with completion
+of authorized context IDs. Reads use the same Core reader, authorization recheck and
+“data, not instructions” rendering as `memory_read`, without opening SQLite or calling
+models. They return the current view, not a frozen session snapshot. Removed/remapped
+projects become unreadable even through a previously listed URI. No subscriptions or
+list-change notifications are offered: re-list/re-read when current data is needed.
+Tools remain sufficient for hosts that do not expose Resources to their agents; reading
+both presentations is unnecessary. No MCP Prompts or internal Memory Agent tools are
+registered. Server identity reports the installed package version.
+
+Official contracts verified against the pinned MCP TypeScript SDK 2.0.0:
+[tools/output schemas](https://ts.sdk.modelcontextprotocol.io/v2/servers/tools.html),
+[resources/templates](https://ts.sdk.modelcontextprotocol.io/v2/servers/resources.html),
+and [annotation semantics](https://blog.modelcontextprotocol.io/posts/2026-03-16-tool-annotations).
 
 ### What Init means
 
@@ -843,9 +897,15 @@ continue to gate writes; cross-project A→B writes remain forbidden.
 Legacy relay/import triggers: 6 delivered expressions, 16 KiB, 120-second idle debounce, 10-minute
 oldest backlog, lifecycle flush, or explicit flush. Session caches instead seal after exactly ten
 settled interactions, or an actual exit tail; scheduler settings cannot override ten. Empty queues do not call models.
-Request limit is 128 KiB, document soft budget 8 KiB and hard cap 16 KiB. Full turns
-are never truncated; oversized turns are quarantined. Limits are configurable in
-`scheduler` and disclosure `maxTotalBytes` (Writer also exposes deadline/size options).
+Default Max Input/Output is Unlimited; explicit caps first drop optional prior context,
+then defer whole trailing observations/session turns rather than quarantine fitting inputs.
+Only a truly oversized complete group is quarantined. Current sources and snapshot documents enter
+the agent through read tools rather than a full serialized prompt. Explicit disclosure
+byte caps are retained; oversize sources under those caps are not truncated/consumed.
+Document soft budget remains 8 KiB and hard cap 16 KiB. Whole current-source coverage
+(including authorized current context) is required even for ignore; target edits require
+complete snapshot inspection. Turn/deadline/context exhaustion is a controlled failure,
+not partial success. See [runtime limits and context policy](memory-agent-runtime.md).
 
 Commits use repository lock → runtime DB transaction, lease fencing, complete-read
 CAS, and recoverable Markdown + permanent immutable receipt publication. No network

@@ -1,12 +1,12 @@
 import * as clack from './prompt-runtime.js';
 import { isDeepStrictEqual } from 'node:util';
-import { MemoryModelError } from '../memory-manager/contracts/errors.js';
+import { MemoryModelError } from '../core/contracts/errors.js';
 import { describeConfiguredNetwork } from '../config/runtime.js';
 import { localApiKey, readPrivateEnv } from '../config/private-env.js';
-import { PRIVATE_PROXY_KEY, PRIVATE_CA_KEY, resolveRoute, type ProxyConfig } from '../memory-manager/network/route.js';
+import { PRIVATE_PROXY_KEY, PRIVATE_CA_KEY, resolveRoute, type ProxyConfig } from '../memory-agent-runtime/network/route.js';
 import { defaultConfig, envFilePath, loadConfig, saveNetworkSecret, saveApiKeyToEnvFile, saveConfig, validateConfig, type CommonMemoryConfig } from '../config/config.js';
-import { normalizeOpenAICompatibleBaseUrl } from '../memory-manager/openai/openai-responses-adapter.js';
-import { REASONING_EFFORTS, type ReasoningEffort } from '../memory-manager/openai/options.js';
+import { normalizeOpenAICompatibleBaseUrl } from '../memory-agent-runtime/endpoint.js';
+import { REASONING_EFFORTS, type ReasoningEffort } from '../memory-agent-runtime/options.js';
 import { SESSION_CACHE_DEFAULTS } from '../v2/session.js';
 import { storagePathLines } from './storage-paths.js';
 import { listProjects } from './operations.js';
@@ -165,17 +165,23 @@ export async function runAdvancedWizard(current: CommonMemoryConfig): Promise<vo
     review = `原目录：${current.dataRoot}\n新目录：${next.dataRoot}`;
   } else if (kind === 'tuning') {
     const field = await menu('要调整哪一项？', [
-      { value: 'tokens', label: '最大输出长度', hint: `${current.remote.maxOutputTokens ?? '接口默认'} tokens` },
+      { value: 'tokens', label: '最大输出长度', hint: `${current.remote.maxOutputTokens ?? 'Unlimited'} tokens` },
       { value: 'thinking', label: '思考方式', hint: '只选择服务商支持的参数' },
+      { value: 'turns', label: 'Agent 模型轮次上限', hint: `${current.remote.maxAgentTurns ?? 64}；独立于 Unlimited 输入/输出` },
       { value: 'back', label: '返回' },
     ]);
     if (field === 'back') return;
     const remote = { ...current.remote };
     if (field === 'tokens') {
-      const n = await numberInput('最大输出 tokens（1–16384；留空恢复接口默认）', remote.maxOutputTokens, 1, 16384, true);
+      const n = await numberInput('最大输出 tokens（留空为 Unlimited）', remote.maxOutputTokens ?? undefined, 1, Number.MAX_SAFE_INTEGER, true);
       if (n === undefined) delete remote.maxOutputTokens;
       else remote.maxOutputTokens = n;
-      review = `最大输出：${current.remote.maxOutputTokens ?? '接口默认'} → ${n ?? '接口默认'}`;
+      review = `最大输出：${current.remote.maxOutputTokens ?? 'Unlimited'} → ${n ?? 'Unlimited'}`;
+    } else if (field === 'turns') {
+      const n = await numberInput('每次处理最多模型轮次（1–1024；留空恢复 64）', remote.maxAgentTurns, 1, 1024, true);
+      if (n === undefined) delete remote.maxAgentTurns;
+      else remote.maxAgentTurns = n;
+      review = `Agent 模型轮次：${current.remote.maxAgentTurns ?? 64} → ${n ?? 64}；整次处理期限仍为 60 秒。`;
     } else {
       delete remote.reasoningEffort; delete remote.thinking; delete remote.enableThinking;
       if ((remote.api ?? 'responses') === 'responses') {
@@ -230,7 +236,7 @@ export async function runAdvancedWizard(current: CommonMemoryConfig): Promise<vo
     ];
     const values: Record<string, unknown> = group === 'scheduler' ? current.scheduler : group === 'sessionCache' ? { ...SESSION_CACHE_DEFAULTS, ...current.sessionCache } : { ...current.disclosure };
     const field = await menu('选择要修改的值', [
-      ...fields.map(f => ({ ...f, hint: `当前 ${values[f.value]} ${f.unit}` })),
+      ...fields.map(f => ({ ...f, hint: `当前 ${values[f.value] ?? 'Unlimited'} ${f.unit}` })),
       ...(group === 'sessionCache' ? [{ value: 'reset', label: '恢复会话暂存默认值' }] : []),
       { value: 'back', label: '返回' },
     ]);
@@ -240,9 +246,9 @@ export async function runAdvancedWizard(current: CommonMemoryConfig): Promise<vo
       review = '会话暂存将使用内置默认值，其他设置不变。';
     } else {
       const option = fields.find(f => f.value === field)!;
-      const n = await numberInput(`${option.label}（${option.unit}）`, Number(values[field]), field === 'contextTailTurns' ? 0 : 1);
+      const n = await numberInput(`${option.label}（${option.unit}）`, values[field] == null ? undefined : Number(values[field]), field === 'contextTailTurns' ? 0 : 1, Number.MAX_SAFE_INTEGER, group === 'disclosure');
       const previous = group === 'scheduler' ? current.scheduler : group === 'sessionCache' ? current.sessionCache : current.disclosure;
-      next = validateConfig({ ...current, [group]: { ...previous, [field]: n } });
+      next = validateConfig({ ...current, [group]: { ...previous, [field]: n ?? null } });
       review = `${option.label}：${values[field]} → ${n} ${option.unit}\n其他设置保持不变。`;
     }
   }

@@ -4,9 +4,9 @@ import { join } from 'node:path';
 import { afterEach,expect,it } from 'vitest';
 import { SessionIngress,sessionProjection } from '../../src/v2/session.js';
 import { RuntimeStore } from '../../src/v2/runtime.js';
-import { Writer } from '../../src/v2/writer.js';
+import { Writer } from '../helpers/legacy-writer.js';
 import { drainSessions } from '../../src/v2/session-drain.js';
-import type { ApprovedModelRequest } from '../../src/memory-manager/contracts/model-port.js';
+import type { ApprovedModelRequest } from '../helpers/model-fixture-contracts.js';
 const cleanup:(()=>void)[]=[];
 afterEach(()=>cleanup.splice(0).reverse().forEach(f=>f()));
 function root(){const p=mkdtempSync(join(tmpdir(),'session-'));cleanup.push(()=>rmSync(p,{recursive:true,force:true}));return p;}
@@ -42,11 +42,11 @@ it('context requires separate authorization and forget/prune invalidate bodies w
  expect(JSON.stringify(sessionProjection(store,job,true))).not.toContain('assistant suggestion');
 });
 function response(r:ApprovedModelRequest){return {kind:'output' as const,usage:{inputTokens:0,outputTokens:0},body:{version:'memory_maintenance_v2',request_id:r.projection.request_id,decisions:[{kind:'ignore',applicability:'uncertain',confidence:1,evidence:[],reason:'synthetic'}]}};}
-it('Writer splits only between complete interactions and preserves oversized whole turns',async()=>{
+it('Writer pages complete interactions without splitting evidence and related context',async()=>{
  const requests:ApprovedModelRequest[]=[];
  const writer=new Writer({dataRoot:root(),allowedScopes:['global'],allowedProvenance:['user_explicit','conversation_context'],maxRequestBytes:20000,model:{async analyze(r){requests.push(r);return response(r);}}});cleanup.push(()=>writer.close());const ingress=new SessionIngress(writer.store),key=ingress.open({client:'pi',processInstance:'p',sessionId:'s'});
  for(const turn of ['a','b']){ingress.capture(key,message(turn,turn,'x'.repeat(4000)));ingress.capture(key,message(turn+'-steer',turn,'confirm'));ingress.capture(key,{...message(turn+'-assistant',turn,'suggestion'),role:'assistant',source:'conversation_context'});ingress.settle(key,turn);}
- ingress.end(key);await drainSessions(writer,{sessionId:key});expect(requests.length).toBe(2);for(const r of requests)expect(r.projection.observations).toHaveLength(2);
+ ingress.end(key);await drainSessions(writer,{sessionId:key});expect(requests.length).toBe(1);for(const r of requests)expect(r.projection.observations).toHaveLength(4);
 });
 it('drain actually waits for retry instead of declaring idle success',async()=>{
  let attempts=0;const writer=new Writer({dataRoot:root(),allowedScopes:['global'],model:{async analyze(r){if(!attempts++)throw new Error('temporary');return response(r);}}});cleanup.push(()=>writer.close());
@@ -59,8 +59,8 @@ it('sealed sessions bypass an ineligible legacy head without mixing it into the 
 });
 it('an oversized complete interaction quarantines all user expressions together and retains the original bodies',async()=>{
  let calls=0;const writer=new Writer({dataRoot:root(),allowedScopes:['global'],allowedProvenance:['user_explicit','conversation_context'],maxRequestBytes:20000,model:{async analyze(r){calls++;return response(r);}}});cleanup.push(()=>writer.close());const ingress=new SessionIngress(writer.store),key=ingress.open({client:'pi',processInstance:'p',sessionId:'oversized'});
- ingress.capture(key,message('suggested','t','x'.repeat(18000)));ingress.capture(key,message('confirm','t','I confirm'));ingress.capture(key,{...message('assistant','t','related suggestion'),role:'assistant',source:'conversation_context'});ingress.settle(key,'t');ingress.end(key);
- expect((await writer.run()).outcome).toBe('quarantined');expect(calls).toBe(0);expect(ingress.status(key).failed).toBe(2);expect(writer.store.db.prepare("SELECT length(text) AS n FROM observations WHERE entryId='suggested'").get()!.n).toBe(18000);
+ ingress.capture(key,message('suggested','t','x'.repeat(21000)));ingress.capture(key,message('confirm','t','I confirm'));ingress.capture(key,{...message('assistant','t','related suggestion'),role:'assistant',source:'conversation_context'});ingress.settle(key,'t');ingress.end(key);
+ expect((await writer.run()).outcome).toBe('quarantined');expect(calls).toBe(0);expect(ingress.status(key).failed).toBe(2);expect(writer.store.db.prepare("SELECT length(text) AS n FROM observations WHERE entryId='suggested'").get()!.n).toBe(21000);
 });
 it('closing an unsettled mixed-scope interaction quarantines the whole turn',()=>{
  const {store,ingress,a}=fixture();ingress.capture(a,message('a','t'));ingress.capture(a,{...message('b','t'),scope:'project:other'});ingress.end(a);expect(store.pending()).toHaveLength(0);expect(ingress.status(a)).toMatchObject({failed:2,complete:false});

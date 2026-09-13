@@ -9,14 +9,19 @@ import { Writer, RuntimeStore, defaultConfig, readAuthorizedMemory } from 'commo
 const root = fileURLToPath(new URL('.', import.meta.url));
 const dataRoot = join(root, 'writer-data');
 let calls = 0;
-const writer = new Writer({ dataRoot, allowedScopes: ['global'], model: {
-  async analyze(request) {
+const writer = new Writer({ dataRoot, allowedScopes: ['global'], agent: {
+  async decide(task, reads) {
     calls++;
-    assert.ok(request.prompt.trim(), 'Packaged maintainer must reach the model port');
-    return { kind: 'output', body: {
-      version: 'memory_maintenance_v2', request_id: request.projection.request_id,
+    assert.equal(task.version, 'memory_task_v1');
+    assert.ok(!JSON.stringify(task).includes('Please use concise'));
+    const evidence=[];
+    for(const bundle of task.bundles)for(let offset=0;offset!==null;){const page=reads.manifest(bundle.ingest_id,offset);offset=page.next;for(const block of page.blocks){if(block.evidence_ref)evidence.push(block.evidence_ref);for(let at=0;at!==null;){at=reads.read(bundle.ingest_id,block.block_id,at).next;}}}
+    for(const doc of reads.memory(task.snapshot.handle))for(let at=0;at!==null;){at=reads.memory(task.snapshot.handle,doc.target,at).next;}
+    assert.equal(reads.processing().complete,true);
+    return { usage:{},promptDigest: 'b3cc0475bb78a5026098858e9889acf666d31062d513d303314eca31d36e72f2',body: {
+      version: 'memory_maintenance_v2', request_id: task.request_id,
       decisions: [{ kind: 'retain', admission: 'remember', lifetime: 'until_changed', applicability: 'global', confidence: 1,
-        evidence: request.projection.observations.map(observation => observation.ref), reason: 'Synthetic package smoke',
+        evidence: [...new Set(evidence)], reason: 'Synthetic package smoke',
         operations: [{ op: 'put_section', target: 'preferences', section: null, title: 'Package smoke', body: 'Prefers concise synthetic examples.\n' }],
       }],
     } };

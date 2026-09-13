@@ -5,7 +5,7 @@ import { installationOverview } from './installation-overview.js';
 import { configureModel } from './model-configuration.js';
 import { integrationsScreen } from './tui-integrations.js';
 import { memoryControlScreen } from './tui-memory.js';
-import { runNetworkWizard } from './tui-settings.js';
+import { runAdvancedWizard, runNetworkWizard } from './tui-settings.js';
 import { runSetupFlow, setupPending } from './setup.js';
 import { recoverPendingInstallation } from './installation-files.js';
 import { attempt, log, menu, note, requireInteractive, UserCancelled, viewText } from './tui-prompts.js';
@@ -27,6 +27,7 @@ async function configurationScreen(): Promise<boolean> {
       { value: 'model', label: 'Change Model / Provider' },
       { value: 'network', label: 'Network Configuration', hint: '代理与证书' },
       { value: 'test', label: 'Test Connection' },
+      { value: 'advanced', label: 'Advanced Settings', hint: '思考方式、输入/输出上限与处理设置' },
       { value: 'uninstall', label: 'Uninstall Common Memory' },
       { value: 'back', label: '返回首页' },
     ], focus);
@@ -38,6 +39,7 @@ async function configurationScreen(): Promise<boolean> {
       if (action === 'current') await viewText('Current Configuration', `${await installationOverview(config)}\n\n${currentConfiguration(config)}`);
       else if (action === 'model') await configureModel(config);
       else if (action === 'network') await runNetworkWizard(config);
+      else if (action === 'advanced') await runAdvancedWizard(config);
       else if (action === 'test') {
         note('使用少量合成内容测试当前模型连接。Ctrl+C 停止等待。', 'Test Connection');
         const { runNetworkTest } = await import('./network-test.js');

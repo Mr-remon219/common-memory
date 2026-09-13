@@ -5,7 +5,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { openDatabase } from '../v2/sqlite.js';
 import { isDeepStrictEqual } from 'node:util';
 import { configDirectory, configFilePath, envFilePath, loadConfig, type CommonMemoryConfig } from '../config/config.js';
-import { PRIVATE_NETWORK_KEYS } from '../memory-manager/network/route.js';
+import { PRIVATE_NETWORK_KEYS } from '../memory-agent-runtime/network/route.js';
 import { applicationRoot, readInstallationState, removeIntegrations } from './integrations.js';
 import { scanIntegrationTargets } from './integration-targets.js';
 import { assertSafePath, installationTransaction, readInstallationFile } from './installation-files.js';

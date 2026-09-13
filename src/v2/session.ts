@@ -1,3 +1,4 @@
+import { normalizeSessionIngest } from './ingest.js';
 import { decodeText } from './sqlite.js';
 import { createHash } from 'node:crypto';
 import type { RuntimeStore, Observation, RuntimeJob } from './runtime.js';
@@ -55,8 +56,9 @@ export class SessionIngress {
         try { externalPreflight({text:message.text},{maxExcerptBytes:this.limits.maxSessionBytes,maxCandidateBytes:this.limits.maxSessionBytes,maxTotalBytes:this.limits.maxSessionBytes}); }
         catch { unavailable='sensitive_context'; }
       }
-      this.store.db.prepare('INSERT INTO session_messages(sessionId,messageId,turn,role,digest,scope,source,observedAt,observationId,text,unavailable,sequence) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)')
+      const inserted = this.store.db.prepare('INSERT INTO session_messages(sessionId,messageId,turn,role,digest,scope,source,observedAt,observationId,text,unavailable,sequence) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)')
         .run(key,message.id,turn.id!,message.role,digest,message.scope,message.source,message.observedAt,observationId,message.role==='user'||unavailable?null:message.text,unavailable,message.sequence??null);
+      if(message.role!=='user')normalizeSessionIngest(this.store,{id:Number(inserted.lastInsertRowid),text:unavailable?null:message.text,unavailable});
       this.reserve(key,0);
     });
   }
@@ -129,7 +131,7 @@ export function sessionProjection(store:RuntimeStore,job:RuntimeJob,authorized:b
       decodeText(m, ['text', 'userText']);
       const canDisclose=authorized&&m.scope===job.observations[0]!.scope;
       const evidence=current.includes(id)&&m.role==='user'&&job.observations.some(o=>o.id===m.observationId);
-      return {message_id:m.messageId,role:m.role,source:m.source,source_scope:m.scope,observed_at:m.observedAt,context_only:!evidence,...(evidence?{ref:`ev_${m.observationId}`}:{text:canDisclose?(m.role==='user'?m.userText:m.text):null,unavailable:!canDisclose?'unauthorized_conversation_context':m.unavailable??(m.role==='user'&&m.userText===null?'source_unavailable':null)})};
+      return {ingest_id:m.role==='user'?`ingest_${m.observationId}`:`session_ingest_${m.id}`,message_order:m.sequence??m.id,message_id:m.messageId,role:m.role,source:m.source,source_scope:m.scope,observed_at:m.observedAt,context_only:!evidence,...(evidence?{ref:`ev_${m.observationId}`}:{text:canDisclose?(m.role==='user'?m.userText:m.text):null,unavailable:!canDisclose?'unauthorized_conversation_context':m.unavailable??(m.role==='user'&&m.userText===null?'source_unavailable':null)})};
     })};
   });
 }

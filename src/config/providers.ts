@@ -1,4 +1,4 @@
-import type { RemoteApi } from '../memory-manager/openai/options.js';
+import type { RemoteApi } from '../memory-agent-runtime/options.js';
 
 /** API endpoints only. No account, subscription, billing or runtime discovery logic. */
 export const PROVIDERS = [

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { toolProvider, sendTools } from './synthetic-runtime.mjs';
 // Reproducible Init demo with an isolated data directory and a scripted (synthetic) maintainer model.
 // It proves the local mechanics only: init MCP server -> durable queue -> unchanged Writer -> canonical Markdown -> read.
 // It does not prove real-model semantics, nor that a real ChatGPT/Codex/Pi client called these tools.
@@ -46,9 +47,10 @@ const understanding = [
 
 // Scripted maintainer: retains the agent import as attributed understanding in Profile and the reply preference in
 // Preferences; retains each imported Markdown part as one attributed Section (quoted in a fence, so headings stay data).
+const explore=toolProvider();
 const provider = createServer(async (req, res) => {
   let body = ''; for await (const chunk of req) body += chunk;
-  const projection = JSON.parse(JSON.parse(body).input[1].content[0].text);
+  const wire=JSON.parse(body);const projection=explore(wire,res);if(!projection)return;
   const imports = projection.observations.filter(o => o.source_kind === 'agent_import');
   const documents = projection.observations.filter(o => o.source_kind === 'document_import');
   const decisions = documents.length ? documents.map(o => ({ kind: 'retain', admission: 'remember', lifetime: 'until_changed', applicability: 'global', confidence: 0.6, evidence: [o.ref], reason: 'scripted demo',
@@ -60,8 +62,7 @@ const provider = createServer(async (req, res) => {
       operations: [{ op: 'put_section', target: 'preferences', section: null, title: 'Reply style (imported)', body: `Imported from ${imports[0].import.source_label}: answer in Chinese, keep English technical terms in parentheses, no honorifics.\n` }] },
   ] : [{ kind: 'ignore', applicability: 'uncertain', confidence: 1, evidence: [], reason: 'scripted demo ignores user turns' }];
   const decision = { version: 'memory_maintenance_v2', request_id: projection.request_id, decisions };
-  res.setHeader('content-type', 'application/json');
-  res.end(JSON.stringify({ status: 'completed', incomplete_details: null, error: null, output: [{ type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify(decision), annotations: [] }] }], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } }));
+  sendTools(res,wire,[{name:'submit_memory_decision',args:decision}]);
 });
 provider.listen(0, '127.0.0.1'); await once(provider, 'listening');
 const port = provider.address().port;

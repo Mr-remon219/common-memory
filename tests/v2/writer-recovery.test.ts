@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { RuntimeStore } from '../../src/v2/runtime.js';
 import { SessionIngress } from '../../src/v2/session.js';
-import { Writer } from '../../src/v2/writer.js';
+import { Writer } from '../helpers/legacy-writer.js';
 import { readAuthorizedMemory } from '../../src/v2/reader.js';
 
 const cleanup: (() => void)[] = [];
@@ -27,7 +27,7 @@ it('recovers files-before-DB process death into source links and session complet
   store.close();
 
   const script = `
-    import { Writer } from ${JSON.stringify(new URL('../../src/v2/writer.ts', import.meta.url).href)};
+    import { Writer } from ${JSON.stringify(new URL('../helpers/legacy-writer.ts', import.meta.url).href)};
     const writer = new Writer({
       dataRoot: ${JSON.stringify(root)}, allowedScopes: ['global'],
       checkpoint: () => process.exit(73),

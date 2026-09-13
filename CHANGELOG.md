@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.0 — 2026-09-13
+
+- Replace the production Model Layer with an independent Pi Agent Core/pi-ai 0.85.1 Memory Agent Runtime. Core retains disclosure, provenance, admission, import guards, canonical writes, leases, receipts and recovery; Runtime owns System, providers, tools and multi-turn decisions.
+- Persist reference-backed structural Ingest Bundles for every observation and assistant/tool context. Init and Markdown remain separate attributed entry points. Paginated authorized tools disclose complete source descriptors; Core requires complete current-source and edited-target reads before consuming a proposal. Backfill preserves source identities, NUL/NULL and purge behavior without copying plaintext.
+- Default input/output limits to Unlimited while honoring explicit existing caps. Use reliable model capabilities or Unknown/custom; preserve safe context notes, cancellation and bounded attempts. These limits do not guarantee arbitrary-size completion or measured real-model quality/token cost.
+- Add Pi's `/memory` management page for authorized browsing, adjustment, confirmed imports and processing status while retaining `/memory-refresh` and `/memory-flush`. Preserve the CLI TUI setup flow and external MCP/host contracts.
+- Breaking JS API: replace `MemoryModelPort` and old model adapters with `MemoryAgentRuntime` and `Writer({agent, ...})`; `createConfiguredWriter` remains available. Keep standalone `chunkMarkdown` exports deprecated and isolated from production ingest.
+- Validate runtime prompt digests before consumption, sanitize receipt usage, and stop context exhaustion without rejecting Pi's transform callback. Consolidate fixtures and test real Pi tool loops, source coverage, durable context migration and installed-package behavior.
+- Before upgrading, stop all old writers and back up the complete dataRoot, including SQLite and recovery metadata. Do not run old and new versions against the same database; upgrades do not modify personal client registrations automatically.
+
 ## 0.3.9 — 2026-09-13
 
 - Use only the TUI-configured private `.env` for model credentials across CLI, MCP, Pi and detached Writers, including legacy configs. Remove host-environment key precedence, external-key selection and the SDK `loadLocalEnv` export; never export private settings into the host environment. Existing installations relying on shell keys must configure their key in the TUI and restart clients.

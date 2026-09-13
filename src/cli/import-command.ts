@@ -48,7 +48,7 @@ export async function runImport(config: CommonMemoryConfig, args: string[], log:
   process.once('SIGINT',cancel);process.once('SIGTERM',cancel);
   try {
     const admitted = admitDocumentImport(writer.store, prepared, contextId);
-    log(admitted.duplicate ? `duplicate: this exact content was already imported as ${admitted.importId}; no new material was queued` : `accepted: queued as ${admitted.importId} (${admitted.parts} part${admitted.parts === 1 ? "" : "s"}); accepted means durably queued, not remembered`);
+    log(admitted.duplicate ? `duplicate: this exact content was already imported as ${admitted.importId} (${admitted.parts} persisted part${admitted.parts === 1 ? "" : "s"}); no new material was queued` : `accepted: queued as ${admitted.importId} (${admitted.parts} part${admitted.parts === 1 ? "" : "s"}); accepted means durably queued, not remembered`);
     if (options.wait) {
       for (;;) {
         const result = await writer.run({ force: true, signal:controller.signal });

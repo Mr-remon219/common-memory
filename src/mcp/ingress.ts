@@ -2,7 +2,8 @@ import { isAbsolute } from 'node:path';
 import type { CommonMemoryConfig } from '../config/config.js';
 import { RuntimeStore } from '../v2/runtime.js';
 import { ProjectRegistry } from '../v2/registry.js';
-import { AGENT_IMPORT_SOURCE, encodeAgentImport, type AgentImportPayload } from '../v2/import.js';
+import type { AgentImportPayload } from '../v2/import.js';
+import { queueAgentImport } from '../v2/agent-ingress.js';
 import { readAuthorizedMemory, type MemoryView } from '../v2/reader.js';
 
 export type McpCapability = 'relay' | 'init' | 'read';
@@ -66,28 +67,27 @@ export class McpIngress {
     return `mcp-init:${JSON.stringify([this.#options.clientId, importId])}`;
   }
   status(input: SubmissionIdentity): SubmissionOutcome | null {
-    return this.#store().observationOutcome(this.#session(input), input.submissionId);
+    if (!this.has('relay')) throw new Error('STATUS_UNAVAILABLE');
+    return this.#store().observationOutcome(this.#session(input), input.submissionId, this.contexts());
   }
   initStatus(importId: string): SubmissionOutcome | null {
-    return this.#store().observationOutcome(this.#initSession(importId), importId);
+    if (!this.has('init')) throw new Error('STATUS_UNAVAILABLE');
+    return this.#store().observationOutcome(this.#initSession(importId), importId, this.contexts());
   }
   submit(input: Submission, signal?: AbortSignal): { accepted: true; duplicate: boolean; state: string; contextId: string } {
     const sessionId = this.#session(input);
     if (!this.info().submissionEnabled) throw new Error('SUBMISSION_DISABLED');
     if (!this.contexts().includes(input.contextId)) throw new Error('CONTEXT_UNAVAILABLE');
-    if (!input.text.trim() || Buffer.byteLength(input.text) > this.config.disclosure.maxTotalBytes) throw new Error('INVALID_TEXT_SIZE');
+    if (!input.text.trim() || Buffer.byteLength(input.text) > (this.config.disclosure.maxTotalBytes ?? Number.MAX_SAFE_INTEGER)) throw new Error('INVALID_TEXT_SIZE');
     if (signal?.aborted) throw new Error('CANCELLED');
-    return this.#enqueue(sessionId, input.submissionId, input.contextId, input.text, 'mcp_user_submission', false);
+    return this.#enqueue(sessionId, input.submissionId, input.contextId, input.text, 'mcp_user_submission', true);
   }
   /** Agent-reported understanding: durably queued as one agent_import observation and flushed promptly. */
   init(input: InitSubmission, signal?: AbortSignal): { accepted: true; duplicate: boolean; state: string; contextId: string } {
     const sessionId = this.#initSession(input.importId);
+    // Preserve profile failure before accessing a read-only launch's absent queue.
     if (!this.info().initEnabled) throw new Error('INIT_DISABLED');
-    if (!this.contexts().includes(input.contextId)) throw new Error('CONTEXT_UNAVAILABLE');
-    const text = encodeAgentImport({ sourceLabel: input.sourceLabel, basis: input.basis, understanding: input.understanding, gaps: input.gaps });
-    if (Buffer.byteLength(text) > this.config.disclosure.maxTotalBytes) throw new Error('INVALID_TEXT_SIZE');
-    if (signal?.aborted) throw new Error('CANCELLED');
-    return this.#enqueue(sessionId, input.importId, input.contextId, text, AGENT_IMPORT_SOURCE, true);
+    return queueAgentImport(this.#store(), sessionId, input, {contexts:this.contexts(),enabled:true,maxBytes:this.config.disclosure.maxTotalBytes}, signal);
   }
   read(contextId?: string): MemoryView {
     if (!this.info().readEnabled) throw new Error('READ_DISABLED');

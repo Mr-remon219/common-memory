@@ -1,3 +1,4 @@
+import { toolProvider, sendTools } from '../helpers/tool-provider.js';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -33,11 +34,12 @@ function fixture(baseUrl: string, provenance: string[] = ['user_explicit', 'docu
 }
 /** Scripted maintainer: retains each document part as an attributed Section; optionally fails a chosen part once. */
 async function provider(options: { failPart?: number; chat?: boolean; permanent?: boolean } = {}) {
+  const explore = toolProvider();
   const seen: { source_kind: string; part: number | undefined }[][] = []; let failed = false;
   const server = createServer(async (req, res) => {
     let body = ''; for await (const chunk of req) body += chunk;
     const wire = JSON.parse(body);
-    const projection = JSON.parse(options.chat ? wire.messages[1].content : wire.input[1].content[0].text);
+    const projection = explore(wire, res); if (!projection) return;
     const observations = projection.observations as { ref: string; text: string; source_kind: string; import?: { file_name: string; declared_author: string; part: { index: number; count: number }; heading_path: string[] } }[];
     seen.push(observations.map(o => ({ source_kind: o.source_kind, part: o.import?.part.index })));
     if (options.failPart !== undefined && !failed && observations.some(o => o.import?.part.index === options.failPart)) {
@@ -54,9 +56,7 @@ async function provider(options: { failPart?: number; chat?: boolean; permanent?
       // Section bodies may not contain un-fenced H1/H2, so the scripted body quotes the part in a fence.
       operations: [{ op: 'put_section', target: 'profile', section: null, title: `Imported ${o.import!.file_name} part ${o.import!.part.index} (${o.text.length} chars)`, body: `Imported from ${o.import!.file_name} (${o.import!.declared_author}) on ${projection.now.slice(0, 10)}, under ${JSON.stringify(o.import!.heading_path)}:\n\n\`\`\`text\n${o.text.trim().slice(0, 80)}\n\`\`\`\n` }] }));
     const decision = { version: 'memory_maintenance_v2', request_id: projection.request_id, decisions: decisions.length ? decisions : [{ kind: 'ignore', applicability: 'uncertain', confidence: 1, evidence: [], reason: 'scripted' }] };
-    res.setHeader('content-type', 'application/json');
-    if(options.chat){res.end(JSON.stringify({choices:[{finish_reason:'stop',message:{role:'assistant',content:JSON.stringify(decision)}}]}));return;}
-    res.end(JSON.stringify({ status: 'completed', incomplete_details: null, error: null, output: [{ type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify(decision), annotations: [] }] }], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } }));
+    sendTools(res, wire, [{name:'submit_memory_decision',args:decision}]);
   });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   cleanup.push(() => new Promise<void>(r => server.close(() => r())));
@@ -114,28 +114,27 @@ it('maps parser, preprocessing and authorization refusals to CLI failure without
   expect(seen).toEqual([]);
 }, 30000);
 
-it('a multi-part import reports partial failure honestly and resumes on re-import; import-only configs need no user_explicit', async () => {
-  const { url, seen } = await provider({ failPart: 2 });
+it('a large whole-source bundle fails without partial consumption and resumes on re-import', async () => {
+  const { url, seen } = await provider({ failPart: 1 });
   // One part per batch so that partial progress is observable; without user_explicit the Writer still runs.
   const { env, config, home } = fixture(url, ['document_import'], 1);
   const parts = Array.from({ length: 3 }, (_, i) => `## Section ${i + 1}\n\n${`Paragraph ${i + 1}. `.repeat(2000)}\n\n`).join('');
   const file = join(home, 'long.md'); writeFileSync(file, `# Long\n\n${parts}`);
   const first = await cli(['import', file], env);
   expect(first.code).toBe(1);
-  expect(first.stdout).toContain('(3 parts)'); expect(first.stdout).toContain('"complete": false'); expect(first.stdout).toContain('incomplete: some parts were not processed');
-  expect(first.stdout).toMatch(/"state": "processed"/); expect(first.stdout).toMatch(/"state": "(claimed|pending)"/);
-  const before = readFileSync(join(config.dataRoot, 'memory/profile.md'), 'utf8');
-  expect(before).toContain('part 1'); expect(before).not.toContain('part 2');
+  expect(first.stdout).toContain('(1 part)'); expect(first.stdout).toContain('"complete": false'); expect(first.stdout).toContain('incomplete: some parts were not processed');
+  expect(first.stdout).toMatch(/"state": "(claimed|pending)"/);
+  expect(existsSync(join(config.dataRoot, 'memory/profile.md'))).toBe(false);
   // Retry backoff for the first failure is one second; re-importing the same file resumes the queue.
   await new Promise(r => setTimeout(r, 1200));
   const second = await cli(['import', file], env);
   expect(second.code, second.stderr).toBe(0);
   expect(second.stdout).toContain('duplicate:'); expect(second.stdout).toContain('"complete": true');
   const after = readFileSync(join(config.dataRoot, 'memory/profile.md'), 'utf8');
-  for (const n of [1, 2, 3]) expect(after).toContain(`Imported long.md part ${n}`);
+  expect(after).toContain('Imported long.md part 1');
   // Every model call carried only document parts with their position in the whole material.
   for (const batch of seen) for (const o of batch) expect(o.source_kind).toBe('document_import');
-  expect(seen.flat().map(o => o.part).sort()).toEqual([1, 2, 2, 3]);
+  expect(seen.flat().map(o => o.part).sort()).toEqual([1, 1]);
   // --no-wait only queues.
   writeFileSync(join(home, 'later.md'), '# Later\n\nqueued only\n');
   const queued = await cli(['import', join(home, 'later.md'), '--no-wait'], env);
@@ -250,13 +249,14 @@ it('an explicit Chat configuration imports through the real HTTP adapter, Core a
 },75000); // Two source-loaded CLI boots, including durable writes, on Windows CI.
 
 it('network-test is explicit, distinguishes API authentication and opens no memory storage',async()=>{
- let calls=0;
+ let calls=0,finished=false;const explore=toolProvider();
  const server=createServer(async(req,res)=>{
   calls++;let body='';for await(const chunk of req)body+=chunk;
-  const wire=JSON.parse(body);expect(wire.input[1].content[0].text).toContain('synthetic data only');
-  res.setHeader('content-type','application/json');
-  if(calls===1)res.end(JSON.stringify({status:'completed',output:[{type:'message',status:'completed',role:'assistant',content:[{type:'output_text',text:'{"ok":true}'}]}]}));
-  else {res.writeHead(401);res.end('{"error":{"code":"invalid_api_key"}}');}
+  const wire=JSON.parse(body);
+  if(finished){res.writeHead(401);res.end('{"error":{"code":"invalid_api_key"}}');return;}
+  const projection=explore(wire,res);if(!projection)return;
+  expect(projection.observations[0].text).toContain('Synthetic connection');finished=true;
+  sendTools(res,wire,[{name:'submit_memory_decision',args:{version:'memory_maintenance_v2',request_id:'network-test',decisions:[{kind:'ignore',confidence:1,applicability:'uncertain',evidence:[],reason:'Synthetic'}]}}]);
  });server.listen(0,'127.0.0.1');await once(server,'listening');cleanup.push(()=>{server.closeAllConnections();server.close();});
  const {env,config,home}=fixture(`http://127.0.0.1:${(server.address() as {port:number}).port}`);
  config.remote.proxy={mode:'direct'};writeFileSync(join(home,'config.json'),JSON.stringify(config));

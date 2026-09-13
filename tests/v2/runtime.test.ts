@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, symlinkSync, writeFileSync, linkSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RuntimeStore } from "../../src/v2/runtime.js";
-import { MemoryModelError } from '../../src/memory-manager/contracts/errors.js';
+import { MemoryModelError } from '../../src/core/contracts/errors.js';
 
 const roots:string[]=[];const stores:RuntimeStore[]=[];
 function setup(options:ConstructorParameters<typeof RuntimeStore>[1]={}) {const root=mkdtempSync(join(tmpdir(),"cm-v2-"));roots.push(root);const store=new RuntimeStore(root,options);stores.push(store);return {store,root};}

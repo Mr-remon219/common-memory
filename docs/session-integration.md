@@ -47,9 +47,15 @@ Pi（事件契约验证基线 0.84.4；安装与发现不按版本号限制）�
 reload/new/resume/fork 的 extension shutdown 只关闭本地资源。进程随机身份与附加
 记忆块通过 globalThis 保留跨 reload 状态；数据Root＋session 冻结附加块，每轮与
 当时的宿主 systemPrompt 组合。startup 读一次，后续生命周期不补读；原生 memory_read
-及 promptSnippet/promptGuidelines 按当前授权主动读取。Pi 直接写公共 ingress。configured Writer 先构造精确请求序列化器和本地 SQLite，
+及 promptSnippet/promptGuidelines 按当前授权主动读取。Pi 直接写公共 ingress。configured Writer 先构造中立 Runtime port 与本地 SQLite，
 首次维护请求才初始化固定网络路由、CA 和 dispatcher；初始化失败保留持久工作，绝不改走直连。
 Pi 捕获/维护诊断只打印受控原因与修复入口；相同原因去重，每个报告器最多八种，不打印异常正文。
+
+Pi 原生管理（当前源码，未发布）：`/memory` 使用官方 `SettingsList` / `ctx.ui.custom`，在页面内浏览 Profile、Preferences、全部已授权项目及关键词结果；正文滚动完整可达。页面展示不会追加模型消息或扩大 Agent 的当前项目范围。自然语言调整由用户 editor/confirm 提交，使用独立稳定 `pi-adjust:<session>` / requestId 身份，以原文 `interactive` observation 进入同一 Core；返回接受不代表已落档。导入页面与原生 `memory_init` 共同使用 `queueAgentImport`，要求配置 `agent_observation` 授权及实际用户确认；使用 `pi-init:<session>` / importId，保留幂等、冲突及来源保护，非交互模型调用不能自行批准。
+
+`memory_status` 发现当前 global/project 权限，并提供无正文的有界队列/近期请求结果、原 ID 状态及共享 `next` 指引。用户页面可以查看全部已授权项目，模型工具不能因此读取其他项目。部分范围不可见的任务不展示 job ID，也不可重试；只有完整来源与范围仍授权的 dead 任务能由用户确认重试，不清除自动退避、不解除 quarantine。原生页面刷新/继续处理不依赖用户捕获权限。
+
+有 UI 的会话每两秒读取无正文状态，更新扩展自己的状态栏条目；失败终态通知去重，不触发模型轮次，不记录正文、状态消息或额外 canonical 副本。shutdown 清理定时器；等待确认期间发生会话替换会拒绝提交。原生读取每次重新核验权限；冻结快照在撤权/项目移除时丢弃不再授权的文档，不自动重读或在重新授权后复活已丢弃内容。运行中的维护配置仍是启动快照，修改配置后须重启。新增覆盖见 `tests/v2/pi-memory.test.ts`。
 
 Codex host：`src/cli/codex/transcript-codex-host.ts` 独立解析 rollout。最低版本 0.153.4，
 接受严格三段数字版本且无上限；不接受 prerelease/build 标签。以 0.153.4/0.154.0 tagged
@@ -175,3 +181,5 @@ macOS GUI/CLI 根分离、真实只读 MCP 握手与超时；TUI / uninstall 回
 `npm run test:wsl` 使用安装后的包验证 PTY、只读 MCP、自动共享 Work/Codex 资源及原生合成宿主的
 Unicode/路径/刷新/退出码和 Writer/Core 提交；它不代表真实 Desktop UI 的 Hook 审查或完整交互验收。
 精确发布提交及最终验证结果保留在对应 GitHub Release 和 CI 记录中。
+
+当前写入端使用 [独立 Memory Agent Runtime 与统一 Ingest Bundle](memory-agent-runtime.md)。显式输入限制下先去除可选前轮上下文，再把末尾完整 turn 留待下次；当前 user/steer/assistant/tool 不拆分，真正单 turn 超限才整体隔离。

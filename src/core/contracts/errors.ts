@@ -1,3 +1,10 @@
+import { sanitizeDiagnostic, type FailureDiagnostic } from "./diagnostic.js";
+export const MEMORY_MODEL_ERROR_CODES = ["CONFIGURATION", "PROXY_AUTHENTICATION", "TIMEOUT", "CANCELLED", "RATE_LIMITED", "UNAVAILABLE", "AUTHENTICATION", "INVALID_RESPONSE"] as const;
+export type MemoryModelErrorCode = typeof MEMORY_MODEL_ERROR_CODES[number];
+export class MemoryModelError extends Error {
+  readonly diagnostic: FailureDiagnostic | null;
+  constructor(readonly code: MemoryModelErrorCode, message: string, readonly retryable = false, diagnostic?: FailureDiagnostic) { super(message); this.name = "MemoryModelError"; this.diagnostic = sanitizeDiagnostic(diagnostic); }
+}
 export const ERROR_CODES = [
   "PERMISSION_DENIED", "VALIDATION_FAILED", "CONFLICT_DETECTED", "STALE_REVISION",
   "SENSITIVE_CONTENT_REJECTED", "INDEX_OUTDATED", "STORE_LOCKED", "STORE_UNAVAILABLE", "PROTOCOL_ERROR"

@@ -1,5 +1,6 @@
+import { initializeIngest, normalizeIngest } from './ingest.js';
 import { initializeSessions, sessionGroup } from './session.js';
-import { sanitizeDiagnostic, type FailureDiagnostic } from '../memory-manager/contracts/diagnostic.js';
+import { sanitizeDiagnostic, type FailureDiagnostic } from '../core/contracts/diagnostic.js';
 import { failureDiagnostic, failureCode } from './errors.js';
 import type { DatabaseSync } from "node:sqlite";
 import { openDatabase, synchronousResult, decodeText } from "./sqlite.js";
@@ -65,6 +66,7 @@ export class RuntimeStore {
       CREATE INDEX IF NOT EXISTS observations_prunable ON observations(processedAt) WHERE state='processed' AND text IS NOT NULL;
       CREATE INDEX IF NOT EXISTS jobs_active ON jobs(state) WHERE state IN ('running','retry');`);
       initializeSessions(this);
+      initializeIngest(this);
       // BEGIN IMMEDIATE serializes the introspection and ALTER across old/new concurrent opens.
       this.transaction(() => {
         if (!this.db.prepare('PRAGMA table_info(jobs)').all().some(row => row.name === 'diagnostic')) this.db.exec('ALTER TABLE jobs ADD COLUMN diagnostic TEXT');
@@ -85,7 +87,9 @@ export class RuntimeStore {
       if (existing) { if (existing.digest !== digest || existing.scope !== input.scope || existing.source !== input.source) throw new Error("Conflicting observation identity"); return existing as unknown as Observation; }
       const state = provenanceOf(input.source) !== null ? "pending" : "quarantined";
       const result = this.db.prepare("INSERT INTO observations(sessionId,entryId,text,digest,scope,observedAt,source,state,enqueuedAt) VALUES(?,?,?,?,?,?,?,?,?)").run(input.sessionId,input.entryId,input.text,digest,input.scope,input.observedAt,input.source,state,this.#now());
-      return decodeText(this.db.prepare("SELECT *, CAST(text AS BLOB) AS text FROM observations WHERE id=?").get(result.lastInsertRowid)) as unknown as Observation;
+      const observation = decodeText(this.db.prepare("SELECT *, CAST(text AS BLOB) AS text FROM observations WHERE id=?").get(result.lastInsertRowid)) as unknown as Observation;
+      normalizeIngest(this, observation);
+      return observation;
     });
   }
   /** Exact lookup only; callers own namespace authorization. Never returns conversation bodies. */
@@ -94,9 +98,9 @@ export class RuntimeStore {
     return row ? {state: String(row.state)} : null;
   }
   /** Outcome without bodies: which documents currently link Sections to this observation, plus the diagnostic code. */
-  observationOutcome(sessionId: string, entryId: string): ObservationOutcome | null {
-    const row = this.db.prepare("SELECT o.id,o.state,o.issue,o.jobId,j.state AS jobState,j.attempts,j.available,j.issue AS jobIssue,j.diagnostic FROM observations o LEFT JOIN jobs j ON j.id=o.jobId WHERE o.sessionId=? AND o.entryId=?").get(sessionId, entryId);
-    if (!row) return null;
+  observationOutcome(sessionId: string, entryId: string, allowedScopes?: readonly string[]): ObservationOutcome | null {
+    const row = this.db.prepare("SELECT o.id,o.scope,o.state,o.issue,o.jobId,j.state AS jobState,j.attempts,j.available,j.issue AS jobIssue,j.diagnostic FROM observations o LEFT JOIN jobs j ON j.id=o.jobId WHERE o.sessionId=? AND o.entryId=?").get(sessionId, entryId);
+    if (!row || allowedScopes && !allowedScopes.includes(String(row.scope))) return null;
     const targets = this.db.prepare("SELECT DISTINCT target FROM associations WHERE sourceId=?").all(row.id!).map(link => String(link.target).replace(/:[a-f0-9]{64}$/, ''));
     const processed = row.state === 'processed';
     return {state:String(row.state), issue:processed ? null : nullableString(row.issue ?? row.jobIssue), retainedIn:[...new Set(targets)].sort(), jobId:nullableString(row.jobId), jobState:nullableString(row.jobState), attempts:Number(row.attempts ?? 0), retryAt:row.jobState === 'retry' && !processed ? Number(row.available) : null, diagnostic:processed ? null : readDiagnostic(row.diagnostic)};

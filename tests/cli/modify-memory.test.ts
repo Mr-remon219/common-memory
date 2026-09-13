@@ -1,3 +1,4 @@
+import { toolProvider, sendTools } from '../helpers/tool-provider.js';
 import { once } from 'node:events';
 import { createServer, type Server } from 'node:http';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -22,14 +23,14 @@ beforeEach(async () => {
   vi.stubEnv('COMMON_MEMORY_HOME', home); saveApiKeyToEnvFile('CM_MODIFY_KEY', 'synthetic-key');
   seen = [];
   decide = projection => decision(projection, 'ignore');
+  const explore = toolProvider();
   server = createServer(async (req, res) => {
     let raw = ''; for await (const chunk of req) raw += chunk;
     const wire = JSON.parse(raw);
-    const projection = JSON.parse(wire.messages[1].content) as Projection;
+    const projection = explore(wire, res) as Projection | null; if (!projection) return;
     seen.push(projection);
     const body = decide(projection);
-    res.setHeader('content-type', 'application/json');
-    res.end(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify(body) } }] }));
+    sendTools(res, wire, [{name:'submit_memory_decision',args:body}]);
   });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   config = defaultConfig({ COMMON_MEMORY_HOME: home });
@@ -86,7 +87,7 @@ it.each(['provenance', 'read', 'write', 'empty', 'secret', 'oversized', 'excerpt
   if (reason === 'write') config.writableScopes = [];
   if (reason === 'empty') prompt = '  ';
   if (reason === 'secret') prompt = 'password=verysecret';
-  if (reason === 'oversized') prompt = 'a'.repeat(config.disclosure.maxExcerptBytes + 1);
+  if (reason === 'oversized') { config.disclosure.maxTotalBytes=131072; prompt = 'a'.repeat((config.disclosure.maxExcerptBytes ?? 131072) + 1); }
   if (reason === 'excerpt') config.disclosure.maxExcerptBytes = 8;
   if (reason === 'cancelled') controller.abort();
   await expect(modifyMemory(config, prompt, { signal: controller.signal })).rejects.toThrow();

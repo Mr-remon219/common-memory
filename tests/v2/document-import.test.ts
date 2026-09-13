@@ -1,14 +1,13 @@
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { tempRoots } from '../helpers/temp-roots.js';
+import { symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { admitDocumentImport, chunkMarkdown, decodeDocumentChunk, documentImportOutcome, MAX_DOCUMENT_BYTES, prepareDocumentImport, readMarkdownFile } from '../../src/v2/document-import.js';
 import { isImportSource, provenanceOf } from '../../src/v2/import.js';
 import { RuntimeStore } from '../../src/v2/runtime.js';
 
-const roots: string[] = [];
-function root() { const p = mkdtempSync(join(tmpdir(), 'cm-doc-')); roots.push(p); return p; }
-afterEach(() => { for (const p of roots.splice(0)) rmSync(p, { recursive: true, force: true }); });
+const { root, cleanup } = tempRoots('cm-document-import-');
+afterEach(cleanup);
 const file = (dir: string, name: string, content: string | Buffer) => { const p = join(dir, name); writeFileSync(p, content); return p; };
 
 describe('provenance mapping', () => {
@@ -22,7 +21,7 @@ describe('provenance mapping', () => {
   });
 });
 
-describe('structural chunking', () => {
+describe('deprecated standalone chunkMarkdown compatibility (not current imports)', () => {
   const doc = [
     '# Notes', '', 'Intro paragraph.', '',
     '## Preferences', '', '> Quoted: "only when reviewing PRs, prefer terse comments"', '',
@@ -65,14 +64,14 @@ describe('structural chunking', () => {
 });
 
 describe('file preprocessing', () => {
-  it('reads only regular UTF-8 Markdown files within the size cap', () => {
+  it('reads only regular UTF-8 Markdown files without an implicit model input cap', () => {
     const dir = root();
     expect(() => readMarkdownFile(join(dir, 'missing.md'))).toThrow('FILE_NOT_FOUND');
     expect(() => readMarkdownFile(file(dir, 'notes.txt', '# x\n'))).toThrow('UNSUPPORTED_FILE_TYPE');
     expect(() => readMarkdownFile(file(dir, 'empty.md', '\n\n  \n'))).toThrow('EMPTY_DOCUMENT');
     expect(() => readMarkdownFile(file(dir, 'binary.md', Buffer.from([0xff, 0xfe, 0x00, 0x41])))).toThrow('INVALID_ENCODING');
     expect(() => readMarkdownFile(file(dir, 'nul.md', 'a\0b'))).toThrow('INVALID_ENCODING');
-    expect(() => readMarkdownFile(file(dir, 'huge.md', 'a'.repeat(MAX_DOCUMENT_BYTES + 1)))).toThrow('DOCUMENT_TOO_LARGE');
+    expect(readMarkdownFile(file(dir, 'huge.md', 'a'.repeat(MAX_DOCUMENT_BYTES + 1))).bytes).toBe(MAX_DOCUMENT_BYTES+1);
     file(dir, 'target.md', '# ok\n'); symlinkSync(join(dir, 'target.md'), join(dir, 'link.md'));
     expect(() => readMarkdownFile(join(dir, 'link.md'))).toThrow('UNSUPPORTED_FILE_TYPE');
     expect(readMarkdownFile(file(dir, 'crlf.md', '\uFEFF# Title\r\n\r\nBody\r\n'))).toMatchObject({ fileName: 'crlf.md', text: '# Title\n\nBody\n' });
@@ -92,21 +91,21 @@ describe('file preprocessing', () => {
 });
 
 describe('admission and outcome', () => {
-  it('rolls back an interrupted multi-part admission and accepts the complete retry after reopening', () => {
+  it('rolls back an interrupted whole-bundle admission and accepts the complete retry after reopening', () => {
     const dir = root();
     const prepared = prepareDocumentImport(file(dir, 'parts.md', '# Notes\n\n' + Array.from({ length: 3 }, (_, i) => `## Part ${i}\n\n${'x'.repeat(20000)}\n\n`).join('')));
-    expect(prepared.chunks.length).toBeGreaterThan(1);
+    expect(prepared.chunks.length).toBe(1);
     const store = new RuntimeStore(dir);
     const enqueue = store.enqueue.bind(store);
     let calls = 0;
     const failure = vi.spyOn(store, 'enqueue').mockImplementation(input => {
       const result = enqueue(input);
-      if (++calls === 2) throw new Error('Synthetic storage failure after second insert');
+      if (++calls === 1) throw new Error('Synthetic storage failure after bundle insert');
       return result;
     });
     try {
       expect(() => admitDocumentImport(store, prepared, 'global')).toThrow('Synthetic storage failure');
-      expect(calls).toBe(2);
+      expect(calls).toBe(1);
       expect(store.db.prepare('SELECT COUNT(*) AS n FROM observations').get()!.n).toBe(0);
       expect(store.claim({ force: true })).toBeNull();
     } finally { failure.mockRestore(); store.close(); }
@@ -127,7 +126,7 @@ describe('admission and outcome', () => {
     try {
       const long = '# Doc\n\n' + Array.from({ length: 4 }, (_, i) => `## S${i}\n\n${'z'.repeat(20000)}\n\n`).join('');
       const prepared = prepareDocumentImport(file(dir, 'doc.md', long));
-      expect(prepared.chunks.length).toBeGreaterThan(1);
+      expect(prepared.chunks.length).toBe(1);
       expect(admitDocumentImport(store, prepared, 'global')).toEqual({ importId: prepared.importId, duplicate: false, parts: prepared.chunks.length });
       expect(store.pending().map(o => [o.source, o.scope, o.state])).toEqual(prepared.chunks.map(() => ['document_import', 'global', 'pending']));
       expect(admitDocumentImport(store, prepared, 'global')).toMatchObject({ duplicate: true });

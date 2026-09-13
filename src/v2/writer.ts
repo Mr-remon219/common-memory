@@ -1,21 +1,20 @@
-import { sessionGroup, sessionProjection, type SessionCacheOptions } from './session.js';
-import { readFileSync } from 'node:fs';
+import { sanitizeModelUsage } from '../core/contracts/model-output.js';
+import { sessionGroup, type SessionCacheOptions } from './session.js';
 import { createHash } from 'node:crypto';
 import { CanonicalStore, type DocumentSnapshot } from './canonical.js';
 import { RuntimeStore, type RuntimeJob, type RuntimeOptions, type RuntimeReceipt } from './runtime.js';
 import { ProjectRegistry } from './registry.js';
 import { withRepositoryLock } from './lock.js';
-import { sanitizeDiagnostic, type FailureDiagnostic, type DiagnosticStage } from '../memory-manager/contracts/diagnostic.js';
+import { sanitizeDiagnostic, type FailureDiagnostic, type DiagnosticStage } from '../core/contracts/diagnostic.js';
 import { failureDiagnostic, failureCode } from './errors.js';
-import { maintenanceSchema, validateDecision, type Decision } from './contract.js';
+import { validateDecision, type Decision } from './contract.js';
 import { externalPreflight } from '../core/safety/external-preflight.js';
-import { AGENT_IMPORT_SOURCE, DOCUMENT_IMPORT_SOURCE, decodeAgentImport, isImportSource, provenanceOf, type ProvenanceKind } from './import.js';
-import { decodeDocumentChunk } from './document-import.js';
-import type { ApprovedModelRequest, MemoryModelPort } from '../memory-manager/contracts/model-port.js';
+import { isImportSource, provenanceOf, type ProvenanceKind } from './import.js';
+import type { MemoryAgentRuntime } from '../core/contracts/memory-agent.js';
+import { openMemoryTask } from './memory-task.js';
 
-export const maintainerPrompt = readFileSync(new URL('./memory-maintainer.md', import.meta.url), 'utf8');
 export interface WriterOptions {
-  dataRoot: string; model: MemoryModelPort; allowedScopes: readonly string[]; writableScopes?: readonly string[];
+  dataRoot: string; agent: MemoryAgentRuntime; allowedScopes: readonly string[]; writableScopes?: readonly string[];
   /** Provenance classes that may be sent to the remote model; a batch outside it is quarantined, never disclosed. Omitted means all. */
   allowedProvenance?: readonly ProvenanceKind[];
   documentSoftBytes?: number; documentHardBytes?: number; retentionMs?: number;
@@ -29,7 +28,7 @@ export class Writer {
   readonly #options: WriterOptions;
   constructor(options: WriterOptions) {
     this.#options = { ...options, allowedScopes: [...options.allowedScopes], writableScopes: [...(options.writableScopes ?? options.allowedScopes)] };
-    for (const n of [options.deadlineMs ?? 60000, options.maxRequestBytes ?? 131072, options.retentionMs ?? 604800000, options.documentSoftBytes ?? 8192]) if (!Number.isSafeInteger(n) || n <= 0) throw new Error('INVALID_WRITER_LIMIT');
+    for (const n of [options.deadlineMs ?? 60000, options.maxRequestBytes ?? Number.MAX_SAFE_INTEGER, options.retentionMs ?? 604800000, options.documentSoftBytes ?? 8192]) if (!Number.isSafeInteger(n) || n <= 0) throw new Error('INVALID_WRITER_LIMIT');
     if ((options.documentSoftBytes ?? 8192) > (options.documentHardBytes ?? 16384)) throw new Error('INVALID_DOCUMENT_BUDGET');
     this.canonical = new CanonicalStore(options.dataRoot, {hardLimitBytes:options.documentHardBytes ?? 16384});
     this.store = new RuntimeStore(options.dataRoot, options.scheduler);
@@ -60,6 +59,7 @@ export class Writer {
     const cancelled = () => terminate('CANCELLED');
     options.signal?.addEventListener('abort', cancelled, {once:true});
     if (options.signal?.aborted) cancelled();
+    const deadlineAt = Date.now() + (this.#options.deadlineMs ?? 60000);
     const deadlineTimer = setTimeout(() => terminate('TIMEOUT'), this.#options.deadlineMs ?? 60000);
     deadlineTimer.unref();
     const signal = controller.signal;
@@ -79,31 +79,42 @@ export class Writer {
       if (scope !== 'global' && !registered.some(p => `project:${p.id}` === scope)) return this.#quarantine(job, 'UNREGISTERED_PROJECT');
       const documents = withRepositoryLock(this.#options.dataRoot, () => this.canonical.snapshot(scope === 'global' ? [] : [scope.slice(8)]))
         .filter(doc => this.#options.allowedScopes.includes(documentScope(doc)));
-      const cap = this.#options.maxRequestBytes ?? 131072;
+      const cap = this.#options.maxRequestBytes ?? Number.MAX_SAFE_INTEGER;
       for (const observation of job.observations) {
         try { externalPreflight({text:observation.text}, {maxExcerptBytes:cap,maxCandidateBytes:cap,maxTotalBytes:Number.MAX_SAFE_INTEGER}); }
         catch { this.store.quarantine(job, observation.id, 'SENSITIVE_INPUT'); return {outcome:'quarantined'}; }
       }
-      let context = this.#options.allowedProvenance?.includes('conversation_context')===true ? this.store.context(job.observations[0]!) : [];
-      let sessionTail=this.#options.sessionCache?.contextTailTurns ?? 2;
-      let request = this.#request(job, documents, context,sessionTail);
-      if(this.#bytes(request)>cap){sessionTail=0;request=this.#request(job,documents,context,sessionTail);}
-      while (this.#bytes(request) > cap && context.length) {
-        context = context.slice(1); request = this.#request(job, documents, context,sessionTail);
-      }
-      while (this.#bytes(request) > cap && job.observations.length > 1) {
-        const last=sessionGroup(this.store,job.observations.at(-1)!);
-        const count=last ? job.observations.findIndex(o=>sessionGroup(this.store,o)?.turn===last.turn) : job.observations.length-1;
-        if(count===0) break;
-        job = this.store.trim(job, count);
-        request = this.#request(job, documents, context,sessionTail);
-      }
-      if (this.#bytes(request) > cap) return this.#quarantine(job, 'OVERSIZED_COMPLETE_TURN');
-      externalPreflight(request.projection, {maxExcerptBytes:cap,maxCandidateBytes:cap,maxTotalBytes:cap});
-      signal.throwIfAborted();
-      const result = await abortable(this.#options.model.analyze(request, {requestId:job.id,deadlineMs:this.#options.deadlineMs ?? 60000,signal,onDiagnosticContext:context => { remoteContext = sanitizeDiagnostic({...context,reason:'timeout',retryable:true}); }}), signal);
-      signal.throwIfAborted();
-      if (result.kind === 'refusal') throw new Error('MODEL_REFUSAL');
+      let contextTail = this.#options.sessionCache?.contextTailTurns ?? 2;
+      const open = () => openMemoryTask(this.store, job, documents, {
+        signal, contextAuthorized: this.#options.allowedProvenance?.includes('conversation_context') === true,
+        contextTail, writableScopes: this.#options.writableScopes!,
+        softBytes: this.#options.documentSoftBytes ?? 8192, hardBytes: this.canonical.hardLimitBytes,
+      });
+      let grant = open();
+      const sourceBytes = () => grant.task.bundles.reduce((n, b) => n + b.bytes, 0);
+      let result;
+      let promptDigest: string;
+      try {
+        // Optional previous context yields first. Never drop current qualifiers or split a turn.
+        if (sourceBytes() > cap && contextTail > 0) { grant.close(); contextTail = 0; grant = open(); }
+        while (sourceBytes() > cap && job.observations.length > 1) {
+          const last = sessionGroup(this.store, job.observations.at(-1)!);
+          const count = last ? job.observations.findIndex(o => sessionGroup(this.store, o)?.turn === last.turn) : job.observations.length - 1;
+          if (count === 0) break;
+          grant.close(); job = this.store.trim(job, count); grant = open();
+        }
+        if (sourceBytes() > cap) return this.#quarantine(job, 'OVERSIZED_COMPLETE_TURN');
+        result = await abortable(this.#options.agent.decide(grant.task, grant.reads, {
+          deadlineAt, signal,
+          onDiagnosticContext: context => { remoteContext = sanitizeDiagnostic({...context,reason:'timeout',retryable:true}); },
+        }), signal);
+        signal.throwIfAborted();
+        const suppliedDigest: unknown = result?.promptDigest;
+        if (typeof suppliedDigest !== 'string' || !/^[a-f0-9]{64}$/.test(suppliedDigest)) throw new Error('INVALID_PROMPT_DIGEST');
+        promptDigest = suppliedDigest;
+        const checked = validateDecision(result.body, job.id, documents, new Map(job.observations.map(o => [`ev_${o.id}`, o.scope])));
+        grant.assertCoverage(checked.decisions);
+      } finally { grant.close(); }
       const evidence = new Map(job.observations.map(o => [`ev_${o.id}`,o.scope]));
       const decision = validateDecision(result.body, job.id, documents, evidence);
       this.#guardImports(job, decision.decisions, documents);
@@ -122,7 +133,7 @@ export class Writer {
         const receipt = this.#receipt(job, documents, decision.decisions, updates);
         if (!operations.length) { this.store.finish(job, receipt); return; }
         this.canonical.commit(documents, updates, { ...receipt, id:job.id, version:2, decisions:decision.decisions.map(d => d.kind),
-          promptDigest:digest(maintainerPrompt), modelVersion:this.#options.modelVersion ?? 'configured-model', timestamp:new Date().toISOString(), usage:result.usage,
+          promptDigest, modelVersion:this.#options.modelVersion ?? 'configured-model', timestamp:new Date().toISOString(), usage:sanitizeModelUsage(result.usage),
           sources:job.observations.map(o => ({id:o.id,sessionId:o.sessionId,entryId:o.entryId,digest:digest(o.text ?? '')})),
           documents:documents.map(doc => ({target:doc.target,before:doc.hash,after:updates.has(doc.target) ? digest(updates.get(doc.target)!) : doc.hash})),
         }, () => { signal.throwIfAborted(); this.store.assertLease(job); });
@@ -181,16 +192,6 @@ export class Writer {
       }
     }
   }
-  #request(job: RuntimeJob, documents: DocumentSnapshot[], context: RuntimeJob['observations'] = [], sessionTail=2): ApprovedModelRequest {
-    return {prompt:maintainerPrompt,schema:maintenanceSchema,schemaName:'memory_maintenance_v2',projection:{
-      conversation_turns:sessionProjection(this.store,job,this.#options.allowedProvenance?.includes('conversation_context')===true,sessionTail),
-      version:'memory_maintenance_v2',request_id:job.id,now:new Date().toISOString(),
-      observations:job.observations.map(o => ({ref:`ev_${o.id}`,...describeSource(o),source_scope:o.scope,observed_at:o.observedAt,context_only:false})),
-      documents:documents.map(doc => ({target:doc.target,hash:doc.hash,content:doc.content,sections:doc.sections,soft_budget_bytes:this.#options.documentSoftBytes ?? 8192,hard_budget_bytes:this.canonical.hardLimitBytes,writable:this.#options.writableScopes!.includes(documentScope(doc))})),
-      context_only:context.map(o => ({...describeSource(o),observed_at:o.observedAt,source_scope:o.scope,context_only:true})),
-    }};
-  }
-  #bytes(request: ApprovedModelRequest): number { return this.#options.model.serializedRequestBytes?.(request) ?? Buffer.byteLength(JSON.stringify(request)); }
   #receipt(job: RuntimeJob, documents: DocumentSnapshot[], decisions: Decision[], updates: Map<string,string>): RuntimeReceipt & { removeTargets:string[] } {
     const associations: {target:string;sourceIds:number[]}[] = [], removeTargets:string[] = [], forget = new Set<number>();
     // Manual Markdown edits invalidate title-based sidecar identities. Keep current
@@ -232,24 +233,6 @@ export class Writer {
   close(): void { this.store.close(); }
 }
 function documentScope(doc: DocumentSnapshot): string { return doc.target.startsWith('project:') ? doc.target : 'global'; }
-type SourceDescription =
-  | { text: string | null; source_kind: 'user_turn' }
-  | { text: string | null; source_kind: 'agent_import'; import: { source_label: string; basis: string; gaps: string | null } }
-  | { text: string | null; source_kind: 'document_import'; import: { source_label: string; declared_author: string; file_name: string; part: { index: number; count: number }; heading_path: string[] } };
-/** The host, not the text, tells the model whether it reads a user turn, another agent's summary or an imported file. */
-function describeSource(o: RuntimeJob['observations'][number]): SourceDescription {
-  if (o.source === AGENT_IMPORT_SOURCE) {
-    const payload = o.text === null ? null : decodeAgentImport(o.text);
-    if (!payload) return { text: o.text, source_kind: 'agent_import', import: { source_label: 'unknown', basis: 'unknown', gaps: null } };
-    return { text: payload.understanding, source_kind: 'agent_import', import: { source_label: payload.sourceLabel, basis: payload.basis, gaps: payload.gaps ?? null } };
-  }
-  if (o.source === DOCUMENT_IMPORT_SOURCE) {
-    const chunk = o.text === null ? null : decodeDocumentChunk(o.text);
-    if (!chunk) return { text: o.text, source_kind: 'document_import', import: { source_label: 'unknown', declared_author: 'unknown', file_name: 'unknown', part: { index: 1, count: 1 }, heading_path: [] } };
-    return { text: chunk.text, source_kind: 'document_import', import: { source_label: chunk.sourceLabel, declared_author: chunk.declaredAuthor, file_name: chunk.fileName, part: chunk.part, heading_path: chunk.headingPath } };
-  }
-  return { text: o.text, source_kind: 'user_turn' };
-}
 function digest(value:string):string { return createHash('sha256').update(value).digest('hex'); }
 function abortable<T>(promise:Promise<T>,signal:AbortSignal):Promise<T> {
   return new Promise((resolve,reject) => { const abort = () => reject(signal.reason); signal.addEventListener('abort',abort,{once:true}); if(signal.aborted) abort(); promise.then(resolve,reject).finally(() => signal.removeEventListener('abort',abort)); });

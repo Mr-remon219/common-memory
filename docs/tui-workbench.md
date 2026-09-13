@@ -161,6 +161,8 @@ Writer 处理完不一定产生改动，忽略不能报“修改成功”。等�
 同时显示应用、配置和 Memory 路径、整个数据目录的逻辑字节大小，以及受管理接入文件是否一致。
 API Key 与代理凭据不显示明文；配置中的凭据引用显示为变量名或状态。
 页面不查询账单、不探测模型、不启动 Writer、不创建或打开 Memory SQLite。
+Context Window 仅显示精确匹配的固定 pi-ai 官方 catalog 能力，否则 Unknown/custom；选择时保存来源版本/digest，不把 /models 当 capability。
+Max Input / Max Output 默认 Unlimited（缺省/null 不额外加 Common Memory 上限），显式旧值保留。Advanced Settings 可调整输入/输出和 Agent 轮次（默认 64），整次处理期限仍为 60 秒。
 运行状态表示按需处理；安装记录不等于客户端在线或 Hooks 已获信任。
 
 ### Change Model / Provider
@@ -169,8 +171,12 @@ API Key 与代理凭据不显示明文；配置中的凭据引用显示为变量
 可以确认预置 URL 或修改地址，重新填写隐藏的 API Key，再选择具体模型。
 模型配置不会重新执行首次 Agent 安装。配置更新后，正在运行的助手需重启才能使用新配置。
 
-该栏目也提供网络设置与显式模型连接测试。网络设置保存不发送请求；连接测试只发送小型合成请求，
+该栏目也提供网络设置与显式模型连接测试。网络设置保存不发送请求；连接测试只运行合成 inspect/read/submit 工具链，
 不读取记忆、不打开 SQLite，也不证明真实 Writer 已完成记忆提交。
+
+### Advanced Settings
+
+从 **Model & Configuration → Advanced Settings** 进入，可调整思考方式、输入/输出上限、Agent 轮次、队列与暂存设置及存储目录。修改需确认后保存；返回或取消不会保存。保存后回到配置菜单，后续连接测试读取新配置；正在运行的助手仍需重启。
 
 ### 完整卸载
 

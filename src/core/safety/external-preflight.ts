@@ -1,9 +1,9 @@
 import { CoreError } from "../contracts/errors.js";
 import { scanFields, type SafetyField } from "./scanner.js";
-export interface ExternalSizeCaps { maxExcerptBytes: number; maxCandidateBytes: number; maxTotalBytes: number }
+export interface ExternalSizeCaps { maxExcerptBytes?: number | null; maxCandidateBytes?: number | null; maxTotalBytes?: number | null }
 export function externalPreflight(projection: Readonly<Record<string, unknown>>, caps: ExternalSizeCaps, exactSerializedBytes?: number): void {
   const fields: SafetyField[] = []; collect(projection, "", fields); scanFields(fields, true);
-  const bytes = exactSerializedBytes ?? Buffer.byteLength(JSON.stringify(projection), "utf8"); if (bytes > caps.maxTotalBytes) reject("external.total_bytes", "/");
+  const bytes = exactSerializedBytes ?? Buffer.byteLength(JSON.stringify(projection), "utf8"); if (bytes > (caps.maxTotalBytes ?? Number.MAX_SAFE_INTEGER)) reject("external.total_bytes", "/");
   checkNamedArrays(projection, "", caps);
 }
 function collect(value: unknown, path: string, out: SafetyField[]): void {
@@ -16,7 +16,7 @@ function checkNamedArrays(value: unknown, path: string, caps: ExternalSizeCaps):
   if (!value || typeof value !== "object") return;
   for (const [key, child] of Object.entries(value)) {
     const childPath = `${path}/${escapePointer(key)}`;
-    if ((key === "excerpts" || key === "candidates") && Array.isArray(child)) { const max = key === "excerpts" ? caps.maxExcerptBytes : caps.maxCandidateBytes; child.forEach((item, index) => { if (Buffer.byteLength(JSON.stringify(item), "utf8") > max) reject(key === "excerpts" ? "external.excerpt_bytes" : "external.candidate_bytes", `${childPath}/${index}`); }); }
+    if ((key === "excerpts" || key === "candidates") && Array.isArray(child)) { const max = (key === "excerpts" ? caps.maxExcerptBytes : caps.maxCandidateBytes) ?? Number.MAX_SAFE_INTEGER; child.forEach((item, index) => { if (Buffer.byteLength(JSON.stringify(item), "utf8") > max) reject(key === "excerpts" ? "external.excerpt_bytes" : "external.candidate_bytes", `${childPath}/${index}`); }); }
     checkNamedArrays(child, childPath, caps);
   }
 }

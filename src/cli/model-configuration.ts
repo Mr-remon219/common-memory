@@ -1,10 +1,11 @@
+import { selectedCapability } from '../memory-agent-runtime/capabilities.js';
 import * as clack from './prompt-runtime.js';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { apiKeyEnvContents, configDirectory, configFilePath, defaultConfig, envFilePath, loadConfig, validateConfig, type CommonMemoryConfig } from '../config/config.js';
 import { installationTransaction, readInstallationFile, recoverPendingInstallation, type FileChange } from './installation-files.js';
 import { PROVIDERS, providerFor, type ProviderPreset } from '../config/providers.js';
-import { normalizeOpenAICompatibleBaseUrl } from '../memory-manager/openai/openai-responses-adapter.js';
+import { normalizeOpenAICompatibleBaseUrl } from '../memory-agent-runtime/endpoint.js';
 import { discoverModels } from './model-discovery.js';
 import { readInstallationState } from './integrations.js';
 import { checkConfigUnchanged } from './tui-settings.js';
@@ -49,7 +50,7 @@ export async function configureModel(existing?: CommonMemoryConfig | null, optio
     try {
       const fields = await configureProvider(provider, current);
       const { reasoningEffort: _reasoning, thinking: _thinking, enableThinking: _enable, ...remote } = current.remote;
-      const next = validateConfig({ ...current, remote: { ...remote, ...fields.remote, preset: provider.id, apiKeyEnv: `COMMON_MEMORY_API_KEY_${randomUUID().replaceAll('-', '').toUpperCase()}`, apiKeySource: 'private-env' } });
+      const next = validateConfig({ ...current, remote: { ...remote, ...fields.remote, capability: selectedCapability(fields.remote), preset: provider.id, apiKeyEnv: `COMMON_MEMORY_API_KEY_${randomUUID().replaceAll('-', '').toUpperCase()}`, apiKeySource: 'private-env' } });
       // Model choice is the confirmation. Credentials/config/setup checkpoint commit together.
       installationTransaction(configDirectory(), commit => {
         checkConfigUnchanged(existing);

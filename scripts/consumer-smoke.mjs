@@ -33,7 +33,7 @@ try {
   const [packed] = JSON.parse(npm(['pack', ...(registryVersion ? [`common-memory-core@${registryVersion}`, '--registry=https://registry.npmjs.org/'] : []), '--ignore-scripts', '--json', '--pack-destination', temp], root));
   if (registryVersion) assert.equal(packed.version, registryVersion, 'Registry must serve the requested release');
   const files = new Set(packed.files.map(file => file.path));
-  for (const required of ['dist/index.js', 'dist/index.d.ts', 'dist/cli/main.js', 'dist/pi-extension/index.js', 'dist/v2/memory-maintainer.md', 'README.md', 'docs/releasing.md', 'docs/usage.md', 'SECURITY.md', 'CHANGELOG.md', 'LICENSE']) {
+  for (const required of ['dist/index.js', 'dist/index.d.ts', 'dist/cli/main.js', 'dist/pi-extension/index.js', 'dist/memory-agent-runtime/system.md', 'README.md', 'docs/releasing.md', 'docs/usage.md', 'SECURITY.md', 'CHANGELOG.md', 'LICENSE']) {
     assert.ok(files.has(required), `Missing package file: ${required}`);
   }
   for (const path of files) {
@@ -46,7 +46,7 @@ try {
   console.log(npm(['install', '--engine-strict', '--ignore-scripts', '--omit=dev', '--no-audit', '--no-fund', join(temp, packed.filename)]).trim());
   const pkg = join(temp, 'node_modules/common-memory-core');
   assert.equal(realpathSync(pkg), pkg, 'Installed package must not be linked to the checkout');
-  assert.ok(readFileSync(join(pkg, 'dist/v2/memory-maintainer.md'), 'utf8').trim(), 'Empty maintainer prompt');
+  assert.ok(readFileSync(join(pkg, 'dist/memory-agent-runtime/system.md'), 'utf8').trim(), 'Empty maintainer prompt');
   assert.ok(!existsSync(join(temp, 'node_modules/typescript')), 'Consumer must not inherit build tooling');
 
   if (wsl) {
@@ -101,6 +101,14 @@ try {
     const read = await client.callTool({ name: 'memory_read', arguments: {} });
     assert.notEqual(read.isError, true);
     assert.match(JSON.stringify(read.structuredContent), /Synthetic package reader fact/);
+    if (!registryVersion) {
+      assert.equal(client.getServerVersion().version, manifest.version);
+      assert.ok((await client.listTools()).tools.every(tool => tool.outputSchema?.type === 'object'));
+      const resources = (await client.listResources()).resources;
+      assert.deepEqual(resources.map(resource => resource.uri), ['common-memory://memory/global']);
+      const resource = await client.readResource({uri:resources[0].uri});
+      assert.equal(resource.contents[0].text, read.content[0].text);
+    }
     await client.close(); client = undefined;
     assert.equal(existsSync(join(config.dataRoot, 'runtime.sqlite')), false, 'Read-only installed consumers must not open SQLite');
     if (!registryVersion) {

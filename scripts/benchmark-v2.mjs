@@ -37,7 +37,7 @@ function fixture(directory, workload) {
   const text = 'a'.repeat(4096), digest = hash(text);
   store.transaction(() => {
     const observation = store.db.prepare('INSERT INTO observations(sessionId,entryId,text,digest,scope,observedAt,source,state,enqueuedAt,processedAt,jobId) VALUES(?,?,?,?,?,?,?,?,?,?,?)');
-    const job = store.db.prepare("INSERT INTO jobs VALUES(?,?,1,'done',0,1,0,NULL)");
+    const job = store.db.prepare("INSERT INTO jobs(id,token,generation,state,expires,attempts,available,issue) VALUES(?,?,1,'done',0,1,0,NULL)");
     for (let i = 0; i < workload.history; i++) {
       job.run(`history-${i}`, `token-${i}`);
       observation.run('history', `${i}`, null, digest, 'global', new Date(now).toISOString(), 'interactive', 'processed', now - 1e9, now - 1e9, `history-${i}`);
@@ -67,7 +67,7 @@ function fixture(directory, workload) {
   let writer;
   if (workload.kind === 'recover') {
     store.close();
-    writer = new Writer({ dataRoot: root, allowedScopes: ['global'], scheduler: { now: () => now }, model: { analyze() { throw new Error('Unexpected model call'); } } });
+    writer = new Writer({ dataRoot: root, allowedScopes: ['global'], scheduler: { now: () => now }, agent: { decide() { throw new Error('Unexpected model call'); } } });
   }
   let active = writer?.store ?? store;
   if (workload.kind === 'open') store.close();

@@ -1,3 +1,4 @@
+import { toolProvider, sendTools } from '../helpers/tool-provider.js';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { spawn } from 'node:child_process';
@@ -16,11 +17,13 @@ async function until(f:()=>boolean){const end=Date.now()+15000;while(!f()){if(Da
 it.skipIf(process.platform!=='linux').each([false,true])('detached configured Writer finishes after host and MCP exit; crash recovery=%s',async crash=>{
  const home=mkdtempSync(join(tmpdir(),'cm-detached-'));cleanup.push(()=>rmSync(home,{recursive:true,force:true}));
  let release=false,calls=0;
+ const explore=toolProvider();
  const server=createServer(async(req,res)=>{
-   let text='';for await(const b of req)text+=b;calls++;const projection=JSON.parse(JSON.parse(text).input[1].content[0].text);
+   let text='';for await(const b of req)text+=b;calls++;const wire=JSON.parse(text);
    await until(()=>release||res.destroyed);if(res.destroyed)return;
+   const projection=explore(wire,res);if(!projection)return;
    const decision={version:'memory_maintenance_v2',request_id:projection.request_id,decisions:[{kind:'retain',applicability:'global',admission:'remember',lifetime:'until_changed',confidence:1,evidence:projection.observations.map((o:{ref:string})=>o.ref),reason:'synthetic',operations:[{op:'put_section',target:'preferences',section:null,title:'Synthetic preference',body:'Prefer concise replies.'}]}]};
-   res.setHeader('content-type','application/json');res.end(JSON.stringify({status:'completed',incomplete_details:null,error:null,output:[{type:'message',status:'completed',role:'assistant',content:[{type:'output_text',text:JSON.stringify(decision),annotations:[]}]}],usage:{input_tokens:1,output_tokens:1,total_tokens:2}}));
+   sendTools(res,wire,[{name:'submit_memory_decision',args:decision}]);
  });server.listen(0,'127.0.0.1');await once(server,'listening');cleanup.push(()=>{release=true;server.closeAllConnections();return new Promise<void>(r=>server.close(()=>r()));});
  const config=defaultConfig({COMMON_MEMORY_HOME:home});config.remote={provider:'openai-compatible',model:'fake',baseUrl:`http://127.0.0.1:${(server.address() as {port:number}).port}/v1`,apiKeyEnv:'CM_TEST_KEY',proxy:{mode:'direct'}};config.scheduler.leaseMs=300;writeFileSync(join(home,'config.json'),JSON.stringify(config));
  const loader=pathToFileURL(resolve('tests/mcp/fixtures/source-loader.mjs')).href;

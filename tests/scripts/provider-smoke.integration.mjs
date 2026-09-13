@@ -1,3 +1,4 @@
+import { toolProvider, sendTools } from '../../scripts/synthetic-runtime.mjs';
 // Built-artifact regression, like test:consumer. Uses real local HTTP and the real Writer, never live APIs.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -15,15 +16,15 @@ for (const [api,ignoreMarkdown] of [['responses',false],['chat_completions',fals
   test(`${api}: ${ignoreMarkdown ? 'ignore must fail retention' : 'fixture pipeline passes without becoming live evidence'}`,{timeout:30000},async()=>{
     const home=mkdtempSync(join(tmpdir(),'cm-provider-contract-'));
     const reports=[]; const calls=[];
+    const explore=toolProvider();
     const server=createServer(async(req,res)=>{
       let body='';for await(const chunk of req)body+=chunk;
       const wire=JSON.parse(body);calls.push({url:req.url,wire,authorization:req.headers.authorization});
-      const projection=JSON.parse(api === 'responses' ? wire.input[1].content[0].text : wire.messages[1].content);
+      const projection=explore(wire,res);if(!projection)return;
       const imported=projection.observations[0],markdown=imported.source_kind === 'document_import';
       const decisions=markdown && ignoreMarkdown ? [{kind:'ignore',applicability:'uncertain',confidence:1,evidence:[imported.ref],reason:'fixture ignore'}] : [{kind:'retain',admission:'remember',lifetime:'until_changed',applicability:'global',confidence:0.6,evidence:[imported.ref],reason:'fixture retained',operations:[{op:'put_section',target:markdown?'preferences':'profile',section:null,title:markdown?'Imported workstation':'Imported background',body:markdown?'Unverified imported document: Fedora Silverblue and fish shell.':'Unverified agent import: a tortoise named Quillon.'}]}];
       const output=JSON.stringify({version:'memory_maintenance_v2',request_id:projection.request_id,decisions});
-      res.setHeader('content-type','application/json');
-      res.end(JSON.stringify(api==='responses' ? {status:'completed',output:[{type:'message',status:'completed',role:'assistant',content:[{type:'output_text',text:output}]}]} : {choices:[{finish_reason:'stop',message:{role:'assistant',content:output}}]}));
+      sendTools(res,wire,[{name:'submit_memory_decision',args:JSON.parse(output)}]);
     });
     server.listen(0,'127.0.0.1');await once(server,'listening');
     let child;
@@ -49,13 +50,14 @@ for (const [api,ignoreMarkdown] of [['responses',false],['chat_completions',fals
       assert.equal(stdout.includes('private-fixture-key'),false);
       assert.equal(existsSync(join(report.home,'.env')),false);
       assert.deepEqual(JSON.parse(readFileSync(report.reportPath,'utf8')),report);
-      assert.equal(calls.length,2);
+      assert.equal(calls.length,6); // inspect, read, submit for each of the two sources
+      assert.equal(JSON.stringify(calls[0].wire).includes('Quillon'),false);
       for(const {url,wire,authorization} of calls) {
         assert.equal(authorization,'Bearer private-fixture-key');
         assert.equal(url,api==='responses'?'/responses':'/chat/completions');
         assert.equal(wire.model,'fixture-only');
-        if(api==='responses'){assert.equal(wire.reasoning.effort,'none');assert.equal(wire.text.format.strict,true);}
-        else {assert.equal(wire.response_format.type,'json_object');assert.equal(wire.enable_thinking,false);assert.equal('reasoning' in wire,false);}
+        if(api==='responses'){assert.equal(wire.reasoning.effort,'none');assert.ok(wire.tools.some(t=>t.name==='submit_memory_decision'));}
+        else {assert.equal(wire.response_format,undefined);assert.ok(wire.tools.some(t=>t.function.name==='submit_memory_decision'));assert.equal(wire.enable_thinking,false);assert.equal('reasoning' in wire,false);}
       }
     } finally {
       if(child && child.exitCode===null) {child.kill('SIGTERM');await once(child,'close');}

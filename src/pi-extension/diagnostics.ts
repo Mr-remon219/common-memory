@@ -1,4 +1,4 @@
-import { sanitizeDiagnostic } from '../memory-manager/contracts/diagnostic.js';
+import { sanitizeDiagnostic } from '../core/contracts/diagnostic.js';
 
 /** Bounded local diagnostics: never print exception messages, paths, input or credentials. */
 export function piDiagnosticReporter(): (phase:'capture'|'maintenance',error:unknown)=>void {

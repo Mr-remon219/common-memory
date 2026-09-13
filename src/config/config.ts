@@ -1,3 +1,4 @@
+import type { ModelCapabilityRecord } from '../core/contracts/model-output.js';
 import { SESSION_CACHE_DEFAULTS, type SessionCacheOptions } from '../v2/session.js';
 import { PROVIDERS, type ProviderId } from './providers.js';
 import { randomUUID } from "node:crypto";
@@ -6,14 +7,14 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 type ProvenanceType = RemoteDisclosurePolicy["allowedProvenance"][number];
 import { fsyncFile, persistDirectory } from "../core/transaction/fsync.js";
-import type { RemoteDisclosurePolicy } from "../memory-manager/contracts/disclosure.js";
-import { validateDisclosurePolicy } from "../memory-manager/contracts/disclosure.js";
-import { normalizeOpenAICompatibleBaseUrl } from "../memory-manager/openai/openai-responses-adapter.js";
+import type { RemoteDisclosurePolicy } from "../core/contracts/disclosure.js";
+import { validateDisclosurePolicy } from "../core/contracts/disclosure.js";
+import { normalizeOpenAICompatibleBaseUrl } from "../memory-agent-runtime/endpoint.js";
 
-import { validateRemoteTuning, type RemoteApi, type RemoteTuning } from "../memory-manager/openai/options.js";
+import { validateRemoteTuning, type RemoteApi, type RemoteTuning } from "../memory-agent-runtime/options.js";
 
 import { localApiKey, privateAssignment, readPrivateEnv } from "./private-env.js";
-import { validateProxyConfig, validateCaEnv, PRIVATE_NETWORK_KEYS, type ProxyConfig } from "../memory-manager/network/route.js";
+import { validateProxyConfig, validateCaEnv, PRIVATE_NETWORK_KEYS, type ProxyConfig } from "../memory-agent-runtime/network/route.js";
 
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const PROVENANCE = new Set<ProvenanceType>(["user_explicit", "agent_observation", "document_import", "conversation_context"]);
@@ -25,6 +26,7 @@ export interface CommonMemoryConfig {
   remote: RemoteTuning & {
     api?: RemoteApi;
     preset?: ProviderId;
+    capability?: ModelCapabilityRecord;
     proxy?: ProxyConfig;
     caFileEnv?: string;
     provider: "openai-compatible";
@@ -71,9 +73,9 @@ export function defaultConfig(env: NodeJS.ProcessEnv = process.env): CommonMemor
       enabled: true,
       allowedScopes: ["global"],
       allowedProvenance: ["user_explicit"],
-      maxExcerptBytes: 131_072,
-      maxCandidateBytes: 131_072,
-      maxTotalBytes: 131_072,
+      maxExcerptBytes: null,
+      maxCandidateBytes: null,
+      maxTotalBytes: null,
     },
   };
 }
@@ -120,7 +122,7 @@ export function resolveApiKey(config: CommonMemoryConfig, env: NodeJS.ProcessEnv
 export function validateConfig(value: unknown): CommonMemoryConfig {
   if (!isRecord(value) || !hasRequiredAndOptionalKeys(value, ["schemaVersion", "dataRoot", "remote", "disclosure", "writableScopes", "scheduler"], ["sessionCache"]) || value.schemaVersion !== 2) throw new TypeError("Unsupported Common Memory config");
   if (typeof value.dataRoot !== "string" || !isAbsolute(value.dataRoot)) throw new TypeError("dataRoot must be an absolute path");
-  if (!isRecord(value.remote) || !hasRequiredAndOptionalKeys(value.remote, ["provider", "baseUrl", "model", "apiKeyEnv"], ["api", "preset", "apiKeySource", "maxOutputTokens", "reasoningEffort", "thinking", "enableThinking", "proxy", "caFileEnv"]) || value.remote.provider !== "openai-compatible") throw new TypeError("Invalid remote provider config");
+  if (!isRecord(value.remote) || !hasRequiredAndOptionalKeys(value.remote, ["provider", "baseUrl", "model", "apiKeyEnv"], ["api", "preset", "capability", "apiKeySource", "maxOutputTokens", "maxAgentTurns", "reasoningEffort", "thinking", "enableThinking", "proxy", "caFileEnv"]) || value.remote.provider !== "openai-compatible") throw new TypeError("Invalid remote provider config");
   const apiKeySource = value.remote.apiKeySource;
   if (apiKeySource !== undefined && apiKeySource !== 'private-env') throw new TypeError('Invalid API key source');
   const preset = value.remote.preset;
@@ -130,13 +132,14 @@ export function validateConfig(value: unknown): CommonMemoryConfig {
   const proxy = value.remote.proxy === undefined ? undefined : validateProxyConfig(value.remote.proxy);
   const caFileEnv = value.remote.caFileEnv === undefined ? undefined : validateCaEnv(value.remote.caFileEnv);
   if (caFileEnv !== undefined && proxy === undefined) throw new TypeError("CA configuration requires an explicit network mode");
+  const capability = value.remote.capability === undefined ? undefined : validateCapability(value.remote.capability);
   const tuning = validateRemoteTuning(value.remote as RemoteTuning, api);
   const baseUrl = typeof value.remote.baseUrl === "string" ? normalizeOpenAICompatibleBaseUrl(value.remote.baseUrl) : "";
   const model = typeof value.remote.model === "string" ? value.remote.model.trim() : "";
   const apiKeyEnv = typeof value.remote.apiKeyEnv === "string" ? value.remote.apiKeyEnv.trim() : "";
   if (!model) throw new TypeError("remote.model is required");
   if (!ENV_NAME.test(apiKeyEnv)) throw new TypeError("remote.apiKeyEnv must be an environment variable name");
-  if (!isRecord(value.disclosure) || !hasExactKeys(value.disclosure, ["enabled", "allowedScopes", "allowedProvenance", "maxExcerptBytes", "maxCandidateBytes", "maxTotalBytes"])) throw new TypeError("Invalid disclosure config");
+  if (!isRecord(value.disclosure) || !hasRequiredAndOptionalKeys(value.disclosure, ["enabled", "allowedScopes", "allowedProvenance"], ["maxExcerptBytes", "maxCandidateBytes", "maxTotalBytes"])) throw new TypeError("Invalid disclosure config");
   const disclosure = value.disclosure as unknown as RemoteDisclosurePolicy;
   validateDisclosurePolicy(disclosure);
   if (disclosure.allowedScopes.length === 0 || disclosure.allowedScopes.some((scope) => typeof scope !== "string" || !scope.trim())) throw new TypeError("At least one disclosure scope is required");
@@ -151,14 +154,14 @@ export function validateConfig(value: unknown): CommonMemoryConfig {
     writableScopes: [...value.writableScopes] as string[],
     scheduler: { ...value.scheduler } as CommonMemoryConfig["scheduler"],
     dataRoot: resolve(value.dataRoot),
-    remote: { provider: "openai-compatible", baseUrl, model, apiKeyEnv, apiKeySource: 'private-env', ...(preset === undefined ? {} : {preset: preset as ProviderId}), ...(value.remote.api === undefined ? {} : {api}), ...tuning, ...(proxy === undefined ? {} : {proxy}), ...(caFileEnv === undefined ? {} : {caFileEnv}) },
+    remote: { provider: "openai-compatible", baseUrl, model, apiKeyEnv, apiKeySource: 'private-env', ...(capability === undefined ? {} : {capability}), ...(preset === undefined ? {} : {preset: preset as ProviderId}), ...(value.remote.api === undefined ? {} : {api}), ...tuning, ...(proxy === undefined ? {} : {proxy}), ...(caFileEnv === undefined ? {} : {caFileEnv}) },
     disclosure: {
       enabled: true,
       allowedScopes: [...disclosure.allowedScopes],
       allowedProvenance: [...disclosure.allowedProvenance],
-      maxExcerptBytes: disclosure.maxExcerptBytes,
-      maxCandidateBytes: disclosure.maxCandidateBytes,
-      maxTotalBytes: disclosure.maxTotalBytes,
+      maxExcerptBytes: disclosure.maxExcerptBytes ?? null,
+      maxCandidateBytes: disclosure.maxCandidateBytes ?? null,
+      maxTotalBytes: disclosure.maxTotalBytes ?? null,
     },
   };
 }
@@ -191,4 +194,12 @@ export function saveNetworkSecret(name: typeof PRIVATE_NETWORK_KEYS[number], val
   const kept = lines.filter(line => !matcher.test(line));
   while (kept.at(-1) === '') kept.pop();
   writePrivateFile(path, [...kept,assignment,''].join('\n'));
+}
+
+function validateCapability(value: unknown): ModelCapabilityRecord {
+  if (isRecord(value)) {
+    if (value.source === 'unknown/custom' && hasExactKeys(value, ['source','contextWindow','maxOutput']) && value.contextWindow === null && value.maxOutput === null) return {source:'unknown/custom',contextWindow:null,maxOutput:null};
+    if (value.source === 'official-catalog' && hasExactKeys(value, ['source','version','digest','contextWindow','maxOutput']) && typeof value.version === 'string' && /^pi-ai [0-9]+\.[0-9]+\.[0-9]+$/u.test(value.version) && typeof value.digest === 'string' && /^[a-f0-9]{64}$/u.test(value.digest) && Number.isSafeInteger(value.contextWindow) && Number(value.contextWindow)>0 && Number.isSafeInteger(value.maxOutput) && Number(value.maxOutput)>0) return {...value} as ModelCapabilityRecord;
+  }
+  throw new TypeError('Invalid selection-time capability record');
 }

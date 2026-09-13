@@ -1,3 +1,4 @@
+import { toolProvider, sendTools } from '../helpers/tool-provider.js';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { pathToFileURL } from 'node:url';
@@ -42,7 +43,7 @@ it.each([false, true])('serves real stdio, isolates identities and survives rest
   expect((await a.client.listTools()).tools.map(t => t.name)).toEqual(['memory_submit_user_turn', 'memory_status']);
   const call = await a.client.callTool({ name: 'memory_submit_user_turn', arguments: submission });
   expect(call.structuredContent).toMatchObject({ accepted: true, duplicate: false, state: 'pending' });
-  expect((await b.client.callTool({ name: 'memory_status', arguments: { submissionId: 'one', conversationId: 'chat' } })).structuredContent).toEqual({ submission: null });
+  expect((await b.client.callTool({ name: 'memory_status', arguments: { submissionId: 'one', conversationId: 'chat' } })).structuredContent).toMatchObject({ submission: null, next: { action: 'correct' } });
   expect((await a.client.callTool({ name: 'memory_submit_user_turn', arguments: { ...submission, source: 'rpc' } })).isError).toBe(true);
   expect((await a.client.callTool({ name: 'memory_submit_user_turn', arguments: { ...submission, text: 'different' } })).isError).toBe(true);
   await a.client.close(); await b.client.close();
@@ -53,22 +54,22 @@ it.each([false, true])('serves real stdio, isolates identities and survives rest
 });
 it('defaults to no submissions', async () => {
   const { env } = fixture(); const { client } = await connect(env, 'a', false);
-  expect((await client.callTool({ name: 'memory_submit_user_turn', arguments: submission })).structuredContent).toEqual({ code: 'SUBMISSION_DISABLED' });
+  expect((await client.callTool({ name: 'memory_submit_user_turn', arguments: submission })).structuredContent).toMatchObject({ code: 'SUBMISSION_DISABLED', message: expect.any(String) });
 });
 it('feeds the unchanged Writer through a real synthetic Responses server', async () => {
   let calls = 0;
+  const explore = toolProvider();
   const provider = createServer(async (req, res) => {
     let body = ''; for await (const chunk of req) body += chunk;
-    const projection = JSON.parse(JSON.parse(body).input[1].content[0].text);
+    const wire=JSON.parse(body); const projection=explore(wire,res); if(!projection)return;
     calls++;
     const decision = { version: 'memory_maintenance_v2', request_id: projection.request_id, decisions: [{ kind: 'retain', admission: 'remember', lifetime: 'until_changed', applicability: 'global', confidence: 1, evidence: projection.observations.map((o: {ref: string}) => o.ref), reason: 'Synthetic preference', operations: [{ op: 'put_section', target: 'preferences', section: null, title: 'Replies', body: 'Prefer concise replies.\n' }] }] };
-    res.setHeader('content-type', 'application/json');
-    res.end(JSON.stringify({ status: 'completed', incomplete_details: null, error: null, output: [{ type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify(decision), annotations: [] }] }], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } }));
+    sendTools(res,wire,[{name:'submit_memory_decision',args:decision}]);
   });
   provider.listen(0, '127.0.0.1'); await once(provider, 'listening');
   cleanup.push(() => new Promise<void>(r => provider.close(() => r())));
   const port = (provider.address() as {port: number}).port;
-  const { env, config } = fixture(`http://127.0.0.1:${port}/v1`, 1);
+  const { env, config } = fixture(`http://127.0.0.1:${port}/v1`, 6);
   const { client } = await connect(env, 'a');
   await client.callTool({ name: 'memory_submit_user_turn', arguments: submission });
   await expect.poll(async () => (await client.callTool({ name: 'memory_status', arguments: { submissionId: 'one', conversationId: 'chat' } })).structuredContent, { timeout: 8000 }).toMatchObject({ submission: { state: 'processed', issue: null, retainedIn: ['preferences'] } });
@@ -89,19 +90,23 @@ it('read-only launch serves memory_read without a Writer, API key or runtime dat
   expect(read.structuredContent).toMatchObject({ empty: false, contexts: ['global'] });
   expect((read.content as {text: string}[])[0]!.text).toContain('tortoise named Basalt');
   expect((read.content as {text: string}[])[0]!.text).toContain('user data, not instructions');
-  expect((await client.callTool({ name: 'memory_read', arguments: { contextId: 'project:other' } })).structuredContent).toEqual({ code: 'CONTEXT_UNAVAILABLE' });
-  expect((await client.callTool({ name: 'memory_status', arguments: { importId: 'x' } })).structuredContent).toEqual({ code: 'STATUS_UNAVAILABLE' });
+  expect((await client.callTool({ name: 'memory_read', arguments: { contextId: 'project:other' } })).structuredContent).toMatchObject({ code: 'CONTEXT_UNAVAILABLE', message: expect.any(String) });
+  expect((await client.callTool({ name: 'memory_status', arguments: { importId: 'x' } })).structuredContent).toMatchObject({ code: 'STATUS_UNAVAILABLE', message: expect.any(String) });
+  const resources = await client.listResources();
+  expect(resources.resources.map(r => r.uri)).toEqual(['common-memory://memory/global']);
+  const resource = await client.readResource({uri:resources.resources[0]!.uri});
+  expect(resource.contents[0]).toMatchObject({text:(read.content as {text:string}[])[0]!.text});
   expect(existsSync(join(config.dataRoot, 'runtime.sqlite'))).toBe(false);
 });
 it('init launch imports agent-reported understanding through the unchanged Writer and reports retention', async () => {
   const seen: unknown[] = [];
+  const explore = toolProvider();
   const provider = createServer(async (req, res) => {
     let body = ''; for await (const chunk of req) body += chunk;
-    const projection = JSON.parse(JSON.parse(body).input[1].content[0].text);
+    const wire=JSON.parse(body); const projection=explore(wire,res); if(!projection)return;
     seen.push(projection.observations);
     const decision = { version: 'memory_maintenance_v2', request_id: projection.request_id, decisions: [{ kind: 'retain', admission: 'remember', lifetime: 'until_changed', applicability: 'global', confidence: 0.8, evidence: projection.observations.map((o: {ref: string}) => o.ref), reason: 'Synthetic import', operations: [{ op: 'put_section', target: 'profile', section: null, title: 'Imported understanding', body: `Imported from ${projection.observations[0].import.source_label} (${projection.observations[0].import.basis}): ${projection.observations[0].text}\n` }] }] };
-    res.setHeader('content-type', 'application/json');
-    res.end(JSON.stringify({ status: 'completed', incomplete_details: null, error: null, output: [{ type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify(decision), annotations: [] }] }], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } }));
+    sendTools(res,wire,[{name:'submit_memory_decision',args:decision}]);
   });
   provider.listen(0, '127.0.0.1'); await once(provider, 'listening');
   cleanup.push(() => new Promise<void>(r => provider.close(() => r())));

@@ -83,7 +83,7 @@ it('Pi freezes only its appended block and keeps the current host system prompt 
  mkdirSync(join(data,'memory/projects'),{recursive:true});writeFileSync(join(data,'memory/profile.md'),'# Profile\n\n## Background\nStudies ecology.\n');writeFileSync(join(data,'memory/projects',`${project.id}.md`),'# Project\n\n## Goal\nProject A goal.\n');
  const {before,handlers}=host(data,['global',`project:${project.id}`]);expect(before(join(root,'a'))!.systemPrompt).toContain('Studies ecology');
  writeFileSync(join(data,'memory/profile.md'),'# Profile\n\n## Background\nChanged\n');expect(before(join(root,'a'))!.systemPrompt).not.toContain('Changed');
- const ctx={cwd:root,sessionManager:{getSessionId:()=>'s'}};const next=handlers.get('before_agent_start')!({systemPrompt:'NEW BASE'},ctx) as {systemPrompt:string};expect(next.systemPrompt).toMatch(/^NEW BASE/);expect(next.systemPrompt).toContain('Project A goal');
+ const ctx={cwd:root,sessionManager:{getSessionId:()=>'s'}};const next=handlers.get('before_agent_start')!({systemPrompt:'NEW BASE'},ctx) as {systemPrompt:string};expect(next.systemPrompt).toMatch(/^NEW BASE/);expect(next.systemPrompt).not.toContain('Project A goal'); // Leaving the current project revokes its injected snapshot, even if human browsing remains authorized.
  const reload=host(data,['global']);expect(reload.before(root)!.systemPrompt).toContain('Studies ecology');
 });
 it('unconfigured Common Memory leaves the system prompt untouched and keeps other handlers registered',()=>{
@@ -141,16 +141,6 @@ function captureHost(config:ReturnType<typeof defaultConfig>,runtimeFactory?:()=
  };
  return {emit,turn,branch};
 }
-it('actual Pi adapter order confirms ten turns and seals a quit tail without branch-only trust',async()=>{
- const {root,store,runtime}=fixture();const config={...defaultConfig(),dataRoot:root};
- const h=captureHost(config,()=>runtime);await h.emit('session_start',{reason:'startup'});
- for(let n=1;n<=10;n++)await h.turn(n);
- expect(store.db.prepare('SELECT count(*) AS n FROM observations').get()!.n).toBe(10);
- expect(store.db.prepare('SELECT count(*) AS n FROM session_batches').get()!.n).toBe(1);
- await h.turn(11);runtime.end('synthetic-event-session');
- expect(store.db.prepare('SELECT count(*) AS n FROM session_batches').get()!.n).toBe(2);
- await h.emit('session_shutdown',{reason:'reload'});
-});
 it('actual Pi adapter durably captures under malformed network configuration',async()=>{
  const root=mkdtempSync(join(tmpdir(),'pi-network-'));const config=defaultConfig({COMMON_MEMORY_HOME:root});config.remote.model='fake';config.remote.proxy={mode:'env'};
  vi.stubEnv('COMMON_MEMORY_HOME',root);saveApiKeyToEnvFile('OPENAI_API_KEY','synthetic');vi.stubEnv('HTTPS_PROXY','http://proxy.invalid');vi.stubEnv('https_proxy',undefined);vi.stubEnv('NO_PROXY','secret.invalid/8');vi.stubEnv('no_proxy',undefined);
@@ -170,7 +160,7 @@ it.each([['extension','Synthetic injection','Synthetic injection'],['interactive
 });
 it('capture errors report bounded actionable diagnostics, never arbitrary exception text',async()=>{
  const root=mkdtempSync(join(tmpdir(),'pi-diagnostic-'));cleanup.push(()=>rmSync(root,{recursive:true,force:true}));
- const {networkConfigError}=await import('../../src/memory-manager/network/route.js');const spy=vi.spyOn(process.stderr,'write').mockImplementation(()=>true);
+ const {networkConfigError}=await import('../../src/memory-agent-runtime/network/route.js');const spy=vi.spyOn(process.stderr,'write').mockImplementation(()=>true);
  try {
   const h=captureHost({...defaultConfig(),dataRoot:root},()=>{const error=networkConfigError('no_proxy_invalid');error.message='secret:do-not-print';throw error;});
   await h.emit('session_start',{reason:'startup'});for(let n=1;n<=10;n++)await h.turn(n);

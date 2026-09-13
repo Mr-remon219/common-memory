@@ -1,3 +1,4 @@
+import { probeMemoryAgent } from '../../src/v2/connection-probe.js';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,8 +7,8 @@ import { createServer } from 'node:http';
 import { afterEach, expect, it, vi } from 'vitest';
 import { defaultConfig, validateConfig, saveConfig, loadConfig, saveNetworkSecret, saveApiKeyToEnvFile, resolveApiKey } from '../../src/config/config.js';
 import { readPrivateEnv } from '../../src/config/private-env.js';
-import { createConfiguredMemoryModel, createConfiguredWriter, describeConfiguredNetwork } from '../../src/config/runtime.js';
-import { PRIVATE_PROXY_KEY, PRIVATE_CA_KEY, networkSecret } from '../../src/memory-manager/network/route.js';
+import { createConfiguredMemoryAgent, createConfiguredWriter, describeConfiguredNetwork } from '../../src/config/runtime.js';
+import { PRIVATE_PROXY_KEY, PRIVATE_CA_KEY, networkSecret } from '../../src/memory-agent-runtime/network/route.js';
 const roots: string[]=[];
 const root=()=>{const value=mkdtempSync(join(tmpdir(),'cm-network-config-'));roots.push(value);return value;};
 afterEach(()=>{vi.unstubAllEnvs();vi.unstubAllGlobals();for(const path of roots.splice(0))rmSync(path,{recursive:true,force:true});});
@@ -27,7 +28,7 @@ it('private network values and credentials never enter process.env', async () =>
   saveNetworkSecret(PRIVATE_CA_KEY,'C:\\Users\\Example\\company.pem',path);
   writeFileSync(path,readFileSync(path,'utf8')+'CM_LOCAL_KEY="synthetic-local-key"\ncommon_memory_proxy_url=http://private-lower\ncommon_memory_ca_file=private-ca\n');
   const config=defaultConfig({COMMON_MEMORY_HOME:home});config.remote.model='fake';config.remote.apiKeyEnv='CM_LOCAL_KEY';config.remote.proxy={mode:'custom',urlEnv:PRIVATE_PROXY_KEY};
-  const model=createConfiguredMemoryModel(config);await model.close();
+  const model=createConfiguredMemoryAgent(config);await model.close();
   expect(process.env.CM_LOCAL_KEY).toBeUndefined();expect(process.env[PRIVATE_PROXY_KEY]).toBeUndefined();expect(process.env[PRIVATE_CA_KEY]).toBeUndefined();
   expect(readPrivateEnv(path)[PRIVATE_CA_KEY]).toBe('C:\\Users\\Example\\company.pem');
   expect(process.env.common_memory_proxy_url).toBeUndefined();expect(process.env.common_memory_ca_file).toBeUndefined();
@@ -39,15 +40,15 @@ it.each(['unrelated-host-key', '', undefined])('old configs use private credenti
   const config=defaultConfig({COMMON_MEMORY_HOME:home});config.remote.model='fake';config.remote.apiKeyEnv='CM_LOCAL_KEY';delete config.remote.apiKeySource;
   const env={COMMON_MEMORY_HOME:home,CM_LOCAL_KEY:inherited};
   let authorization: unknown;
-  const model=createConfiguredMemoryModel(config,env,{fetch:async(_url,init)=>{authorization=(init?.headers as Record<string,string>).authorization;return new Response('{}',{status:401});}});
-  try { await expect(model.analyze({projection:{},schema:{},prompt:'test'},{requestId:'r',deadlineMs:1000})).rejects.toMatchObject({code:'AUTHENTICATION'}); } finally { await model.close(); }
+  const model=createConfiguredMemoryAgent(config,env,{fetch:async(_url,init)=>{authorization=new Headers(init?.headers).get('authorization');return new Response('{}',{status:401});}});
+  try { await expect(probeMemoryAgent(model, new AbortController().signal)).rejects.toMatchObject({code:'AUTHENTICATION'}); } finally { await model.close(); }
   expect(authorization).toBe('Bearer private-key');expect(resolveApiKey(config,env)).toBe('private-key');
 });
 it.each([undefined, '', 'CM_LOCAL_KEY=  '])('missing or empty private credentials never fall back to a host key (%s)', body => {
   const home=root();if(body!==undefined)writeFileSync(join(home,'.env'),body);
   vi.stubEnv('COMMON_MEMORY_HOME',home);vi.stubEnv('CM_LOCAL_KEY','host-only-key');
   const config=defaultConfig();config.remote.model='fake';config.remote.apiKeyEnv='CM_LOCAL_KEY';delete config.remote.apiKeySource;
-  expect(()=>createConfiguredMemoryModel(config)).toThrow('configure it in the Common Memory TUI');
+  expect(()=>createConfiguredMemoryAgent(config)).toThrow('configure it in the Common Memory TUI');
   expect(()=>createConfiguredWriter(config)).toThrow('configure it in the Common Memory TUI');
   expect(()=>resolveApiKey(config)).toThrow('configure it in the Common Memory TUI');
   expect(existsSync(config.dataRoot)).toBe(false);
@@ -57,8 +58,8 @@ it('explicit setup credentials cannot be replaced by an inherited provider key',
   const config=defaultConfig({COMMON_MEMORY_HOME:home});config.remote.model='fake';config.remote.apiKeyEnv='CM_LOCAL_KEY';config.remote.apiKeySource='private-env';
   const validated=validateConfig(config);expect(validated.remote.apiKeySource).toBe('private-env');
   let authorization: unknown;
-  const model=createConfiguredMemoryModel(validated,{COMMON_MEMORY_HOME:home,CM_LOCAL_KEY:'unrelated-inherited-key'},{fetch:async(_url,init)=>{authorization=(init?.headers as Record<string,string>).authorization;return new Response('{}',{status:401});}});
-  try { await model.analyze({projection:{},schema:{},prompt:'test'},{requestId:'r',deadlineMs:1000}); } catch { /* fake authentication response */ } finally { await model.close(); }
+  const model=createConfiguredMemoryAgent(validated,{COMMON_MEMORY_HOME:home,CM_LOCAL_KEY:'unrelated-inherited-key'},{fetch:async(_url,init)=>{authorization=new Headers(init?.headers).get('authorization');return new Response('{}',{status:401});}});
+  try { await probeMemoryAgent(model, new AbortController().signal); } catch { /* fake authentication response */ } finally { await model.close(); }
   expect(authorization).toBe('Bearer entered-private-key');
   expect(()=>validateConfig({...config,remote:{...config.remote,apiKeySource:'unknown'}})).toThrow('API key source');
   expect(()=>validateConfig({...config,remote:{...config.remote,preset:'unknown'}})).toThrow('provider preset');
@@ -98,7 +99,7 @@ it('legacy factory preserves host routing without exporting private .env entries
   // host-owned dispatcher there; Common Memory must not install a global dispatcher.
   const nativeProxy = process.allowedNodeEnvironmentFlags.has('--use-env-proxy');
   const hostSetup = nativeProxy ? '' : "import {EnvHttpProxyAgent,setGlobalDispatcher} from 'undici'; const hostProxy=new EnvHttpProxyAgent(); setGlobalDispatcher(hostProxy);";
-  const code=`${hostSetup} import {createConfiguredMemoryModel} from ${JSON.stringify(source)}; import {defaultConfig} from ${JSON.stringify(new URL('../../src/config/config.ts',import.meta.url).href)}; const config=defaultConfig(); config.remote.model='fake';config.remote.apiKeyEnv='CM_LEGACY_KEY';delete config.remote.proxy;config.remote.baseUrl=${JSON.stringify(endpoint)}; const model=createConfiguredMemoryModel(config); console.log(JSON.stringify({body:await (await fetch(config.remote.baseUrl)).text(),reserved:process.env.COMMON_MEMORY_PROXY_URL===undefined})); await model.close(); ${nativeProxy ? '' : 'await hostProxy.close();'}`;
+  const code=`${hostSetup} import {createConfiguredMemoryAgent} from ${JSON.stringify(source)}; import {defaultConfig} from ${JSON.stringify(new URL('../../src/config/config.ts',import.meta.url).href)}; const config=defaultConfig(); config.remote.model='fake';config.remote.apiKeyEnv='CM_LEGACY_KEY';delete config.remote.proxy;config.remote.baseUrl=${JSON.stringify(endpoint)}; const model=createConfiguredMemoryAgent(config); console.log(JSON.stringify({body:await (await fetch(config.remote.baseUrl)).text(),reserved:process.env.COMMON_MEMORY_PROXY_URL===undefined})); await model.close(); ${nativeProxy ? '' : 'await hostProxy.close();'}`;
   try {
     const result=await new Promise<string>((resolve,reject)=>{
       const child=spawn(process.execPath,[...(nativeProxy ? ['--use-env-proxy'] : []),'--import',loader,'--input-type=module','-e',code],{env:{COMMON_MEMORY_HOME:home,NO_PROXY:'127.0.0.1',HTTP_PROXY:`http://127.0.0.1:${(proxy.address() as {port:number}).port}`},stdio:['ignore','pipe','pipe']});
@@ -125,10 +126,10 @@ it('new default reaches a synthetic origin despite hostile ambient routing', asy
   const home=root();saveApiKeyToEnvFile('OPENAI_API_KEY','synthetic',join(home,'.env'));
   const config=defaultConfig({COMMON_MEMORY_HOME:home});config.remote.model='fake';config.remote.baseUrl=`http://127.0.0.1:${(origin.address() as {port:number}).port}`;
   const hostile=vi.fn(()=>{throw new Error('host global fetch used');});vi.stubGlobal('fetch',hostile);
-  let model:ReturnType<typeof createConfiguredMemoryModel>|undefined;
+  let model:ReturnType<typeof createConfiguredMemoryAgent>|undefined;
   try {
-    model=createConfiguredMemoryModel(config,{COMMON_MEMORY_HOME:home,HTTP_PROXY:'bad-secret',NO_PROXY:'private.invalid/8'});
-    await expect(model.analyze({projection:{},schema:{},prompt:'synthetic'},{requestId:'r',deadlineMs:2000})).rejects.toMatchObject({code:'AUTHENTICATION'});
+    model=createConfiguredMemoryAgent(config,{COMMON_MEMORY_HOME:home,HTTP_PROXY:'bad-secret',NO_PROXY:'private.invalid/8'});
+    await expect(probeMemoryAgent(model, new AbortController().signal)).rejects.toMatchObject({code:'AUTHENTICATION'});
     expect(hits).toBe(1);expect(hostile).not.toHaveBeenCalled();
   } finally {await model?.close();origin.closeAllConnections();await new Promise<void>(resolve=>origin.close(()=>resolve()));}
 });
@@ -182,4 +183,12 @@ it('legacy Writer captures its borrowed fetch at construction rather than first 
  const config=defaultConfig({COMMON_MEMORY_HOME:home});config.remote.model='fake';delete config.remote.proxy;
  const writer=createConfiguredWriter(config),replacement=vi.fn(async()=>new Response('{}',{status:401}));vi.stubGlobal('fetch',replacement);
  try{writer.store.enqueue({sessionId:'s',entryId:'e',source:'interactive',scope:'global',text:'Synthetic preference',observedAt:new Date().toISOString()});await writer.run({force:true});expect(original).toHaveBeenCalledOnce();expect(replacement).not.toHaveBeenCalled();}finally{await writer.close();}
+});
+it('owned Memory Agent close aborts its active loop and fences subsequent calls without opening SQLite',async()=>{
+ const home=root();vi.stubEnv('COMMON_MEMORY_HOME',home);saveApiKeyToEnvFile('OPENAI_API_KEY','synthetic');
+ const reached=Promise.withResolvers<void>();const server=createServer(()=>reached.resolve());await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
+ const config=defaultConfig({COMMON_MEMORY_HOME:home});config.remote.model='fake';config.remote.baseUrl=`http://127.0.0.1:${(server.address() as {port:number}).port}`;
+ const agent=createConfiguredMemoryAgent(config);
+ try {const run=probeMemoryAgent(agent,new AbortController().signal);const failed=expect(run).rejects.toThrow('CANCELLED');await reached.promise;const close=agent.close();expect(agent.close()).toBe(close);await failed;await close;await expect(probeMemoryAgent(agent,new AbortController().signal)).rejects.toThrow('CANCELLED');expect(existsSync(config.dataRoot)).toBe(false);}
+ finally {await agent.close();server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}
 });

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { toolProvider, sendTools } from './synthetic-runtime.mjs';
 // Synthetic native Windows host → generated WSL hook → configured Writer/Core.
 // Run after build on WSL with Windows PowerShell interop. No real model or personal data.
 import { execFileSync,spawn } from 'node:child_process';
@@ -25,13 +26,15 @@ const home=mkdtempSync(join(tmpdir(),"cm work '中文 $data-"));
 const windowsTemp=execFileSync(powershell,['-NoProfile','-Command','[Console]::Write($env:TEMP)'],{encoding:'utf8'}).trim();
 const nativeRoot=mkdtempSync(join(execFileSync('/usr/bin/wslpath',['-u',windowsTemp],{encoding:'utf8'}).trim(),"cm work '中文 $data-"));
 let release=false,calls=0;
+const explore=toolProvider();
 const server=createServer(async(req,res)=>{
  let input='';for await(const chunk of req)input+=chunk;
- const p=JSON.parse(JSON.parse(input).input[1].content[0].text);calls++;
+ const wire=JSON.parse(input);calls++;
  while(!release&&!res.destroyed)await pause(20);
  if(res.destroyed)return;
+ const p=explore(wire,res);if(!p)return;
  const decision={version:'memory_maintenance_v2',request_id:p.request_id,decisions:[{kind:'retain',applicability:'global',admission:'remember',lifetime:'until_changed',confidence:1,evidence:p.observations.map(o=>o.ref),reason:'synthetic bridge test',operations:[{op:'put_section',target:'preferences',section:null,title:'Synthetic bridge',body:'Prefer concise replies. 桥接验证'}]}]};
- res.setHeader('content-type','application/json');res.end(JSON.stringify({status:'completed',error:null,incomplete_details:null,output:[{type:'message',status:'completed',role:'assistant',content:[{type:'output_text',text:JSON.stringify(decision),annotations:[]}]}],usage:{input_tokens:1,output_tokens:1,total_tokens:2}}));
+ sendTools(res,wire,[{name:'submit_memory_decision',args:decision}]);
 });
 server.listen(0,'127.0.0.1');await once(server,'listening');
 try {

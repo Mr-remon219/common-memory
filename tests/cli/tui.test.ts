@@ -111,6 +111,34 @@ it('routes integration, model, network, connection test and uninstall from the m
   expect(existsSync(config.dataRoot)).toBe(false);
 });
 
+it('saves advanced settings from the main workbench and uses them for the next connection test', async () => {
+  const config = fixture();
+  const done = choices('configuration', 'advanced', 'tuning', 'turns', 'test', 'back', 'exit');
+  texts('100'); vi.mocked(clack.confirm).mockResolvedValue(true);
+  vi.mocked(runNetworkTest).mockResolvedValue(0);
+  await runTui(); done();
+  const expected = { ...config, remote: { ...config.remote, maxAgentTurns: 100 } };
+  expect(loadConfig()).toEqual(expected);
+  expect(runNetworkTest).toHaveBeenCalledWith(expected, expect.any(Function));
+  expect(vi.mocked(clack.select).mock.calls.some(([menu]) => menu.message === 'Model & Configuration' && menu.initialValue === 'advanced')).toBe(true);
+  expect(existsSync(config.dataRoot)).toBe(false);
+});
+
+it.each(['back', 'escape', 'decline'] as const)('returns safely from advanced settings via %s without saving', async action => {
+  const config = fixture();
+  const done = action === 'back'
+    ? choices('configuration', 'advanced', 'back', 'back', 'exit')
+    : action === 'escape'
+      ? choices('configuration', 'advanced', Symbol('cancel'), 'back', 'exit')
+      : choices('configuration', 'advanced', 'tuning', 'turns', 'back', 'exit');
+  if (action === 'decline') { texts('100'); vi.mocked(clack.confirm).mockResolvedValue(false); }
+  await runTui(); done();
+  expect(loadConfig()).toEqual(config);
+  expect(clack.log.error).not.toHaveBeenCalled();
+  expect(runNetworkTest).not.toHaveBeenCalled();
+  expect(existsSync(config.dataRoot)).toBe(false);
+});
+
 it('returns from model cancellation to configuration and exits the workbench after complete uninstall', async () => {
   fixture(); vi.spyOn(modelConfiguration, 'configureModel').mockRejectedValue(new UserCancelled());
   vi.mocked(runCompleteUninstall).mockResolvedValue(true);
@@ -339,7 +367,7 @@ it('validates output limits and supports reverting optional tuning', async () =>
   const config = fixture(); choices('tuning', 'tokens');
   vi.mocked(clack.text).mockImplementationOnce(async opts => {
     if (typeof opts.validate !== 'function') throw new Error('Expected numeric validator');
-    expect(opts.validate?.('0')).toBeTruthy(); expect(opts.validate?.('1.5')).toBeTruthy(); expect(opts.validate?.('16385')).toBeTruthy(); expect(opts.validate?.('')).toBeUndefined(); return '2048';
+    expect(opts.validate?.('0')).toBeTruthy(); expect(opts.validate?.('1.5')).toBeTruthy(); expect(opts.validate?.('16385')).toBeUndefined(); expect(opts.validate?.('')).toBeUndefined(); return '2048';
   });
   vi.mocked(clack.confirm).mockResolvedValue(true); await runAdvancedWizard(config);
   expect(loadConfig()!.remote.maxOutputTokens).toBe(2048);
@@ -368,4 +396,9 @@ it.each([undefined,'direct','env','custom'] as const)('network wizard recommends
   expect(options.options[0]!.label).toContain('系统');expect(options.options[0]!.hint).toContain('VPN/TUN');return Symbol('cancel') as never;
  });
  return expect(runNetworkWizard(config)).rejects.toBeInstanceOf(UserCancelled);
+});
+it('advanced Agent turn cap is separate from Unlimited input/output and can restore its default',async()=>{
+ const config=fixture();choices('tuning','turns');texts('100');vi.mocked(clack.confirm).mockResolvedValue(true);
+ await runAdvancedWizard(config);expect(loadConfig()).toEqual({...config,remote:{...config.remote,maxAgentTurns:100}});
+ choices('tuning','turns');texts('');await runAdvancedWizard(loadConfig()!);expect(loadConfig()).toEqual(config);
 });
