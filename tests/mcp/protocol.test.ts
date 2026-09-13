@@ -22,7 +22,8 @@ function fixture(baseUrl = 'http://127.0.0.1:1/v1', threshold = 6) {
   config.remote = { provider: 'openai-compatible', model: 'fake', baseUrl, apiKeyEnv: 'CM_TEST_KEY' };
   config.scheduler.turnThreshold = threshold;
   writeFileSync(join(home, 'config.json'), JSON.stringify(config));
-  const env = { ...process.env, COMMON_MEMORY_HOME: home, CM_TEST_KEY: 'synthetic-key' } as Record<string, string>;
+  writeFileSync(join(home, '.env'), 'CM_TEST_KEY="synthetic-key"\n', {mode:0o600});
+  const env = { ...process.env, COMMON_MEMORY_HOME: home, CM_TEST_KEY: 'host-key-must-be-ignored' } as Record<string, string>;
   return { home, config, env };
 }
 async function connect(env: Record<string, string>, clientId: string, accept = true, modern = false, extra: string[] = []) {

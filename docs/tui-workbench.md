@@ -48,9 +48,10 @@ Qwen、Kimi、Zhipu 使用上表的中国区普通 API；其他区域、Coding P
 - 使用现有网络配置及环境代理，不增加网络设置步骤；错误代理环境仍会导致明确的发现失败，不暗中绕过。
 
 模型单选的 Enter 就是保存确认。配置、私有凭据和 Setup 中断标记使用可恢复的跨文件提交。
-新向导写入 `remote.preset` 与 `apiKeySource: "private-env"`，防止继承的其他 Provider Key 替换用户刚填写的 Key。
-凭据使用独立的生成标识，避免配置保存中断时旧模型读到新 Key；历史生成凭据只保存在私有 `.env`，完整卸载会清理。
-旧配置未设置 `apiKeySource` 时保留进程环境优先的原行为。
+模型 Key 只能在 TUI 中配置并保存到私有 `.env`；所有运行入口只读这一个来源，不读取或回退到进程环境中的 Key。
+向导写入 `remote.preset` 与 `apiKeySource: "private-env"`。凭据使用独立的生成标识，避免配置保存中断时旧模型读到新 Key；历史生成凭据只保存在私有 `.env`，完整卸载会清理。
+旧配置即使未设置 `apiKeySource`，也只使用私有 `.env`；缺少或失效时需重新进入 TUI 配置，不能靠终端变量覆盖。
+修改后重启已运行的助手与 MCP 进程，让它们加载新凭据。
 
 后续可从 **Model & Configuration → Change Model / Provider** 重新进入同一模型配置流程。
 `common-memory config` 仅保留为兼容快捷命令。

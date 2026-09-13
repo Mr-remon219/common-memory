@@ -67,7 +67,7 @@ export async function runSetupWizard(existing: CommonMemoryConfig | null = loadC
 }
 
 export function hasApiKey(config: CommonMemoryConfig): boolean {
-  try { return Boolean(localApiKey(config.remote.apiKeyEnv, config.remote.apiKeySource === 'private-env' ? {} : process.env, readPrivateEnv(envFilePath()))); } catch { return false; }
+  try { return Boolean(localApiKey(config.remote.apiKeyEnv, readPrivateEnv(envFilePath()))); } catch { return false; }
 }
 function networkStatus(config: CommonMemoryConfig): string {
   try { const route = describeConfiguredNetwork(config); return `Network: ${route.mode} → ${route.route} (${route.reason}${route.protocol ? `, ${route.protocol}` : ''}); connection not tested`; }
@@ -87,19 +87,9 @@ export async function runCredentialsWizard(current: CommonMemoryConfig): Promise
   note(`当前：${hasApiKey(current) ? '已找到密钥（未测试）' : '未找到密钥'}\n变量：${current.remote.apiKeyEnv}\n密钥只保存在私有 .env，不写进助手配置。`, 'API Key');
   const action = await menu('要怎样设置密钥？', [
     { value: 'set', label: '填写 / 更换 API Key' },
-    { value: 'env', label: '使用其他环境变量', hint: '适合已有外部凭据配置' },
     { value: 'back', label: '返回' },
   ]);
   if (action === 'back') return;
-  if (action === 'env') {
-    const name = unwrap(await clack.text({ message: '环境变量名称', initialValue: current.remote.apiKeyEnv,
-      validate: value => /^[A-Za-z_][A-Za-z0-9_]*$/u.test(value?.trim() ?? '') ? undefined : '请填写合法的环境变量名，例如 OPENAI_API_KEY' })).trim();
-    if (await confirm(`改用 ${name}？现有私有密钥不会被删除。`)) {
-      const { apiKeySource: _source, ...remote } = current.remote;
-      saveSettings({ ...current, remote: { ...remote, apiKeyEnv: name } }, current);
-    }
-    return;
-  }
   const key = await keyInput();
   if (!await confirm('保存新密钥？模型和其他设置保持不变。')) return;
   checkConfigUnchanged(current);

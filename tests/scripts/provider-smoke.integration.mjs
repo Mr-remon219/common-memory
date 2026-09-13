@@ -17,7 +17,7 @@ for (const [api,ignoreMarkdown] of [['responses',false],['chat_completions',fals
     const reports=[]; const calls=[];
     const server=createServer(async(req,res)=>{
       let body='';for await(const chunk of req)body+=chunk;
-      const wire=JSON.parse(body);calls.push({url:req.url,wire});
+      const wire=JSON.parse(body);calls.push({url:req.url,wire,authorization:req.headers.authorization});
       const projection=JSON.parse(api === 'responses' ? wire.input[1].content[0].text : wire.messages[1].content);
       const imported=projection.observations[0],markdown=imported.source_kind === 'document_import';
       const decisions=markdown && ignoreMarkdown ? [{kind:'ignore',applicability:'uncertain',confidence:1,evidence:[imported.ref],reason:'fixture ignore'}] : [{kind:'retain',admission:'remember',lifetime:'until_changed',applicability:'global',confidence:0.6,evidence:[imported.ref],reason:'fixture retained',operations:[{op:'put_section',target:markdown?'preferences':'profile',section:null,title:markdown?'Imported workstation':'Imported background',body:markdown?'Unverified imported document: Fedora Silverblue and fish shell.':'Unverified agent import: a tortoise named Quillon.'}]}];
@@ -32,7 +32,8 @@ for (const [api,ignoreMarkdown] of [['responses',false],['chat_completions',fals
       config.remote={provider:'openai-compatible',baseUrl:`http://127.0.0.1:${server.address().port}`,model:'fixture-only',apiKeyEnv:'CM_SMOKE_FIXTURE_KEY',api,proxy:{mode:'direct'},...(api==='responses'?{reasoningEffort:'none'}:{enableThinking:false})};
       mkdirSync(join(config.dataRoot,'memory'),{recursive:true});writeFileSync(join(config.dataRoot,'memory','sentinel.md'),'Keep this source storage unchanged.');
       const path=join(home,'config.json');writeFileSync(path,JSON.stringify(config));
-      child=spawn(process.execPath,[runner,'--config',path,'--fixture'],{env:{...process.env,COMMON_MEMORY_HOME:home,CM_SMOKE_FIXTURE_KEY:'private-fixture-key'},stdio:['ignore','pipe','pipe']});
+      writeFileSync(join(home,'.env'),'CM_SMOKE_FIXTURE_KEY="private-fixture-key"\n',{mode:0o600});
+      child=spawn(process.execPath,[runner,'--config',path,'--fixture'],{env:{...process.env,COMMON_MEMORY_HOME:home,CM_SMOKE_FIXTURE_KEY:'host-key-must-be-ignored'},stdio:['ignore','pipe','pipe']});
       let stdout='',stderr='';child.stdout.on('data',b=>stdout+=b);child.stderr.on('data',b=>stderr+=b);
       const [code]=await once(child,'close');
       assert.equal(code,ignoreMarkdown ? 1 : 0,stderr+stdout);
@@ -46,9 +47,11 @@ for (const [api,ignoreMarkdown] of [['responses',false],['chat_completions',fals
       assert.notEqual(report.dataRoot,config.dataRoot);assert.equal(existsSync(join(config.dataRoot,'runtime.sqlite')),false);
       assert.equal(readFileSync(join(config.dataRoot,'memory','sentinel.md'),'utf8'),'Keep this source storage unchanged.');
       assert.equal(stdout.includes('private-fixture-key'),false);
+      assert.equal(existsSync(join(report.home,'.env')),false);
       assert.deepEqual(JSON.parse(readFileSync(report.reportPath,'utf8')),report);
       assert.equal(calls.length,2);
-      for(const {url,wire} of calls) {
+      for(const {url,wire,authorization} of calls) {
+        assert.equal(authorization,'Bearer private-fixture-key');
         assert.equal(url,api==='responses'?'/responses':'/chat/completions');
         assert.equal(wire.model,'fixture-only');
         if(api==='responses'){assert.equal(wire.reasoning.effort,'none');assert.equal(wire.text.format.strict,true);}

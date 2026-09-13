@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { setImmediate } from 'node:timers/promises';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
-import { defaultConfig, saveConfig } from '../../src/config/config.js';
+import { defaultConfig, saveConfig, saveApiKeyToEnvFile } from '../../src/config/config.js';
 import * as sqlite from '../../src/v2/sqlite.js';
 import { createCommonMemoryPiExtension } from '../../src/pi-extension/index.js';
 import { runMcp } from '../../src/mcp/stdio.js';
@@ -18,7 +18,7 @@ vi.mock('@modelcontextprotocol/server/stdio', async importOriginal => ({
 }));
 
 let home: string;
-beforeEach(() => { home = mkdtempSync(join(tmpdir(), 'cm-host-cleanup-')); vi.stubEnv('COMMON_MEMORY_HOME', home); vi.stubEnv('CM_CLEANUP_TEST_KEY', 'synthetic'); });
+beforeEach(() => { home = mkdtempSync(join(tmpdir(), 'cm-host-cleanup-')); vi.stubEnv('COMMON_MEMORY_HOME', home); saveApiKeyToEnvFile('CM_CLEANUP_TEST_KEY', 'synthetic'); });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); rmSync(home, { recursive: true, force: true }); });
 
 it.each(['pi', 'mcp'])('closes real database connections when %s startup fails', async host => {

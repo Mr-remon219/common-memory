@@ -5,14 +5,14 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {expect,it,vi} from 'vitest';
 import {createAgentSession,DefaultResourceLoader,ModelRuntime,SessionManager,SettingsManager} from '@earendil-works/pi-coding-agent';
-import {defaultConfig} from '../../src/config/config.js';
+import {defaultConfig,saveApiKeyToEnvFile} from '../../src/config/config.js';
 import {createCommonMemoryPiExtension} from '../../src/pi-extension/index.js';
 import {RuntimeStore} from '../../src/v2/runtime.js';
 vi.mock('../../src/cli/session-drain.js',()=>({launchSessionDrain:vi.fn()}));
 
 it('Pi 0.84.4 SDK delivers, persists and settles ten authenticated turns despite unavailable maintenance transport',async()=>{
  const home=mkdtempSync(join(tmpdir(),'pi-sdk-capture-'));
- vi.stubEnv('COMMON_MEMORY_HOME',home);vi.stubEnv('OPENAI_API_KEY','synthetic');vi.stubEnv('HTTPS_PROXY','http://proxy.invalid');vi.stubEnv('https_proxy',undefined);vi.stubEnv('NO_PROXY','synthetic.invalid/8');vi.stubEnv('no_proxy',undefined);
+ vi.stubEnv('COMMON_MEMORY_HOME',home);saveApiKeyToEnvFile('OPENAI_API_KEY','synthetic');vi.stubEnv('HTTPS_PROXY','http://proxy.invalid');vi.stubEnv('https_proxy',undefined);vi.stubEnv('NO_PROXY','synthetic.invalid/8');vi.stubEnv('no_proxy',undefined);
  const config=defaultConfig({COMMON_MEMORY_HOME:home});config.remote.model='synthetic';config.remote.proxy={mode:'env'};
  const settingsManager=SettingsManager.inMemory({compaction:{enabled:false},retry:{enabled:false}});
  const runtime=await ModelRuntime.create({authPath:join(home,'auth.json'),modelsPath:null,modelsStorePath:join(home,'models-store.json'),allowModelNetwork:false,refreshOnCreate:false});

@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-v0.3 使用所有者确认的 MIT 许可证。npm 版本是 **0.3.8**，GitHub tag 是 **v0.3.8**，
+v0.3 使用所有者确认的 MIT 许可证。npm 版本是 **0.3.9**，GitHub tag 是 **v0.3.9**，
 包名 `common-memory-core`，可执行命令 `common-memory`，默认发布标签 `latest`。
 这是面向早期使用者的版本，不声称已经完成全部真实客户端验收。
 
@@ -11,7 +11,7 @@ v0.3 使用所有者确认的 MIT 许可证。npm 版本是 **0.3.8**，GitHub t
 Linux、macOS 和 WSL 在 Node 22.19+（22.x）或 24+ 环境使用同一行安装命令：
 
 ```sh
-npm install -g common-memory-core@0.3.8
+npm install -g common-memory-core@0.3.9
 ```
 
 安装 Node / WSL 是前置要求，不包含在这个 npm 命令中。详细说明见 [README](../README.md)。
@@ -81,7 +81,7 @@ PowerShell 遵循系统脚本策略；不添加 ExecutionPolicy Bypass。
 npm run test:windows           # 原生 Windows，或具备 PowerShell interop 的 WSL
 npm run test:wsl               # 真实 WSL；先构建，Node 22.19 / 24 分别运行
 # 发布后也可对确切 registry 产物验证：
-npm run test:wsl -- --registry-version 0.3.8
+npm run test:wsl -- --registry-version 0.3.9
 ```
 
 WSL 冒烟使用真实的原生合成宿主进程，通过生成的 Hook 调用 Core；验证宿主身份、路径转换、
@@ -114,14 +114,14 @@ Release/tag 都要由维护者在对应服务上完成。本文和本地验证�
 发布后从一个新目录安装并核对 registry 中的版本：
 
 ```sh
-npm view common-memory-core@0.3.8 version dist.integrity
-npm install -g common-memory-core@0.3.8
+npm view common-memory-core@0.3.9 version dist.integrity
+npm install -g common-memory-core@0.3.9
 common-memory --version
 common-memory --help
 npm run test:published
 ```
 
-npm 发布成功并完成本地 registry 检查后，创建 GitHub Release `v0.3.8`。它会触发
+npm 发布成功并完成本地 registry 检查后，创建 GitHub Release `v0.3.9`。它会触发
 `published-package` 工作流：Ubuntu / macOS 实际执行上述一行全局安装，核对 CLI 版本，
 然后从 npm 下载 tarball 验证类型导出、Writer 提交/重启、Pi 模块和无 Key 的只读 MCP。
 也可通过 Actions 的 Run workflow 输入精确版本手动重跑。这个工作流**不发布包**，只有
@@ -172,6 +172,11 @@ v0.3.8 的安装修复也需在 Agent Integration 重新确认选择：修正 ma
 按需显式勾选独立 init 接入，首次缺少授权时确认 AI 材料披露，再查看只读 MCP 检查结果。
 旧版默认只读选择不会自动获得导入能力。npm 升级本身不注册工具；普通 Chat / 网页版仍不支持。
 完整卸载现在预检独立 Codex profile，并在未管理配置阻塞时保留原安装归属，避免重试漏检自定义根。
+
+v0.3.9 统一从私有 `.env` 读取模型 Key，不再使用终端或宿主的同名环境变量，包括旧配置。
+升级前在 TUI 中保存有效 Key；升级后重启所有助手/MCP。401/403 等永久服务错误不再自动重复五次，
+失败输入仍保留，修复后使用 TUI 的失败任务重试或 `common-memory retry <job-id>` 恢复。
+SDK 不再导出 `loadLocalEnv`；使用 `resolveApiKey` 读取配置目录中的私有凭据，不要导出到宿主环境。
 
 ## 升级、备份和卸载
 

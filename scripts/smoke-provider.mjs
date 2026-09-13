@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // One existing Init/Markdown retention scenario, parameterized by the existing remote config.
 // Explicit live/fixture evidence; no provider detection or API/model fallback.
-import { mkdtempSync, readFileSync, readdirSync, realpathSync, lstatSync, readlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, realpathSync, lstatSync, readlinkSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -35,13 +35,14 @@ function snapshot(config, evidence) {
     return {...source,memory,actualMemory,sha256:digest(JSON.stringify(files))};
   });
 }
-function isolated(run, label, remote, env, defaultConfig) {
+function isolated(run, label, remote, env, defaultConfig, privateContents) {
   const home = mkdtempSync(join(run, `${label}-home-`)), dataRoot = mkdtempSync(join(run, `${label}-data-`));
   const config = defaultConfig({COMMON_MEMORY_HOME:home});
   config.dataRoot = dataRoot;
   config.remote = structuredClone(remote);
   config.disclosure.allowedProvenance = ['agent_observation','document_import'];
   writeFileSync(join(home, 'config.json'), JSON.stringify(config, null, 2), {mode:0o600,flag:'wx'});
+  writeFileSync(join(home, '.env'), privateContents, {mode:0o600,flag:'wx'});
   return {home,dataRoot,apiKeyEnv:remote.apiKeyEnv,env:{...env,COMMON_MEMORY_HOME:home}};
 }
 async function connect(fixture, capability) {
@@ -76,9 +77,11 @@ function queueSnapshot(fixture, RuntimeStore, markdownOutcome) {
   finally { store.close(); }
 }
 /** No second remote-option schema: validation remains owned by Common Memory config. */
-export async function runProviderSmoke({config, evidence, clearNoProxy = false}) {
+export async function runProviderSmoke({config, evidence, clearNoProxy = false, configHome}) {
   if (!['live','fixture'].includes(evidence)) throw new Error('Select live or fixture evidence');
-  const {defaultConfig,validateConfig} = await import('../dist/config/config.js');
+  const {defaultConfig,validateConfig,resolveApiKey,envFilePath} = await import('../dist/config/config.js');
+  const {readPrivateEnv,privateAssignment} = await import('../dist/config/private-env.js');
+  const {PRIVATE_NETWORK_KEYS} = await import('../dist/memory-manager/network/route.js');
   const {RuntimeStore} = await import('../dist/v2/runtime.js');
   const {prepareDocumentImport,documentImportOutcome} = await import('../dist/v2/document-import.js');
   const {describeConfiguredNetwork} = await import('../dist/config/runtime.js');
@@ -87,10 +90,17 @@ export async function runProviderSmoke({config, evidence, clearNoProxy = false})
   const contract = {schemaName:'memory_maintenance_v2',schemaSha256:digest(JSON.stringify(maintenanceSchema)),promptSha256:digest(readFileSync(new URL('../dist/v2/memory-maintainer.md',import.meta.url)))};
   const remote = validateConfig(config).remote;
   if (!remote.proxy) throw new Error('Smoke requires an explicit remote.proxy mode');
-  if (!process.env[remote.apiKeyEnv]?.trim()) throw new Error('Configured API key must be present in process environment');
+  const sourceEnv = {...process.env,...(configHome ? {COMMON_MEMORY_HOME:configHome} : {})};
+  const privateEnv = readPrivateEnv(envFilePath(sourceEnv));
+  const key = resolveApiKey(config,sourceEnv);
+  const networkNames = [remote.proxy.mode === 'custom' ? remote.proxy.urlEnv : undefined,remote.caFileEnv]
+    .filter(name=>PRIVATE_NETWORK_KEYS.includes(name) && privateEnv[name]);
+  const privateContents = [privateAssignment(remote.apiKeyEnv,key),...new Set(networkNames.filter(name=>name!==remote.apiKeyEnv).map(name=>privateAssignment(name,privateEnv[name])))].join('\n')+'\n';
   const env = {...process.env,...(clearNoProxy ? {no_proxy:'',NO_PROXY:''} : {})};
+  delete env[remote.apiKeyEnv];
   const before = snapshot(config,evidence), run = mkdtempSync(join(tmpdir(),'cm-provider-smoke-'));
-  const fixture = isolated(run,'init',remote,env,defaultConfig);
+  const fixture = isolated(run,'init',remote,env,defaultConfig,privateContents);
+  const credentialHomes = [fixture.home];
   const api = remote.api ?? 'responses';
   const report = {reportVersion:1,contract,scenario:'init-markdown-retention-v1',evidence,startedAt:new Date().toISOString(),node:process.versions.node,platform:process.platform,
     endpoint:`${remote.baseUrl}/${api === 'responses' ? 'responses' : 'chat/completions'}`,model:remote.model,api,apiKeyEnv:remote.apiKeyEnv,
@@ -117,7 +127,8 @@ export async function runProviderSmoke({config, evidence, clearNoProxy = false})
     report.initQueue = queueSnapshot(fixture,RuntimeStore);
     step = 'markdown';
     // If Init failed, leave its durable retry untouched and test Markdown in a second fresh store.
-    const markdownFixture = report.init.state === 'processed' ? fixture : isolated(run,'markdown',remote,env,defaultConfig);
+    const markdownFixture = report.init.state === 'processed' ? fixture : isolated(run,'markdown',remote,env,defaultConfig,privateContents);
+    credentialHomes.push(markdownFixture.home);
     report.markdownHome = markdownFixture.home; report.markdownDataRoot = markdownFixture.dataRoot;
     const file = join(run,'fixture.md');
     writeFileSync(file,'# Synthetic imported notes\n\nI use Fedora Silverblue on my main workstation and fish as my everyday shell. When helping me with terminal commands, provide fish-compatible syntax and account for the immutable base system.\n',{mode:0o600,flag:'wx'});
@@ -135,6 +146,7 @@ export async function runProviderSmoke({config, evidence, clearNoProxy = false})
       await new Promise(resolve=>setTimeout(resolve,Math.max(0,job.retryAt-Date.now())+20));
     } while (true);
     step = 'restart-read';
+    for (const home of new Set(credentialHomes)) rmSync(join(home,'.env'),{force:true});
     for (const [name, target] of [['initRead',fixture],['markdownRead',markdownFixture]]) {
       const read = await connect(target,'read');
       try {
@@ -145,6 +157,7 @@ export async function runProviderSmoke({config, evidence, clearNoProxy = false})
     }
   } catch (error) { report.failedStep = step; report.failure = {code:'SMOKE_STEP_FAILED',diagnostic:sanitizeDiagnostic(error?.diagnostic)}; }
   finally {
+    for (const home of new Set(credentialHomes)) rmSync(join(home,'.env'),{force:true});
     report.after = snapshot(config,evidence); report.formalMemoryUnchanged = JSON.stringify(report.before) === JSON.stringify(report.after);
     report.checks = retentionChecks(report);
     report.passed = Object.values(report.checks).every(Boolean);
@@ -186,12 +199,12 @@ export function parseSmokeArgs(args) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   if(process.argv.length === 3 && process.argv[2] === '--help') {
-    console.log('node scripts/smoke-provider.mjs --config <config.json> --live|--fixture [--clear-no-proxy]\nUses remote settings only; fresh synthetic home/dataRoot; secrets from process env; requires npm run build.');
+    console.log('node scripts/smoke-provider.mjs --config <config.json> --live|--fixture [--clear-no-proxy]\nUses remote settings and the adjacent TUI-configured private .env; fresh synthetic home/dataRoot; requires npm run build.');
   } else {
     try {
       const {path,...options}=parseSmokeArgs(process.argv.slice(2));
       const config=JSON.parse(readFileSync(path,'utf8'));
-      const report=await runProviderSmoke({config,...options});console.log(JSON.stringify(report,null,2));process.exitCode=report.passed ? 0 : 1;
-    } catch { console.error('Smoke setup failed; check the config schema, explicit network mode, environment key and built artifacts.');process.exitCode=2; }
+      const report=await runProviderSmoke({config,configHome:dirname(resolve(path)),...options});console.log(JSON.stringify(report,null,2));process.exitCode=report.passed ? 0 : 1;
+    } catch { console.error('Smoke setup failed; check the config schema, explicit network mode, TUI-configured private .env and built artifacts.');process.exitCode=2; }
   }
 }

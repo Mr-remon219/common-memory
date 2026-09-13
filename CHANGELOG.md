@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.9 — 2026-09-13
+
+- Use only the TUI-configured private `.env` for model credentials across CLI, MCP, Pi and detached Writers, including legacy configs. Remove host-environment key precedence, external-key selection and the SDK `loadLocalEnv` export; never export private settings into the host environment. Existing installations relying on shell keys must configure their key in the TUI and restart clients.
+- Stop durable automatic retries for permanent provider authentication, configuration and protocol errors; retain the failed input for explicit retry. Preserve bounded backoff for transient network failures, Core decision retries and resumable host cancellation.
+- Cover private-key selection/rotation, missing-key refusal, one-attempt 401 failure, explicit import recovery and HTTP 200 mid-body disconnect recovery with fake-provider regressions. Provider smoke uses private credentials and removes its temporary credential files before keyless read verification.
+
 ## 0.3.8 — 2026-09-12
 
 - Add explicit, default-off AI understanding import selection to the TUI for local Codex / Desktop Work. Register a separate init-only MCP with host approval; commit any newly confirmed `agent_observation` disclosure permission atomically with installation. Preserve read-only defaults, provenance and Core write authority.

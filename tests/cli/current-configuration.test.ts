@@ -60,11 +60,11 @@ it('describes invalid proxy state without exposing its value, and ignores unrela
   expect(output).not.toContain('host-only-key'); expect(output).not.toContain('invalid-secret-proxy-value');
 });
 
-it('shows safe configured legacy values and makes terminal controls in model names inert', () => {
-  const current = config(); delete current.remote.proxy; delete current.sessionCache;
+it('ignores host credentials for legacy configs and makes terminal controls in model names inert', () => {
+  const current = config(); delete current.remote.proxy; delete current.remote.apiKeySource; delete current.sessionCache;
   current.remote.model = 'model\u001b[2J'; vi.stubEnv('CM_VIEW_TEST_KEY', 'environment-api-key');
   const output = currentConfiguration(current);
-  expect(output).toContain('Provider: OpenAI'); expect(output).toContain('API: responses'); expect(output).toContain('API Key: configured (not tested)');
+  expect(output).toContain('Provider: OpenAI'); expect(output).toContain('API: responses'); expect(output).toContain('API Key: missing');
   expect(output).toContain('Network: legacy → host (legacy_host)'); expect(output).toContain('Model: model\\u001b[2J');
   expect(output).not.toContain('\u001b'); expect(output).not.toContain('environment-api-key');
 });

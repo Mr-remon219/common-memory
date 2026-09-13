@@ -18,7 +18,8 @@ no-op，冲突拒绝。一个交互必须含实际已交付用户表达；候选
 不受 legacy 六条/字节/idle/flush 触发；退出将 open 标为 incomplete 并封尾。
 关闭屏障由 sessions.closing 与该 session 全部观察的持久状态共同构成。
 complete 要求 closing、全部处理成功且不存在 incomplete 回合；dead/quarantined
-或未完成尾轮保留 incomplete。空尾不制造证据。status 命令列出各 session 汇总，
+或未完成尾轮保留 incomplete。模型服务的永久认证、配置和协议错误不自动重复请求，首个失败即 dead，保留输入供显式 retry；瞬时网络错误仍按退避和次数上限处理。宿主取消保留可恢复工作，Core 决策校验失败仍可重新生成决定。
+空尾不制造证据。status 命令列出各 session 汇总，
 不打印正文；显式 retry 后状态可重新计算，不存容易失真的成功标志。
 
 Writer 的 `conversation_turns` 保留整轮消息关系。当前用户表达仍各自获得 ev 引用；

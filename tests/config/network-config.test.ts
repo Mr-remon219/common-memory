@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { afterEach, expect, it, vi } from 'vitest';
-import { defaultConfig, validateConfig, saveConfig, loadConfig, loadLocalEnv, saveNetworkSecret } from '../../src/config/config.js';
+import { defaultConfig, validateConfig, saveConfig, loadConfig, saveNetworkSecret, saveApiKeyToEnvFile, resolveApiKey } from '../../src/config/config.js';
 import { readPrivateEnv } from '../../src/config/private-env.js';
 import { createConfiguredMemoryModel, createConfiguredWriter, describeConfiguredNetwork } from '../../src/config/runtime.js';
 import { PRIVATE_PROXY_KEY, PRIVATE_CA_KEY, networkSecret } from '../../src/memory-manager/network/route.js';
@@ -20,7 +20,7 @@ it('new installs use direct while old schemaVersion 2 retains absence until expl
   for(const remote of [{...old.remote,caFileEnv:'BAD-NAME'},{...old.remote,proxy:{mode:'env',urlEnv:'BAD'}},{...old.remote,proxy:{mode:'custom',urlEnv:'P',arbitrary:true}}]) expect(()=>validateConfig({...old,remote})).toThrow();
   delete old.remote.proxy;old.remote.caFileEnv=PRIVATE_CA_KEY;expect(()=>validateConfig(old)).toThrow('explicit network mode');
 });
-it('new private network values never enter process.env, including through a stale legacy loader', async () => {
+it('private network values and credentials never enter process.env', async () => {
   const home=root(),path=join(home,'.env');
   vi.stubEnv(PRIVATE_PROXY_KEY,undefined);vi.stubEnv(PRIVATE_CA_KEY,undefined);vi.stubEnv('common_memory_proxy_url',undefined);vi.stubEnv('common_memory_ca_file',undefined);vi.stubEnv('CM_LOCAL_KEY',undefined);vi.stubEnv('COMMON_MEMORY_HOME',home);
   saveNetworkSecret(PRIVATE_PROXY_KEY,'http://name:private-password@127.0.0.1:8888',path);
@@ -30,19 +30,27 @@ it('new private network values never enter process.env, including through a stal
   const model=createConfiguredMemoryModel(config);await model.close();
   expect(process.env.CM_LOCAL_KEY).toBeUndefined();expect(process.env[PRIVATE_PROXY_KEY]).toBeUndefined();expect(process.env[PRIVATE_CA_KEY]).toBeUndefined();
   expect(readPrivateEnv(path)[PRIVATE_CA_KEY]).toBe('C:\\Users\\Example\\company.pem');
-  loadLocalEnv(path);expect(process.env.CM_LOCAL_KEY).toBe('synthetic-local-key');expect(process.env[PRIVATE_PROXY_KEY]).toBeUndefined();expect(process.env[PRIVATE_CA_KEY]).toBeUndefined();
   expect(process.env.common_memory_proxy_url).toBeUndefined();expect(process.env.common_memory_ca_file).toBeUndefined();
   expect(networkSecret('OTHER_PROXY',{}, {OTHER_PROXY:'private'})).toBeUndefined();
   expect(networkSecret(PRIVATE_PROXY_KEY,{[PRIVATE_PROXY_KEY]:''},{[PRIVATE_PROXY_KEY]:'private'})).toBe('');
 });
-it('process API key overrides private key locally; an explicit empty key remains missing', async () => {
+it.each(['unrelated-host-key', '', undefined])('old configs use private credentials regardless of inherited key %s', async inherited => {
   const home=root();writeFileSync(join(home,'.env'),'CM_LOCAL_KEY=private-key');
-  const config=defaultConfig({COMMON_MEMORY_HOME:home});config.remote.model='fake';config.remote.apiKeyEnv='CM_LOCAL_KEY';
+  const config=defaultConfig({COMMON_MEMORY_HOME:home});config.remote.model='fake';config.remote.apiKeyEnv='CM_LOCAL_KEY';delete config.remote.apiKeySource;
+  const env={COMMON_MEMORY_HOME:home,CM_LOCAL_KEY:inherited};
   let authorization: unknown;
-  const model=createConfiguredMemoryModel(config,{COMMON_MEMORY_HOME:home,CM_LOCAL_KEY:'process-key'},{fetch:async(_url,init)=>{authorization=(init?.headers as Record<string,string>).authorization;return new Response('{}',{status:401});}});
-  try { await model.analyze({projection:{},schema:{},prompt:'test'},{requestId:'r',deadlineMs:1000}); } catch { /* expected API authentication failure */ } finally { await model.close(); }
-  expect(authorization).toBe('Bearer process-key');
-  expect(()=>createConfiguredMemoryModel(config,{COMMON_MEMORY_HOME:home,CM_LOCAL_KEY:''})).toThrow('is not set');
+  const model=createConfiguredMemoryModel(config,env,{fetch:async(_url,init)=>{authorization=(init?.headers as Record<string,string>).authorization;return new Response('{}',{status:401});}});
+  try { await expect(model.analyze({projection:{},schema:{},prompt:'test'},{requestId:'r',deadlineMs:1000})).rejects.toMatchObject({code:'AUTHENTICATION'}); } finally { await model.close(); }
+  expect(authorization).toBe('Bearer private-key');expect(resolveApiKey(config,env)).toBe('private-key');
+});
+it.each([undefined, '', 'CM_LOCAL_KEY=  '])('missing or empty private credentials never fall back to a host key (%s)', body => {
+  const home=root();if(body!==undefined)writeFileSync(join(home,'.env'),body);
+  vi.stubEnv('COMMON_MEMORY_HOME',home);vi.stubEnv('CM_LOCAL_KEY','host-only-key');
+  const config=defaultConfig();config.remote.model='fake';config.remote.apiKeyEnv='CM_LOCAL_KEY';delete config.remote.apiKeySource;
+  expect(()=>createConfiguredMemoryModel(config)).toThrow('configure it in the Common Memory TUI');
+  expect(()=>createConfiguredWriter(config)).toThrow('configure it in the Common Memory TUI');
+  expect(()=>resolveApiKey(config)).toThrow('configure it in the Common Memory TUI');
+  expect(existsSync(config.dataRoot)).toBe(false);
 });
 it('explicit setup credentials cannot be replaced by an inherited provider key', async () => {
   const home=root();writeFileSync(join(home,'.env'),'CM_LOCAL_KEY=entered-private-key');
@@ -55,15 +63,33 @@ it('explicit setup credentials cannot be replaced by an inherited provider key',
   expect(()=>validateConfig({...config,remote:{...config.remote,apiKeySource:'unknown'}})).toThrow('API key source');
   expect(()=>validateConfig({...config,remote:{...config.remote,preset:'unknown'}})).toThrow('provider preset');
 });
+it('configured Writer uses only private credentials and stops 401 retries until explicit recovery', async () => {
+  const home=root();vi.stubEnv('COMMON_MEMORY_HOME',home);vi.stubEnv('OPENAI_API_KEY','host-key-must-be-ignored');
+  saveApiKeyToEnvFile('OPENAI_API_KEY','private-key');const headers: unknown[]=[];
+  const server=createServer((req,res)=>{headers.push(req.headers.authorization);res.writeHead(401);res.end('{}');});
+  await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const config=defaultConfig();config.remote.model='fake';delete config.remote.apiKeySource;config.remote.baseUrl=`http://127.0.0.1:${(server.address() as {port:number}).port}`;
+  let writer: ReturnType<typeof createConfiguredWriter>|undefined;
+  try {
+    writer=createConfiguredWriter(config);writer.store.enqueue({sessionId:'s',entryId:'e',source:'interactive',scope:'global',text:'Synthetic preference',observedAt:new Date().toISOString()});
+    expect(await writer.run({force:true})).toMatchObject({outcome:'failed',reason:'AUTHENTICATION'});
+    expect(writer.store.status().jobs[0]).toMatchObject({state:'dead',attempts:1});
+    expect(await writer.run({force:true})).toEqual({outcome:'idle'});expect(headers).toEqual(['Bearer private-key']);
+    const id=writer.store.status().jobs[0]!.id;await writer.close();
+    saveApiKeyToEnvFile('OPENAI_API_KEY','rotated-private-key');writer=createConfiguredWriter(config);
+    writer.store.retry(id);await writer.run({force:true});expect(headers).toEqual(['Bearer private-key','Bearer rotated-private-key']);
+    expect(process.env.OPENAI_API_KEY).toBe('host-key-must-be-ignored');
+  } finally {await writer?.close();server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}
+});
 it('status is local, redacted and does not create absent homes or data roots', () => {
   const home=join(root(),'missing'),config=defaultConfig({COMMON_MEMORY_HOME:home});config.remote.model='fake';
   config.remote.proxy={mode:'env'};expect(describeConfiguredNetwork(config,{COMMON_MEMORY_HOME:home,ALL_PROXY:'http://name:password@proxy.invalid'})).toEqual({mode:'env',route:'proxy',reason:'all_proxy',protocol:'http'});
   expect(existsSync(home)).toBe(false);
 });
-it('legacy factory preserves host env-dispatcher routing after old private NO_PROXY loading', async () => {
+it('legacy factory preserves host routing without exporting private .env entries', async () => {
   const origin=createServer((_q,r)=>r.end('direct')),proxy=createServer((_q,r)=>r.end('proxy'));
   await new Promise<void>(resolve=>origin.listen(0,'127.0.0.1',resolve));await new Promise<void>(resolve=>proxy.listen(0,'127.0.0.1',resolve));
-  const home=root();writeFileSync(join(home,'.env'),'NO_PROXY=127.0.0.1\nCM_LEGACY_KEY=synthetic\nCOMMON_MEMORY_PROXY_URL=http://secret:password@p\n');
+  const home=root();writeFileSync(join(home,'.env'),'NO_PROXY=unrelated-private-value\nCM_LEGACY_KEY=synthetic\nCOMMON_MEMORY_PROXY_URL=http://secret:password@p\n');
   const endpoint=`http://127.0.0.1:${(origin.address() as {port:number}).port}`;
   const source=new URL('../../src/config/runtime.ts',import.meta.url).href;
   // --import expects a module URL; a Windows drive path is parsed as an unsupported scheme.
@@ -75,14 +101,14 @@ it('legacy factory preserves host env-dispatcher routing after old private NO_PR
   const code=`${hostSetup} import {createConfiguredMemoryModel} from ${JSON.stringify(source)}; import {defaultConfig} from ${JSON.stringify(new URL('../../src/config/config.ts',import.meta.url).href)}; const config=defaultConfig(); config.remote.model='fake';config.remote.apiKeyEnv='CM_LEGACY_KEY';delete config.remote.proxy;config.remote.baseUrl=${JSON.stringify(endpoint)}; const model=createConfiguredMemoryModel(config); console.log(JSON.stringify({body:await (await fetch(config.remote.baseUrl)).text(),reserved:process.env.COMMON_MEMORY_PROXY_URL===undefined})); await model.close(); ${nativeProxy ? '' : 'await hostProxy.close();'}`;
   try {
     const result=await new Promise<string>((resolve,reject)=>{
-      const child=spawn(process.execPath,[...(nativeProxy ? ['--use-env-proxy'] : []),'--import',loader,'--input-type=module','-e',code],{env:{COMMON_MEMORY_HOME:home,HTTP_PROXY:`http://127.0.0.1:${(proxy.address() as {port:number}).port}`},stdio:['ignore','pipe','pipe']});
+      const child=spawn(process.execPath,[...(nativeProxy ? ['--use-env-proxy'] : []),'--import',loader,'--input-type=module','-e',code],{env:{COMMON_MEMORY_HOME:home,NO_PROXY:'127.0.0.1',HTTP_PROXY:`http://127.0.0.1:${(proxy.address() as {port:number}).port}`},stdio:['ignore','pipe','pipe']});
       let output='',stderr='';child.stdout.on('data',b=>output+=b);child.stderr.on('data',b=>stderr+=b);child.on('error',reject);child.on('close',(status,signal)=>status===0?resolve(output):reject(new Error(`legacy child exit ${status}, signal ${signal ?? 'none'}\n${stderr}`)));
     });
     expect(JSON.parse(result)).toEqual({body:'direct',reserved:true});
   } finally { origin.closeAllConnections();proxy.closeAllConnections();await Promise.all([new Promise<void>(resolve=>origin.close(()=>resolve())),new Promise<void>(resolve=>proxy.close(()=>resolve()))]); }
 });
 it('configured Writer close aborts active work before closing SQLite and blocks later runs', async () => {
-  const home=root();vi.stubEnv('COMMON_MEMORY_HOME',home);vi.stubEnv('CM_CLOSE_KEY','synthetic');
+  const home=root();vi.stubEnv('COMMON_MEMORY_HOME',home);saveApiKeyToEnvFile('CM_CLOSE_KEY','synthetic');
   const config=defaultConfig({COMMON_MEMORY_HOME:home});config.remote.model='fake';config.remote.apiKeyEnv='CM_CLOSE_KEY';delete config.remote.proxy;
   const started=Promise.withResolvers<void>();
   vi.stubGlobal('fetch',async(_url:unknown,init:RequestInit)=>{started.resolve();return new Promise((_resolve,reject)=>init.signal!.addEventListener('abort',()=>reject(new Error('cancelled')),{once:true}));});
@@ -96,17 +122,18 @@ it('configured Writer close aborts active work before closing SQLite and blocks 
 it('new default reaches a synthetic origin despite hostile ambient routing', async () => {
   let hits=0;const origin=createServer((_q,r)=>{hits++;r.writeHead(401);r.end('{}');});
   await new Promise<void>(resolve=>origin.listen(0,'127.0.0.1',resolve));
-  const config=defaultConfig({COMMON_MEMORY_HOME:root()});config.remote.model='fake';config.remote.baseUrl=`http://127.0.0.1:${(origin.address() as {port:number}).port}`;
+  const home=root();saveApiKeyToEnvFile('OPENAI_API_KEY','synthetic',join(home,'.env'));
+  const config=defaultConfig({COMMON_MEMORY_HOME:home});config.remote.model='fake';config.remote.baseUrl=`http://127.0.0.1:${(origin.address() as {port:number}).port}`;
   const hostile=vi.fn(()=>{throw new Error('host global fetch used');});vi.stubGlobal('fetch',hostile);
   let model:ReturnType<typeof createConfiguredMemoryModel>|undefined;
   try {
-    model=createConfiguredMemoryModel(config,{OPENAI_API_KEY:'synthetic',HTTP_PROXY:'bad-secret',NO_PROXY:'private.invalid/8'});
+    model=createConfiguredMemoryModel(config,{COMMON_MEMORY_HOME:home,HTTP_PROXY:'bad-secret',NO_PROXY:'private.invalid/8'});
     await expect(model.analyze({projection:{},schema:{},prompt:'synthetic'},{requestId:'r',deadlineMs:2000})).rejects.toMatchObject({code:'AUTHENTICATION'});
     expect(hits).toBe(1);expect(hostile).not.toHaveBeenCalled();
   } finally {await model?.close();origin.closeAllConnections();await new Promise<void>(resolve=>origin.close(()=>resolve()));}
 });
 it('Writer durably queues before malformed ambient network admission and freezes the failure', async () => {
-  const home=root();vi.stubEnv('COMMON_MEMORY_HOME',home);vi.stubEnv('OPENAI_API_KEY','synthetic');vi.stubEnv('HTTPS_PROXY','http://proxy.invalid');vi.stubEnv('https_proxy',undefined);vi.stubEnv('NO_PROXY','private.invalid/8');vi.stubEnv('no_proxy',undefined);
+  const home=root();vi.stubEnv('COMMON_MEMORY_HOME',home);saveApiKeyToEnvFile('OPENAI_API_KEY','synthetic');vi.stubEnv('HTTPS_PROXY','http://proxy.invalid');vi.stubEnv('https_proxy',undefined);vi.stubEnv('NO_PROXY','private.invalid/8');vi.stubEnv('no_proxy',undefined);
   const config=defaultConfig({COMMON_MEMORY_HOME:home});config.remote.model='fake';config.remote.proxy={mode:'env'};
   const writer=createConfiguredWriter(config);
   try {
@@ -119,12 +146,12 @@ it('Writer durably queues before malformed ambient network admission and freezes
   } finally {await writer.close();}
 });
 it('closing an unused Writer never initializes CA or transport', async () => {
-  const home=root();vi.stubEnv('COMMON_MEMORY_HOME',home);vi.stubEnv('OPENAI_API_KEY','synthetic');vi.stubEnv('CM_CA','/missing/synthetic-ca');
+  const home=root();vi.stubEnv('COMMON_MEMORY_HOME',home);saveApiKeyToEnvFile('OPENAI_API_KEY','synthetic');vi.stubEnv('CM_CA','/missing/synthetic-ca');
   const config=defaultConfig({COMMON_MEMORY_HOME:home});config.remote.model='fake';config.remote.caFileEnv='CM_CA';
   const writer=createConfiguredWriter(config);await writer.close();expect(()=>writer.store.status()).toThrow();
 });
 it.each(['env','custom'] as const)('deferred %s transport honors literal CIDRs and never drops explicit proxy routing',async mode=>{
- const home=root();vi.stubEnv('COMMON_MEMORY_HOME',home);vi.stubEnv('OPENAI_API_KEY','synthetic');vi.stubEnv('http_proxy',undefined);vi.stubEnv('no_proxy',undefined);
+ const home=root();vi.stubEnv('COMMON_MEMORY_HOME',home);saveApiKeyToEnvFile('OPENAI_API_KEY','synthetic');vi.stubEnv('http_proxy',undefined);vi.stubEnv('no_proxy',undefined);
  let originHits=0,proxyHits=0;
  const origin=createServer((_q,r)=>{originHits++;r.writeHead(401);r.end('{}');}),proxy=createServer((_q,r)=>{proxyHits++;r.writeHead(401);r.end('{}');});
  await new Promise<void>(resolve=>origin.listen(0,'127.0.0.1',resolve));await new Promise<void>(resolve=>proxy.listen(0,'127.0.0.1',resolve));
@@ -143,7 +170,7 @@ it.each(['env','custom'] as const)('deferred %s transport honors literal CIDRs a
  } finally {origin.closeAllConnections();proxy.closeAllConnections();await Promise.all([new Promise<void>(resolve=>origin.close(()=>resolve())),new Promise<void>(resolve=>proxy.close(()=>resolve()))]);}
 });
 it('close during the first real lazy request aborts work and closes SQLite idempotently',async()=>{
- const home=root();vi.stubEnv('COMMON_MEMORY_HOME',home);vi.stubEnv('OPENAI_API_KEY','synthetic');
+ const home=root();vi.stubEnv('COMMON_MEMORY_HOME',home);saveApiKeyToEnvFile('OPENAI_API_KEY','synthetic');
  const reached=Promise.withResolvers<void>();const server=createServer(()=>reached.resolve());await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
  const config=defaultConfig({COMMON_MEMORY_HOME:home});config.remote.model='fake';config.remote.baseUrl=`http://127.0.0.1:${(server.address() as {port:number}).port}`;
  const writer=createConfiguredWriter(config);
@@ -151,7 +178,7 @@ it('close during the first real lazy request aborts work and closes SQLite idemp
  finally {await writer.close();server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}
 });
 it('legacy Writer captures its borrowed fetch at construction rather than first request',async()=>{
- const home=root();vi.stubEnv('COMMON_MEMORY_HOME',home);vi.stubEnv('OPENAI_API_KEY','synthetic');const original=vi.fn(async()=>new Response('{}',{status:401}));vi.stubGlobal('fetch',original);
+ const home=root();vi.stubEnv('COMMON_MEMORY_HOME',home);saveApiKeyToEnvFile('OPENAI_API_KEY','synthetic');const original=vi.fn(async()=>new Response('{}',{status:401}));vi.stubGlobal('fetch',original);
  const config=defaultConfig({COMMON_MEMORY_HOME:home});config.remote.model='fake';delete config.remote.proxy;
  const writer=createConfiguredWriter(config),replacement=vi.fn(async()=>new Response('{}',{status:401}));vi.stubGlobal('fetch',replacement);
  try{writer.store.enqueue({sessionId:'s',entryId:'e',source:'interactive',scope:'global',text:'Synthetic preference',observedAt:new Date().toISOString()});await writer.run({force:true});expect(original).toHaveBeenCalledOnce();expect(replacement).not.toHaveBeenCalled();}finally{await writer.close();}

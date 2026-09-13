@@ -21,7 +21,7 @@ export function currentConfiguration(config: CommonMemoryConfig): string {
     `Base URL: ${current.remote.baseUrl}`,
     `API: ${current.remote.api ?? 'responses'}`,
     `API Key: ${hasApiKey(current) ? 'configured (not tested)' : 'missing'}`,
-    `API Key source: ${current.remote.apiKeySource === 'private-env' ? 'private .env only' : 'environment, then private .env'}`,
+    'API Key source: private .env only (configured in TUI)',
     `Network: ${network}`,
     ...storagePathLines(current),
     '',

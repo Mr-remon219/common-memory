@@ -196,7 +196,24 @@ export class RuntimeStore {
   sources(target: string): number[] {return this.db.prepare("SELECT sourceId FROM associations WHERE target=? ORDER BY sourceId").all(target).map(row=>Number(row.sourceId));}
   /** Source kinds of linked observations; bodies may be pruned but provenance stays. */
   sourceKinds(ids: readonly number[]): string[] { return ids.map(id => { const row=this.db.prepare("SELECT source FROM observations WHERE id=?").get(id); return row ? String(row.source) : 'unknown'; }); }
-  fail(job: RuntimeJob, error: unknown, diagnostic: FailureDiagnostic = failureDiagnostic(error)): void {this.transaction(()=>{this.assertLease(job);const row=this.db.prepare("SELECT attempts FROM jobs WHERE id=?").get(job.id)!;const dead=Number(row.attempts)>=this.#options.maxAttempts;this.db.prepare("UPDATE jobs SET state=?,available=?,issue=?,diagnostic=? WHERE id=?").run(dead?"dead":"retry",this.#now()+Math.min(600000,1000*2**(Number(row.attempts)-1)),failureCode(error),JSON.stringify(sanitizeDiagnostic(diagnostic)),job.id);if(dead)this.db.prepare("UPDATE observations SET state='dead' WHERE jobId=?").run(job.id);});}
+  fail(job: RuntimeJob, error: unknown, diagnostic: FailureDiagnostic = failureDiagnostic(error)): void {
+    this.transaction(() => {
+      this.assertLease(job);
+      const row = this.db.prepare('SELECT attempts FROM jobs WHERE id=?').get(job.id)!;
+      const code = failureCode(error), safe = sanitizeDiagnostic(diagnostic) ?? failureDiagnostic(error);
+      // Permanent remote failures (credentials, configuration, protocol) cannot be
+      // repaired by repeating the same request. Core rejection can still recover
+      // with a fresh decision; shutdown/cancellation must leave durable work resumable.
+      const remoteFailure = ['network_config', 'network', 'request', 'http', 'response_body', 'response_envelope', 'model_output'].includes(safe.stage);
+      const permanent = ['AUTHENTICATION', 'PROXY_AUTHENTICATION', 'CONFIGURATION'].includes(code)
+        || (remoteFailure && !safe.retryable && code !== 'CANCELLED');
+      const dead = permanent || Number(row.attempts) >= this.#options.maxAttempts;
+      this.db.prepare('UPDATE jobs SET state=?,available=?,issue=?,diagnostic=? WHERE id=?').run(
+        dead ? 'dead' : 'retry', this.#now() + Math.min(600000, 1000 * 2 ** (Number(row.attempts) - 1)), code, JSON.stringify(safe), job.id,
+      );
+      if (dead) this.db.prepare("UPDATE observations SET state='dead' WHERE jobId=?").run(job.id);
+    });
+  }
   quarantine(job: RuntimeJob, observationId: number, issue: string): void {this.transaction(()=>{this.assertLease(job);if(!job.observations.some(o=>o.id===observationId))throw new Error("Unknown observation");const group=sessionGroup(this,job.observations.find(o=>o.id===observationId)!);if(group)this.db.prepare("UPDATE observations SET state='quarantined',jobId=NULL,issue=? WHERE id IN (SELECT observationId FROM session_messages WHERE turn=?) AND state IN ('pending','claimed')").run(issue,group.turn);else this.db.prepare("UPDATE observations SET state='quarantined',jobId=NULL,issue=? WHERE id=?").run(issue,observationId);this.db.prepare("UPDATE observations SET state='pending',jobId=NULL WHERE jobId=?").run(job.id);this.db.prepare("UPDATE jobs SET state='done' WHERE id=?").run(job.id);});}
   retry(jobId: string): void {this.transaction(()=>{this.db.prepare("UPDATE observations SET state='pending',jobId=NULL WHERE jobId=? AND state='dead'").run(jobId);this.db.prepare("UPDATE jobs SET state='done' WHERE id=? AND state='dead'").run(jobId);});}
   pruneProcessed(retentionMs=7*86400000): void {this.db.prepare("UPDATE observations INDEXED BY observations_prunable SET text=NULL WHERE state='processed' AND text IS NOT NULL AND processedAt<?").run(this.#now()-retentionMs);}

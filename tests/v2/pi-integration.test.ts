@@ -65,7 +65,7 @@ it('image-only delivery uses an explicit quarantine marker without image bytes',
 // Reading: before_agent_start injects authorized canonical memory into the system prompt.
 import {mkdirSync,writeFileSync} from 'node:fs';
 import {createCommonMemoryPiExtension} from '../../src/pi-extension/index.js';
-import {defaultConfig} from '../../src/config/config.js';
+import {defaultConfig,saveApiKeyToEnvFile} from '../../src/config/config.js';
 import {ProjectRegistry} from '../../src/v2/registry.js';
 import type {ExtensionAPI} from '@earendil-works/pi-coding-agent';
 function host(dataRoot:string,allowedScopes:string[]){
@@ -153,7 +153,7 @@ it('actual Pi adapter order confirms ten turns and seals a quit tail without bra
 });
 it('actual Pi adapter durably captures under malformed network configuration',async()=>{
  const root=mkdtempSync(join(tmpdir(),'pi-network-'));const config=defaultConfig({COMMON_MEMORY_HOME:root});config.remote.model='fake';config.remote.proxy={mode:'env'};
- vi.stubEnv('COMMON_MEMORY_HOME',root);vi.stubEnv('OPENAI_API_KEY','synthetic');vi.stubEnv('HTTPS_PROXY','http://proxy.invalid');vi.stubEnv('https_proxy',undefined);vi.stubEnv('NO_PROXY','secret.invalid/8');vi.stubEnv('no_proxy',undefined);
+ vi.stubEnv('COMMON_MEMORY_HOME',root);saveApiKeyToEnvFile('OPENAI_API_KEY','synthetic');vi.stubEnv('HTTPS_PROXY','http://proxy.invalid');vi.stubEnv('https_proxy',undefined);vi.stubEnv('NO_PROXY','secret.invalid/8');vi.stubEnv('no_proxy',undefined);
  const diagnostic=vi.spyOn(process.stderr,'write').mockImplementation(()=>true);
  const h=captureHost(config);
  try {

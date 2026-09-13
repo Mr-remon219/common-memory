@@ -5,7 +5,7 @@ import type { RemoteTuning } from "../memory-manager/openai/options.js";
 import { NetworkClient } from "../memory-manager/network/client.js";
 import { resolveRoute, networkSecret, networkConfigError, type RouteDescription } from "../memory-manager/network/route.js";
 import { readPrivateEnv, localApiKey } from "./private-env.js";
-import { loadLocalEnv, validateConfig, envFilePath, type CommonMemoryConfig } from "./config.js";
+import { validateConfig, envFilePath, type CommonMemoryConfig } from "./config.js";
 
 export type ConfiguredModelOverrides = Omit<RemoteHttpOptions, "apiKey" | "model" | "baseUrl" | "disclosurePolicy" | "network"> & RemoteTuning;
 
@@ -15,9 +15,8 @@ export function createConfiguredMemoryModel(
   overrides: ConfiguredModelOverrides = {},
 ): OpenAIResponsesMemoryModel | OpenAIChatMemoryModel {
   config = validateConfig(config);
-  if (!config.remote.proxy && !config.remote.apiKeySource && env === process.env) loadLocalEnv();
-  const privateEnv = env === process.env || env.COMMON_MEMORY_HOME ? readPrivateEnv(envFilePath(env)) : {};
-  const apiKey = localApiKey(config.remote.apiKeyEnv, config.remote.apiKeySource === 'private-env' ? {} : env, privateEnv);
+  const privateEnv = readPrivateEnv(envFilePath(env));
+  const apiKey = localApiKey(config.remote.apiKeyEnv, privateEnv);
   const route = resolveRoute(config.remote.baseUrl,config.remote.proxy,env,privateEnv);
   const caFile = config.remote.caFileEnv === undefined ? undefined : networkSecret(config.remote.caFileEnv,env,privateEnv);
   if (config.remote.caFileEnv !== undefined && !caFile?.trim()) throw networkConfigError("ca_config_invalid");
@@ -42,11 +41,10 @@ import { Writer, type WriterOptions } from "../v2/writer.js";
  */
 export function createConfiguredWriter(config: CommonMemoryConfig): ConfiguredWriter {
   config = validateConfig(config);
-  if (!config.remote.proxy && !config.remote.apiKeySource) loadLocalEnv();
   // Capture owns SQLite before route/CA/dispatcher setup. Freeze all routing inputs now;
   // one lazy client (or controlled admission failure) is reused for every request.
   const env = {...process.env}, privateEnv = readPrivateEnv(envFilePath(env));
-  const apiKey = localApiKey(config.remote.apiKeyEnv, config.remote.apiKeySource === 'private-env' ? {} : env, privateEnv);
+  const apiKey = localApiKey(config.remote.apiKeyEnv, privateEnv);
   const legacyFetch = config.remote.proxy ? undefined : globalThis.fetch;
   let network: NetworkClient | undefined, initializationError: unknown, attempted = false;
   const deferredFetch: typeof fetch = async (input, init) => {

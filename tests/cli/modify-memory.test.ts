@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { defaultConfig, type CommonMemoryConfig } from '../../src/config/config.js';
+import { defaultConfig, saveApiKeyToEnvFile, type CommonMemoryConfig } from '../../src/config/config.js';
 import { modifyMemory } from '../../src/cli/modify-memory.js';
 import { RuntimeStore } from '../../src/v2/runtime.js';
 import { ProjectRegistry } from '../../src/v2/registry.js';
@@ -19,7 +19,7 @@ let decide: (projection: Projection) => unknown;
 let seen: Projection[];
 beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), 'cm-modify-'));
-  vi.stubEnv('COMMON_MEMORY_HOME', home); vi.stubEnv('CM_MODIFY_KEY', 'synthetic-key');
+  vi.stubEnv('COMMON_MEMORY_HOME', home); saveApiKeyToEnvFile('CM_MODIFY_KEY', 'synthetic-key');
   seen = [];
   decide = projection => decision(projection, 'ignore');
   server = createServer(async (req, res) => {

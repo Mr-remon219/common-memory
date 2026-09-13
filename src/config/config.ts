@@ -12,7 +12,7 @@ import { normalizeOpenAICompatibleBaseUrl } from "../memory-manager/openai/opena
 
 import { validateRemoteTuning, type RemoteApi, type RemoteTuning } from "../memory-manager/openai/options.js";
 
-import { loadLegacyEnv, privateAssignment, readPrivateEnv } from "./private-env.js";
+import { localApiKey, privateAssignment, readPrivateEnv } from "./private-env.js";
 import { validateProxyConfig, validateCaEnv, PRIVATE_NETWORK_KEYS, type ProxyConfig } from "../memory-manager/network/route.js";
 
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/u;
@@ -31,6 +31,7 @@ export interface CommonMemoryConfig {
     baseUrl: string;
     model: string;
     apiKeyEnv: string;
+    /** Legacy configs may omit this marker; credentials still come only from the private .env. */
     apiKeySource?: 'private-env';
   };
   disclosure: RemoteDisclosurePolicy;
@@ -61,6 +62,7 @@ export function defaultConfig(env: NodeJS.ProcessEnv = process.env): CommonMemor
       model: "",
       proxy: {mode:"direct"},
       apiKeyEnv: "OPENAI_API_KEY",
+      apiKeySource: 'private-env',
     },
     sessionCache: {...SESSION_CACHE_DEFAULTS},
     writableScopes: ["global"],
@@ -102,7 +104,7 @@ export function apiKeyEnvContents(apiKeyEnv: string, apiKey: string, body: strin
   // dotenv is not JSON: JSON escaping changes backslashes and quoted credentials.
   let assignment: string;
   try { assignment = privateAssignment(name, value); }
-  catch { throw new TypeError('API key cannot be represented safely in a private .env; use an external environment variable instead'); }
+  catch { throw new TypeError('API key cannot be represented safely in a private .env; enter a supported key in the Common Memory TUI'); }
   const matcher = new RegExp(`^\\s*(?:export\\s+)?${escapeRegExp(name)}\\s*=`, "u");
   let replaced = false;
   const next = lines.filter((line, index) => index < lines.length - 1 || line !== "").map((line) => { if (!matcher.test(line)) return line; if (replaced) return null; replaced = true; return assignment; }).filter((line): line is string => line !== null);
@@ -110,15 +112,9 @@ export function apiKeyEnvContents(apiKeyEnv: string, apiKey: string, body: strin
   return `${next.join("\n")}\n`;
 }
 
-export function loadLocalEnv(path = envFilePath()): void {
-  loadLegacyEnv(path);
-}
-
+/** env selects COMMON_MEMORY_HOME only; inherited model credentials are never read. */
 export function resolveApiKey(config: CommonMemoryConfig, env: NodeJS.ProcessEnv = process.env): string {
-  const source = config.remote.apiKeySource === 'private-env' ? readPrivateEnv(envFilePath(env)) : env;
-  const value = source[config.remote.apiKeyEnv]?.trim();
-  if (!value) throw new TypeError(`API key environment variable ${config.remote.apiKeyEnv} is not set`);
-  return value;
+  return localApiKey(config.remote.apiKeyEnv, readPrivateEnv(envFilePath(env)));
 }
 
 export function validateConfig(value: unknown): CommonMemoryConfig {
@@ -155,7 +151,7 @@ export function validateConfig(value: unknown): CommonMemoryConfig {
     writableScopes: [...value.writableScopes] as string[],
     scheduler: { ...value.scheduler } as CommonMemoryConfig["scheduler"],
     dataRoot: resolve(value.dataRoot),
-    remote: { provider: "openai-compatible", baseUrl, model, apiKeyEnv, ...(apiKeySource === undefined ? {} : {apiKeySource}), ...(preset === undefined ? {} : {preset: preset as ProviderId}), ...(value.remote.api === undefined ? {} : {api}), ...tuning, ...(proxy === undefined ? {} : {proxy}), ...(caFileEnv === undefined ? {} : {caFileEnv}) },
+    remote: { provider: "openai-compatible", baseUrl, model, apiKeyEnv, apiKeySource: 'private-env', ...(preset === undefined ? {} : {preset: preset as ProviderId}), ...(value.remote.api === undefined ? {} : {api}), ...tuning, ...(proxy === undefined ? {} : {proxy}), ...(caFileEnv === undefined ? {} : {caFileEnv}) },
     disclosure: {
       enabled: true,
       allowedScopes: [...disclosure.allowedScopes],

@@ -27,11 +27,12 @@ function fixture(baseUrl: string, provenance: string[] = ['user_explicit', 'docu
   config.scheduler.turnThreshold = turnThreshold;
   config.disclosure.allowedProvenance = provenance as typeof config.disclosure.allowedProvenance;
   writeFileSync(join(home, 'config.json'), JSON.stringify(config));
-  const env = { ...process.env, COMMON_MEMORY_HOME: home, CM_TEST_KEY: 'synthetic-key' } as Record<string, string>;
+  writeFileSync(join(home, '.env'), 'CM_TEST_KEY="synthetic-key"\n', {mode:0o600});
+  const env = { ...process.env, COMMON_MEMORY_HOME: home } as Record<string, string>;
   return { home, config, env };
 }
 /** Scripted maintainer: retains each document part as an attributed Section; optionally fails a chosen part once. */
-async function provider(options: { failPart?: number; chat?: boolean } = {}) {
+async function provider(options: { failPart?: number; chat?: boolean; permanent?: boolean } = {}) {
   const seen: { source_kind: string; part: number | undefined }[][] = []; let failed = false;
   const server = createServer(async (req, res) => {
     let body = ''; for await (const chunk of req) body += chunk;
@@ -39,8 +40,16 @@ async function provider(options: { failPart?: number; chat?: boolean } = {}) {
     const projection = JSON.parse(options.chat ? wire.messages[1].content : wire.input[1].content[0].text);
     const observations = projection.observations as { ref: string; text: string; source_kind: string; import?: { file_name: string; declared_author: string; part: { index: number; count: number }; heading_path: string[] } }[];
     seen.push(observations.map(o => ({ source_kind: o.source_kind, part: o.import?.part.index })));
-    // 400 is not retried by the adapter, so the Writer job itself fails once and enters retry.
-    if (options.failPart !== undefined && !failed && observations.some(o => o.import?.part.index === options.failPart)) { failed = true; res.statusCode = 400; res.end('{}'); return; }
+    if (options.failPart !== undefined && !failed && observations.some(o => o.import?.part.index === options.failPart)) {
+      failed = true;
+      if (options.permanent) { res.writeHead(401); res.end('{}'); }
+      else {
+        // Real mid-body disconnection: the adapter reports a transient failure,
+        // then the durable queue retries without losing the already imported parts.
+        res.writeHead(200); res.write('{"incomplete":'); setTimeout(()=>res.destroy(),20);
+      }
+      return;
+    }
     const decisions = observations.filter(o => o.source_kind === 'document_import').map(o => ({ kind: 'retain', admission: 'remember', lifetime: 'until_changed', applicability: 'global', confidence: 0.6, evidence: [o.ref], reason: 'scripted',
       // Section bodies may not contain un-fenced H1/H2, so the scripted body quotes the part in a fence.
       operations: [{ op: 'put_section', target: 'profile', section: null, title: `Imported ${o.import!.file_name} part ${o.import!.part.index} (${o.text.length} chars)`, body: `Imported from ${o.import!.file_name} (${o.import!.declared_author}) on ${projection.now.slice(0, 10)}, under ${JSON.stringify(o.import!.heading_path)}:\n\n\`\`\`text\n${o.text.trim().slice(0, 80)}\n\`\`\`\n` }] }));
@@ -134,6 +143,18 @@ it('a multi-part import reports partial failure honestly and resumes on re-impor
   const store = new RuntimeStore(config.dataRoot); try { expect(store.pending()).toHaveLength(1); } finally { store.close(); }
 }, 40000);
 
+it('401 stops an import without losing it; duplicate import waits for explicit retry', async () => {
+  const {url,seen}=await provider({failPart:1,permanent:true});const {env,home,config}=fixture(url);
+  const file=join(home,'auth.md');writeFileSync(file,'# Synthetic\n\nPrefer concise replies.\n');
+  const first=await cli(['import',file],env);expect(first.code).toBe(1);expect(first.stdout).toContain('"state": "dead"');
+  const store=new RuntimeStore(config.dataRoot);let jobId:string;
+  try {const job=store.status().jobs[0]!;expect(job).toMatchObject({state:'dead',attempts:1,issue:'AUTHENTICATION'});jobId=job.id;}
+  finally {store.close();}
+  expect((await cli(['import',file],env)).code).toBe(1);expect(seen).toHaveLength(1);
+  expect((await cli(['retry',jobId!],env)).code).toBe(0);
+  expect((await cli(['import',file],env)).code).toBe(0);expect(seen).toHaveLength(2);
+},30000);
+
 it('mcp-config pins node, CLI entry, configuration directory and dataRoot; --wsl bridges through wsl.exe into a fixed distribution and user', async () => {
   const { env, config, home } = fixture('http://127.0.0.1:1/v1');
   const native = await cli(['mcp-config'], env);
@@ -170,7 +191,7 @@ it('flush exits 1 for failure, backoff, claimed or dead work and 0 only after co
  expect((await cli(['import',file,'--no-wait'],env)).code).toBe(0);
  const failed=await cli(['flush'],env);expect(failed.code,failed.stderr).toBe(1);expect(failed.stdout).toContain('"outcome":"failed"');
  let store=new RuntimeStore(config.dataRoot);
- try{expect(store.status().jobs[0]).toMatchObject({diagnostic:{stage:'http',httpStatus:400}});store.db.prepare("UPDATE jobs SET available=? WHERE state='retry'").run(Date.now()+600000);}finally{store.close();}
+ try{expect(store.status().jobs[0]).toMatchObject({diagnostic:{stage:'response_body',httpStatus:200,reason:'network_error'}});store.db.prepare("UPDATE jobs SET available=? WHERE state='retry'").run(Date.now()+600000);}finally{store.close();}
  const backoff=await cli(['flush'],env);expect(backoff.code).toBe(1);expect(backoff.stdout).toContain('"outcome":"idle"');
  store=new RuntimeStore(config.dataRoot);let jobId='';
  try{store.db.prepare("UPDATE jobs SET available=0 WHERE state='retry'").run();const job=store.claim({force:true})!;jobId=job.id;}finally{store.close();}

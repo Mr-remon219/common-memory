@@ -45,9 +45,12 @@ receives an idempotent, transactional nullable diagnostic column when opened.
 
 Current Configuration displays the full configuration without revealing secrets;
 advanced fields in `remote` remain technical `config.json` options for editing.
-The wizard requests a key explicitly and records `apiKeySource: "private-env"`
-with a generated credential name, preventing inherited provider keys from replacing it.
-Absent that marker, legacy configurations keep process-environment key precedence.
+Model API keys are configured only in the TUI and read only from its private `.env`.
+The wizard records `apiKeySource: "private-env"` with a generated credential name.
+Old configurations without that marker use the same private-only rule; inherited
+provider keys are ignored, even when the private key is missing or empty. Configure
+such installations in the TUI, then restart active clients. Keys are never imported
+from the shell, and there is no external-environment credential option.
 The wizard preserves unrelated configuration and clears incompatible thinking/effort
 options when choosing a model. The following fields remain available for technical configuration:
 
@@ -55,7 +58,7 @@ options when choosing a model. The following fields remain available for technic
 | --- | --- |
 | `api` | `responses` (default) or `chat_completions`; no runtime fallback |
 | `preset` | Optional provider identity recorded by setup; `custom` keeps an explicit custom identity |
-| `apiKeySource` | Optional `private-env`; new setup reads its private key only; omission preserves legacy precedence |
+| `apiKeySource` | Compatibility marker, normalized to `private-env`; omission does not enable another credential source |
 | `maxOutputTokens` | Integer 1–16384; default 4096; `max_output_tokens` for Responses, `max_tokens` for Chat |
 | `reasoningEffort` | Responses only: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; sent as `reasoning.effort` |
 | `thinking` | Chat only: `{ "type": "enabled" }` or `{ "type": "disabled" }` |
@@ -130,13 +133,14 @@ network clients.
 New installations default to `remote.proxy: {"mode":"direct"}` (recommended normal system route). Existing schemaVersion 2
 files retain field absence on load/save and ordinary API configuration, so upgrading
 alone does not change their route. Legacy borrows the fetch captured at client creation
-and preserves historic private environment loading, except for newly reserved network
-secret names. It is a compatibility exception to network isolation.
+without loading private `.env` entries into the host environment. The legacy route
+is a compatibility exception to network isolation, not a credential fallback.
 
-In the new modes, proxy variables and API keys are read locally with **process env
-before Common Memory's private `.env`**. For each standard proxy variable group, the
+Model API keys always come from the private `.env`. Network proxy selection remains
+independent: proxy variables use **process env before Common Memory's private `.env`**.
+For each standard proxy variable group, the
 process source wins before checking lowercase/uppercase spelling; lowercase wins
-within that source. A present empty value clears that group. No new-mode loading
+within that source. A present empty value clears that group. No private loading
 changes `process.env`, global fetch, global dispatchers or global certificate trust.
 The route and connections are fixed for the client's lifetime, including retries;
 restart active MCP/Pi clients after changing configuration. Configured Writers defer route,
@@ -152,7 +156,7 @@ credentials are supported. Optional extra CA certificates are referenced through
 The CA file is limited to 1 MiB and is added to Node's default trust only for this
 client. Certificate and hostname verification stay enabled. Other custom `urlEnv`
 or `caFileEnv` names are read from external process env only. Reserved private network
-keys are never exported by the legacy loader either.
+keys are never exported into the host environment.
 
 NO_PROXY (or custom `noProxy`) accepts comma/whitespace-separated hostnames,
 `example.com`, `.example.com` and `*.example.com` (apex plus subdomains), exact IPv4/
@@ -165,8 +169,9 @@ Prefixes are 0–32 (IPv4) or 0–128 (IPv6); CIDRs cannot have brackets, ports 
 Malformed CIDRs, URL/path entries and arbitrary wildcards fail with redacted
 `no_proxy_invalid`; none are silently ignored. `0.0.0.0/0` is not global `*`. A failing selected proxy never falls back to direct.
 
-Windows/macOS GUI processes can inherit different environment variables from terminals;
-configure the private settings when that is the desired common source. WSL uses its
+Windows/macOS GUI processes can inherit different proxy variables from terminals;
+configure private network settings when a shared route is needed. Model credentials
+always use the same private `.env`, regardless of the host environment. WSL uses its
 own visible environment and reachable proxy address; Common Memory does not guess a
 Windows host address or copy Windows proxy settings. OS VPN/TUN routing still applies
 in every mode. PAC/WPAD, SOCKS4 and NTLM/Kerberos are unsupported.
@@ -408,8 +413,12 @@ of tool calls. Memory content is data, never agent instructions.
   waiting for a job retry). Diagnostics follow the current linked job and survive
   restart; processed observations hide earlier failures, while local job history
   retains them. Provider messages/bodies are never persisted as diagnostics.
-  `retryable` describes the adapter's advice and does not change Runtime scheduling. `processed` with an
-  empty `retainedIn` means the Core kept nothing (ignored or reorganized only).
+  Permanent remote failures (`retryable: false`, including HTTP 401/403) stop automatic
+  queue retries and become `dead` on the first failure; repair the configuration, restart
+  active clients and explicitly retry the job. Transient failures retain bounded backoff.
+  Host cancellation remains resumable, and Core decision rejection can still retry with
+  a fresh decision. `processed` with an empty `retainedIn` means the Core kept nothing
+  (ignored or reorganized only).
 
 ### What Init means
 
@@ -861,7 +870,7 @@ npm pack --dry-run
 npm run build && node scripts/demo-init-synthetic.mjs [--home <new-or-empty-dir>] [--markdown notes.md]
 # 构建后验证 smoke 自身的 Responses / Chat 流程（本地 fake Provider，无需 Key）：
 npm run test:provider-smoke
-# 真实 Provider：使用现有格式的配置副本，仅复制 remote；Key 来自进程环境：
+# 真实 Provider：使用现有配置；Key 来自配置文件同目录、经 TUI 配置的私有 .env：
 node scripts/smoke-provider.mjs --config /path/to/provider-config.json --live
 ```
 

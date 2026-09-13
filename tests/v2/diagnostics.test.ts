@@ -28,9 +28,8 @@ it('persists only controlled diagnostics, reloads on restart, and hides history 
   const raw=String(s.db.prepare('SELECT diagnostic FROM jobs').get()!.diagnostic);expect(JSON.parse(raw)).toEqual(diagnostic);
   expect(raw).not.toContain('private');expect(raw).not.toContain('secret');
   stores.splice(stores.indexOf(s),1);s.close();s=open(p,()=>now);
-  expect(s.observationOutcome('s','e')).toMatchObject({jobId:first.id,jobState:'retry',attempts:1,retryAt:1100,diagnostic,issue:'INVALID_RESPONSE'});
-  now=1100;const next=s.claim({force:true})!;s.fail(next,new MemoryModelError('INVALID_RESPONSE','private text',false,diagnostic));
-  expect(s.observationOutcome('s','e')).toMatchObject({state:'dead',attempts:2,retryAt:null,diagnostic});
+  expect(s.observationOutcome('s','e')).toMatchObject({jobId:first.id,state:'dead',jobState:'dead',attempts:1,retryAt:null,diagnostic,issue:'INVALID_RESPONSE'});
+  now=1100;expect(s.claim({force:true})).toBeNull();
   s.retry(first.id);expect(s.observationOutcome('s','e')).toMatchObject({state:'pending',jobId:null,diagnostic:null,issue:null,attempts:0});
   expect(s.status().jobs[0]).toMatchObject({state:'done',diagnostic});
   const last=s.claim({force:true})!;s.fail(last,new Error('TIMEOUT'));now+=1000;
@@ -50,7 +49,7 @@ it.each(['relay','init'] as const)('MCP %s query follows only the current linked
   else ingress.init({importId:'e',contextId:'global',sourceLabel:'fixture',basis:'unknown',understanding:'private data'});
   const job=s.claim({force:true})!;s.fail(job,new MemoryModelError('INVALID_RESPONSE','private error',false,diagnostic));
   const result=mode==='relay'?ingress.status({submissionId:'e'}):ingress.initStatus('e');
-  expect(result).toMatchObject({diagnostic,jobId:job.id,jobState:'retry',attempts:1});expect(JSON.stringify(result)).not.toContain('private');
+  expect(result).toMatchObject({diagnostic,jobId:job.id,jobState:'dead',attempts:1,retryAt:null});expect(JSON.stringify(result)).not.toContain('private');
 });
 it('Markdown part outcome includes current job diagnostics',()=>{
   const s=open(root());
@@ -58,7 +57,7 @@ it('Markdown part outcome includes current job diagnostics',()=>{
   const p={importId:'md-test',contentDigest:'test',fileName:'fixture.md',sourceLabel:'fixture',declaredAuthor:'unknown' as const,bytes:1,chunks:[{entryId:'part-1',text:'x',headingPath:[],bytes:1}]};
   return import('../../src/v2/document-import.js').then(({admitDocumentImport})=>{
     admitDocumentImport(s,p,'global');const job=s.claim({force:true})!;s.fail(job,new MemoryModelError('INVALID_RESPONSE','private',false,diagnostic));
-    expect(documentImportOutcome(s,'md-test','global',1)).toMatchObject({complete:false,parts:[{part:1,jobId:job.id,diagnostic,attempts:1,retryAt:1100}]});
+    expect(documentImportOutcome(s,'md-test','global',1)).toMatchObject({complete:false,parts:[{part:1,jobId:job.id,diagnostic,attempts:1,state:'dead',retryAt:null}]});
   });
 });
 

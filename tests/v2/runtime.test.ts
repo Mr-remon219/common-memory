@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, symlinkSync, writeFileSync, linkSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RuntimeStore } from "../../src/v2/runtime.js";
+import { MemoryModelError } from '../../src/memory-manager/contracts/errors.js';
 
 const roots:string[]=[];const stores:RuntimeStore[]=[];
 function setup(options:ConstructorParameters<typeof RuntimeStore>[1]={}) {const root=mkdtempSync(join(tmpdir(),"cm-v2-"));roots.push(root);const store=new RuntimeStore(root,options);stores.push(store);return {store,root};}
@@ -36,6 +37,36 @@ describe("durable V2 runtime",()=>{
   });
   it("retries with backoff, dead letters and explicitly requeues",()=>{
     let now=0;const {store}=setup({now:()=>now,maxAttempts:2});add(store,1);let job=store.claim({force:true})!;store.fail(job,new Error("do not persist raw text"));expect(store.claim({force:true})).toBeNull();now=1000;job=store.claim({force:true})!;store.fail(job,new Error());expect(store.status().jobs[0]!.state).toBe("dead");store.retry(job.id);expect(store.claim({force:true})).not.toBeNull();
+  });
+  it.each([401,403])('HTTP %s dies after one attempt, preserves evidence, deduplicates and allows explicit recovery', status => {
+    let now=0;const {store}=setup({now:()=>now});const observation=add(store,1,'Synthetic retained evidence');
+    const job=store.claim({force:true})!;
+    store.fail(job,new MemoryModelError('AUTHENTICATION','Do not persist provider secrets',false,{stage:'http',reason:'authentication',retryable:false,httpStatus:status}));
+    expect(store.status().jobs[0]).toMatchObject({state:'dead',attempts:1,issue:'AUTHENTICATION',retryAt:null,diagnostic:{httpStatus:status,retryable:false}});
+    expect(add(store,1,'Synthetic retained evidence')).toMatchObject({id:observation.id,state:'dead'});
+    now=600000;expect(store.claim({force:true})).toBeNull();
+    expect(store.db.prepare('SELECT text FROM observations WHERE id=?').get(observation.id)!.text).toBe('Synthetic retained evidence');
+    expect(JSON.stringify(store.status())).not.toContain('provider secrets');
+    store.retry(job.id);const recovered=store.claim({force:true})!;expect(recovered.observations[0]!.id).toBe(observation.id);store.finish(recovered);
+    expect(store.observationOutcome('s','1')!.state).toBe('processed');
+  });
+  it.each(['AUTHENTICATION','PROXY_AUTHENTICATION','CONFIGURATION'] as const)('permanent %s is terminal even without a provider diagnostic', code => {
+    const {store}=setup();add(store,1);store.fail(store.claim({force:true})!,new MemoryModelError(code,'synthetic',false));
+    expect(store.status().jobs[0]).toMatchObject({state:'dead',attempts:1,issue:code});
+  });
+  it.each([429,503])('transient HTTP %s retains bounded queue backoff', status => {
+    let now=0;const {store}=setup({now:()=>now,maxAttempts:2});add(store,1);
+    const failure=new MemoryModelError(status===429?'RATE_LIMITED':'UNAVAILABLE','synthetic',true,{stage:'http',reason:status===429?'rate_limited':'provider_unavailable',retryable:true,httpStatus:status});
+    store.fail(store.claim({force:true})!,failure);expect(store.status().jobs[0]).toMatchObject({state:'retry',attempts:1,retryAt:1000});
+    expect(store.claim({force:true})).toBeNull();now=1000;store.fail(store.claim({force:true})!,failure);
+    expect(store.status().jobs[0]).toMatchObject({state:'dead',attempts:2});
+  });
+  it('provider protocol errors stop but host cancellation leaves work resumable', () => {
+    let now=0;const {store}=setup({now:()=>now});add(store,1);const job=store.claim({force:true})!;
+    store.fail(job,new MemoryModelError('INVALID_RESPONSE','synthetic',false,{stage:'response_envelope',reason:'invalid_json',retryable:false,httpStatus:200}));
+    expect(store.status().jobs[0]!.state).toBe('dead');store.retry(job.id);
+    const resumed=store.claim({force:true})!;store.fail(resumed,new Error('CANCELLED'));expect(store.status().jobs.at(-1)!.state).toBe('retry');
+    now=1000;expect(store.claim({force:true})).not.toBeNull();
   });
   it("trim preserves whole turns and quarantining doesn't mark them processed",()=>{
     const {store}=setup();add(store,1);add(store,2);let job=store.claim({force:true})!;job=store.trim(job,1);expect(store.pending()).toHaveLength(1);store.quarantine(job,job.observations[0]!.id,"oversized");expect(store.pending()).toHaveLength(1);expect(store.status().observations).toContainEqual({state:"quarantined",count:1});

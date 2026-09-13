@@ -35,7 +35,7 @@ describe("local configuration", () => {
     const root = mkdtempSync(join(tmpdir(), 'common-memory-env-')); temporary.push(root);
     const envPath = join(root, '.env');
     saveApiKeyToEnvFile('KEY', value, envPath);
-    expect(localApiKey('KEY', {}, readPrivateEnv(envPath))).toBe(value);
+    expect(localApiKey('KEY', readPrivateEnv(envPath))).toBe(value);
   });
 
   it('replaces exported and duplicate assignments so an old credential cannot override a rotation', () => {
@@ -60,9 +60,8 @@ describe("local configuration", () => {
     const config = defaultConfig({ COMMON_MEMORY_HOME: root }); config.remote.model = "m"; config.remote.apiKeyEnv = "CM_PROV_TEST_KEY";
     config.disclosure.allowedProvenance = ["agent_observation", "document_import"];
     vi.stubEnv("COMMON_MEMORY_HOME",root); config.remote.proxy={mode:"direct"};
-    process.env.CM_PROV_TEST_KEY = "synthetic-key";
-    try { const writer = createConfiguredWriter(config); await writer.close(); } // previously threw: Delivered user evidence is not authorized for disclosure
-    finally { delete process.env.CM_PROV_TEST_KEY; }
+    saveApiKeyToEnvFile('CM_PROV_TEST_KEY', 'synthetic-key');
+    const writer = createConfiguredWriter(config); await writer.close(); // previously threw: Delivered user evidence is not authorized for disclosure
     // The Pi extension refuses to start capture, so no user turn is even staged, and reading is unaffected.
     const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
     const pi = { on: (name: string, fn: (event: unknown, ctx: unknown) => unknown) => { handlers.set(name, fn); }, registerCommand: () => {}, registerTool: () => {} } as unknown as ExtensionAPI;
@@ -81,12 +80,14 @@ it('roundtrips old configurations and routes the explicit API through the model 
   const {createConfiguredMemoryModel} = await import('../../src/config/runtime.js');
   const {OpenAIResponsesMemoryModel} = await import('../../src/memory-manager/openai/openai-responses-adapter.js');
   const {OpenAIChatMemoryModel} = await import('../../src/memory-manager/openai/openai-chat-adapter.js');
+  const home=mkdtempSync(join(tmpdir(),'common-memory-api-'));temporary.push(home);vi.stubEnv('COMMON_MEMORY_HOME',home);
+  saveApiKeyToEnvFile('OPENAI_API_KEY','test');
   const config=defaultConfig();config.remote.model='fake';
   expect(validateConfig(config).remote).toEqual(config.remote);
-  const responses = createConfiguredMemoryModel(config,{OPENAI_API_KEY:'test'}); expect(responses).toBeInstanceOf(OpenAIResponsesMemoryModel); await responses.close();
+  const responses = createConfiguredMemoryModel(config); expect(responses).toBeInstanceOf(OpenAIResponsesMemoryModel); await responses.close();
   config.remote={...config.remote,api:'chat_completions',maxOutputTokens:16384,thinking:{type:'disabled'}};
   expect(validateConfig(config).remote).toEqual(config.remote);
-  const chat = createConfiguredMemoryModel(config,{OPENAI_API_KEY:'test'}); expect(chat).toBeInstanceOf(OpenAIChatMemoryModel); await chat.close();
+  const chat = createConfiguredMemoryModel(config); expect(chat).toBeInstanceOf(OpenAIChatMemoryModel); await chat.close();
   for (const extra of [{api:'auto'},{api:'responses',thinking:{type:'disabled'}},{api:'chat_completions',reasoningEffort:'none'},{api:'chat_completions',thinking:{type:'disabled'},enableThinking:false},{maxOutputTokens:16385},{maxOutputTokens:0},{maxOutputTokens:1.5},{thinking:{type:'disabled',budget:50}},{enableThinking:'false'},{arbitraryBody:{}},{api:null}]) {
     expect(()=>validateConfig({...config,remote:{provider:'openai-compatible',baseUrl:'https://provider.test/v1',model:'m',apiKeyEnv:'KEY',...extra}})).toThrow();
   }

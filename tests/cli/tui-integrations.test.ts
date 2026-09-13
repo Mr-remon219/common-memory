@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { defaultConfig, loadConfig, saveConfig } from '../../src/config/config.js';
+import { defaultConfig, loadConfig, saveConfig, saveApiKeyToEnvFile } from '../../src/config/config.js';
 import { installIntegrations, integrationHealth, readInstallationState } from '../../src/cli/integrations.js';
 import { scanIntegrationTargets, type IntegrationId, type IntegrationTarget } from '../../src/cli/integration-targets.js';
 import { chooseIntegrations, integrationsScreen } from '../../src/cli/tui-integrations.js';
@@ -18,7 +18,7 @@ let home: string;
 function target(id: IntegrationId): IntegrationTarget { return { id, name: id, root: join(home, id === 'pi' ? 'pi' : 'codex'), mode: 'posix', hooks: id !== 'chatgpt' }; }
 beforeEach(() => {
   vi.resetAllMocks(); stubInstalledBuild();
-  home = realpathSync(mkdtempSync(join(tmpdir(), 'cm-tui-integrations-'))); vi.stubEnv('COMMON_MEMORY_HOME', home); vi.stubEnv('OPENAI_API_KEY', 'synthetic');
+  home = realpathSync(mkdtempSync(join(tmpdir(), 'cm-tui-integrations-'))); vi.stubEnv('COMMON_MEMORY_HOME', home); saveApiKeyToEnvFile('OPENAI_API_KEY', 'synthetic');
   const config = defaultConfig(); config.remote.model = 'synthetic-model'; saveConfig(config);
   vi.mocked(scanIntegrationTargets).mockReturnValue([]);
   vi.mocked(clack.multiselect).mockResolvedValue([]);
@@ -147,7 +147,7 @@ it('preserves existing init selection despite fresh discovery not carrying capab
   expect(clack.confirm).not.toHaveBeenCalled(); expect(readInstallationState()!.targets[0]!.init).toBe(true);
 });
 it('does not register an init process that cannot start without a model key', async () => {
-  vi.stubEnv('OPENAI_API_KEY', '');
+  rmSync(join(home, '.env')); vi.stubEnv('OPENAI_API_KEY', 'host-key-must-not-enable-import');
   vi.mocked(scanIntegrationTargets).mockReturnValue([target('codex')]);
   vi.mocked(clack.multiselect).mockResolvedValueOnce(['codex']).mockResolvedValueOnce(['codex']);
   await expect(integrationsScreen()).rejects.toThrow('memory_init 需要模型密钥');

@@ -324,10 +324,12 @@ it('updates only a confirmed key without displaying it', async () => {
   await expect(runCredentialsWizard(config)).rejects.toBeInstanceOf(UserCancelled);
   expect(readFileSync(envFilePath(), 'utf8')).not.toContain('replacement');
 });
-it('changes credential variables without altering stored secrets', async () => {
-  const config = fixture(); writeFileSync(envFilePath(), 'CM_TUI_TEST_KEY="old-secret"\n'); choices('env'); texts('EXTERNAL_MODEL_KEY'); vi.mocked(clack.confirm).mockResolvedValue(true);
+it('offers only private credential entry or back, never external environment selection', async () => {
+  const config = fixture(); writeFileSync(envFilePath(), 'CM_TUI_TEST_KEY="old-secret"\n'); choices('back');
   await runCredentialsWizard(config);
-  expect(loadConfig()!.remote.apiKeyEnv).toBe('EXTERNAL_MODEL_KEY'); expect(readFileSync(envFilePath(), 'utf8')).toBe('CM_TUI_TEST_KEY="old-secret"\n');
+  expect(vi.mocked(clack.select).mock.calls.at(-1)![0].options.map(option => option.value)).toEqual(['set', 'back']);
+  expect(loadConfig()).toEqual(config); expect(readFileSync(envFilePath(), 'utf8')).toBe('CM_TUI_TEST_KEY="old-secret"\n');
+  expect(clack.password).not.toHaveBeenCalled();
 });
 it.each([['scheduler', 'maxAttempts', '7'], ['sessionCache', 'contextTailTurns', '0'], ['disclosure', 'maxTotalBytes', '4096']] as const)('preserves sibling settings when changing %s', async (group, field, value) => {
   const config = fixture(); choices('limits', group, field); texts(value); vi.mocked(clack.confirm).mockResolvedValue(true);
