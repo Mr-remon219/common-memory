@@ -39,7 +39,7 @@ export async function modifyMemory(
   options.signal?.throwIfAborted();
   const writer = createConfiguredWriter(config);
   const controller = new AbortController();
-  const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(60_000), ...(options.signal ? [options.signal] : [])]);
+  const signal = AbortSignal.any([controller.signal, ...(options.signal ? [options.signal] : [])]);
   const cancel = () => controller.abort();
   process.on('SIGINT', cancel); process.on('SIGTERM', cancel);
   let admitted = false;
@@ -50,7 +50,7 @@ export async function modifyMemory(
     writer.store.requestFlush();
     for (;;) {
       const outcome = writer.store.observationOutcome(requestId, entryId)!;
-      if (signal.aborted || ['processed', 'dead', 'quarantined'].includes(outcome.state)) break;
+      if (signal.aborted || ['processed', 'dead', 'paused', 'quarantined'].includes(outcome.state)) break;
       const result = await writer.run({ force: true, signal });
       // An idle scheduler can mean an outstanding lease/backoff. Do not spin or claim success.
       if (!['committed', 'noop', 'ignored', 'quarantined'].includes(result.outcome)) break;

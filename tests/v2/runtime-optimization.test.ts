@@ -15,7 +15,7 @@ it('preserves embedded NUL bodies through deduplication, restart, retry and prio
  expect(add(store,'a',text).text).toBe(text);
  expect(store.pending()[0]!.text).toBe(text);
  const job=store.claim({force:true})!;expect(job.observations[0]!.text).toBe(text);
- store.fail(job,new Error('synthetic'));stores.splice(stores.indexOf(store),1);store.close();
+ store.fail(job,new Error('TIMEOUT'));stores.splice(stores.indexOf(store),1);store.close();
  now=1000;store=new RuntimeStore(roots.at(-1)!,{now:()=>now});stores.push(store);
  const retry=store.claim({force:true})!;expect(retry.observations[0]!.text).toBe(text);store.finish(retry);
  const next=add(store,'b','next');expect(store.context(next)[0]!.text).toBe(text);
@@ -34,25 +34,25 @@ it('uses complete input and delivery bodies for attribution, never a NUL-truncat
  store.delivered('duplicate',text,2);store.bind('duplicate',[{id:'one',text,timestamp:2}]);
  expect(store.db.prepare("SELECT source FROM observations WHERE sessionId='duplicate'").get()!.source).toBe('ambiguous');
 });
-it.each(['中文','😀','a\0b','\ud800','\udc00'])('counts persisted UTF-8 bytes without truncation: %j',text=>{
+it.each(['中文','😀','a\0b','\ud800','\udc00'])('keeps UTF-8 bodies complete when immediately scheduling a bounded batch: %j',text=>{
  const cap=Buffer.byteLength(text)+1,store=setup({byteThreshold:cap,turnThreshold:100,idleMs:100000,maxWaitMs:100000});
- add(store,'a',text);expect(store.claim({maxTurns:1})).toBeNull();add(store,'b','x','project:a');
+ add(store,'a',text);add(store,'b','x','project:a');
  const first=store.claim({maxTurns:1})!;expect(first.observations.map(o=>o.entryId)).toEqual(['a']);expect(Buffer.byteLength(first.observations[0]!.text!)).toBe(cap-1);
  store.finish(first);expect(store.pending().map(o=>o.entryId)).toEqual(['b']);
 });
-it('uses all pending scopes for count and consumes only the consecutive same-scope prefix',()=>{
+it('immediately consumes only the consecutive same-scope prefix',()=>{
  const store=setup({turnThreshold:3});add(store,'a','x');add(store,'b','x','project:p');add(store,'c','x');
  const first=store.claim({maxTurns:2})!;expect(first.observations.map(o=>o.entryId)).toEqual(['a']);store.finish(first);
- expect(store.claim({maxTurns:2})).toBeNull();store.requestFlush();const middle=store.claim({maxTurns:2})!;expect(middle.observations.map(o=>o.entryId)).toEqual(['b']);store.finish(middle);
+ const middle=store.claim({maxTurns:2})!;expect(middle.observations.map(o=>o.entryId)).toEqual(['b']);store.finish(middle);
  const last=store.claim({maxTurns:2})!;expect(last.observations.map(o=>o.entryId)).toEqual(['c']);store.finish(last);expect(store.claim()).toBeNull();
 });
-it('idle uses newest ID rather than maximum timestamp when the clock moves backwards',()=>{
+it('enqueue order does not follow a clock moving backwards',()=>{
  let now=1000;const store=setup({now:()=>now,turnThreshold:100,idleMs:100,maxWaitMs:10000});add(store,'first');now=0;add(store,'last');now=100;
  expect(store.claim()!.observations.map(o=>o.entryId)).toEqual(['first','last']);
 });
-it('oldest wait uses earliest ID rather than minimum timestamp',()=>{
+it('clock changes never add an artificial wait',()=>{
  let now=1000;const store=setup({now:()=>now,turnThreshold:100,idleMs:10000,maxWaitMs:100});add(store,'first');now=0;add(store,'last');now=100;
- expect(store.claim()).toBeNull();now=1100;expect(store.claim()!.observations).toHaveLength(2);
+ expect(store.claim()!.observations).toHaveLength(2);
 });
 it('accepts large explicit batch capacities and does not resize an already leased retry batch',()=>{
  let now=0;const store=setup({now:()=>now});add(store,'a');add(store,'b');const first=store.claim({force:true,maxTurns:Number.MAX_SAFE_INTEGER})!;

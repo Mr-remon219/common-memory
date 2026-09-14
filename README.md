@@ -13,7 +13,7 @@ Common Memory 将背景、偏好和项目上下文保存在本机 Markdown 中�
 - **不支持**：ChatGPT 普通 Chat、网页版或网页版 Plugins；没有 HTTP MCP 服务。
 - **不必常开管理界面**：完成接入后，日常直接使用助手。`common-memory` 是配置和管理入口，不是每次聊天前都要手动启动的服务。
 
-**当前版本：v0.4.1** · npm 包名：`common-memory-core` · 命令：`common-memory`。
+**当前版本：v0.4.2** · npm 包名：`common-memory-core` · 命令：`common-memory`。
 这是早期版本；测试通过不代表所有真实客户端交互或模型的记忆判断都已验证。
 
 ## 1. 安装
@@ -29,7 +29,7 @@ Common Memory 将背景、偏好和项目上下文保存在本机 Markdown 中�
 使用 npm 安装，或按[源码构建说明](docs/releasing.md#从-github-使用源码路径)运行。
 
 ```sh
-npm install -g common-memory-core@0.4.1
+npm install -g common-memory-core@0.4.2
 common-memory
 ```
 
@@ -93,10 +93,10 @@ Provider → Base URL → API Key → Model → Enter 保存
 
 ### 第四步：重启助手，确认实际接入
 
-**首次安装、升级，或修改模型、Key、网络后，都应退出并重新启动使用 Common Memory 的助手及其 MCP 进程。**
+**首次安装、升级代码或改变宿主接入后，应重载或重新启动相关助手及 MCP 进程。** 新运行时会在下一项维护任务开始前重读已保存的模型、Key、网络与限制；进行中的任务保持原快照，不会中途换模型。
 
 仅新建聊天、关闭管理 TUI 或对助手说“重试”，不保证旧后台进程退出。
-旧进程可能仍持有启动时的代码、Key 和网络配置，不能靠更新磁盘文件刷新。
+旧版本进程仍可能固定启动配置；更新磁盘文件不等于重载代码。请以 Upgrade / Repair Integrations 的实例证明为准；`unknown` 不代表已经更新。
 
 重启后，在支持的宿主中用 `/mcp` 或其工具管理页面确认接入。Pi 使用扩展提供的原生工具。
 可以让助手：
@@ -134,13 +134,13 @@ Provider → Base URL → API Key → Model → Enter 保存
 
 状态栏只显示简短进度，重要失败才通知；不向模型追加后台状态消息。页面中查看其他已授权项目不会把该项目内容自动注入当前 Agent；模型的 `memory_read` / `memory_status` 仍限 global 与当前项目。纯浏览不需要模型 Key，也不创建队列数据库。
 
-`/memory-refresh`、`/memory-flush` 继续保留。已接收/已处理都不等于已记住，最终请查看当前记忆。配置、模型或授权变化后仍应重启接入，避免旧维护进程继续使用启动配置。
+`/memory-refresh`、`/memory-flush` 继续保留。已接收/已处理都不等于已记住，最终请查看当前记忆。保存的维护设置在下一任务生效；宿主冻结记忆快照与接入 capability 的刷新是另一件事，需要显式刷新或重启相关宿主。
 
 ### 自动维护对话中的长期信息
 
-Pi / Codex / Desktop Work 的会话接入按 **每 10 次已完成交互**封批处理，正常真实退出时交接不足 10 次的尾批。
+Pi / Codex / Desktop Work 的会话接入在**每次已确认交付的交互完成后立即排队**，不再等待十轮、字节数或空闲阈值。立即排队不代表模型立即完成；租约、退避和同目标顺序仍然有效。
 异常杀进程或断电不保证正常退出事件已交付；已持久保存的队列仍保留。
-普通 Flush 不强制封批不足十轮的材料，状态会区分 buffered、待处理任务、宿主 inbox 和隔离。
+仍在流式输出或尚未确认完成的交互保持 buffered；Flush 不会伪造交互完成。状态区分 buffered、待处理任务、暂停、宿主 inbox 和隔离。
 坏宿主会话保留原输入与游标，不阻塞健康会话；可在 Processing Status 分页查看并按原恢复 ID 重试。
 
 **不是每句话都会立即写入，也不是保存完整聊天记录。** 模型会判断是否值得保留，助手和工具内容不能冒充你的声明。
@@ -206,17 +206,17 @@ common-memory import notes.md --author user
 2. 在原来安装 Common Memory 的环境中执行：
 
    ```sh
-   npm install -g common-memory-core@0.4.1
+   npm install -g common-memory-core@0.4.2
    common-memory --version
    ```
 
-3. 运行 `common-memory` 核对配置。若升级说明要求重新应用接入，或 Node/安装路径改变，在 **Agent Integration** 保留所需选择并重新应用。
-4. 重新启动助手和 MCP，确认工具可见，再检查失败任务是否需要显式重试。
+3. 运行 `common-memory` 核对配置。需要按新包路径重写**已受管** MCP / Hook / Pi wrapper 时，选择 **Upgrade / Repair Integrations**；它复用安装事务、不会接管手动配置，也不会终止任何宿主。页面区分“磁盘资源已更新”和“旧宿主已重载”。
+4. 重新启动助手和 MCP，确认工具可见，再检查失败任务是否需要显式重试。页面只会报告已注册实例的实际加载版本/启动路径；旧实例没有可证明身份时显示 `unknown`，不能从磁盘版本推断已重载。
 
 **v0.3.9 特别提醒**：不再使用宿主环境中的模型 Key。原来仅靠终端变量配置的用户，需要在 TUI 中保存有效 Key。
 多个版本不要同时写同一份存储。详细迁移要求见[发布说明](docs/releasing.md)。
 
-完整卸载入口为 **Model & Configuration → Uninstall Common Memory**，按界面确认接入和数据的处理方式。
+完整卸载入口为 **Model & Configuration → Uninstall Common Memory**，分别确认接入/程序、配置及私有凭据、Memory Data；默认移除客户端接入不删除数据，配置及凭据也可保留以便重装。
 单独执行 `npm uninstall -g common-memory-core` 只卸载程序，不会自动清除记忆或所有宿主注册。
 
 ## 更多文档与开发
@@ -286,7 +286,7 @@ common-memory network-test
 
 ### 测试通过了，助手还是用旧 Key、报旧错误或重复重试？
 
-先排除**旧进程没有退出**。运行中的 MCP/Writer 固定了启动时的配置和凭据；升级软件或保存新设置不会热更新它们。
+先排除**旧进程没有退出**。旧版本 MCP/Writer 可能固定启动配置。新运行时每项任务开始前重读保存设置，但更新软件仍不会替换已加载的代码；进行中的任务也不会中途换配置。
 
 1. 完全退出相关助手及其 MCP 后台进程；只新建聊天或关闭 TUI 不一定有效。
 2. 确认没有旧 `session-drain` 消费者仍在运行，再重新打开助手。
@@ -305,7 +305,8 @@ common-memory network-test
 | `duplicate: true` | 相同请求已提交，返回已有状态；不会自动复活失败任务 |
 | `pending` / `claimed` / `running` | 等待或处理中，不代表成功 |
 | `retry` | 等待自动退避重试，按 `retryAt` 查看时间 |
-| `dead` | 自动处理已停止，输入保留，需修复原因后显式重试 |
+| `paused` | 认证/配置、取消、轮次/上下文或恢复额度等条件暂停；输入与任务身份保留 |
+| `dead` | 不可自动恢复的失败；修复原因后由用户显式重试 |
 | `quarantined` | 材料被隔离，检查授权、敏感内容、容量或格式；不能靠普通重试绕过 |
 | `processed` | 已处理，但模型可能选择忽略；通过 `retainedIn` 和重新读取记忆核实留存 |
 
@@ -321,12 +322,12 @@ common-memory show --plain
 ```
 
 `retry` 重新排队，`flush` 处理可执行队列；它们不是删除数据或重新导入。
-v0.3.9 的永久服务错误（如 401/403）首次失败即停止自动重试；瞬时网络错误仍按退避和次数上限处理。
+认证/配置失败不会循环请求；修好保存配置或外部条件后，恢复同一任务也计入共享额度。初次执行之外最多五次自动恢复，覆盖 SDK/Agent/队列及重启恢复；SDK 自身不重试。显式重试保留任务 ID、累计计数和回执，不充值自动额度。任务没有整次 60 秒期限；默认请求头等待 30 秒、流无进展 120 秒，另保留模型轮次、取消和租约限制。
 任务处于 `running` 时显示的诊断可能来自之前一次失败，不一定是当前尝试的最终结果。
 
 ### 聊了几句却没有记忆，或者新记忆没有自动出现在当前对话里？
 
-- 自动会话维护通常在 10 次已完成交互后封批，正常退出再交接尾批；未完成的会话不会因 `flush` 就强行封批。
+- 自动会话维护在已交付交互完成后立即封批；未完成的会话不会因 `flush` 就强行封批。
 - 模型可能判断没有需要长期保留的内容，检查任务状态与 **Search / View Memory**。
 - 助手已有的自动注入快照不保证实时更新。用 `memory_read` 主动读取最新授权记忆；Codex/Work 的显式刷新机制见[会话说明](docs/session-integration.md)。
 - 异常退出后如有已持久保存但尚未处理的会话交接，可在修复配置后执行 `common-memory session-drain`，不要删除运行数据库。

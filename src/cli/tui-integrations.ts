@@ -5,6 +5,7 @@ import { scanIntegrationTargets, type IntegrationId, type IntegrationTarget } fr
 import { probeReadIntegration } from './integration-probe.js';
 import { recoverPendingInstallation } from './installation-files.js';
 import { checkConfigUnchanged, hasApiKey } from './tui-settings.js';
+import { currentRuntimeVersion, runtimeInstanceLines } from './runtime-instances.js';
 import { confirm, log, note, terminalText, unwrap, UserCancelled } from './tui-prompts.js';
 
 const clients: { id: IntegrationId; name: string; unavailable: string }[] = [
@@ -15,7 +16,9 @@ const clients: { id: IntegrationId; name: string; unavailable: string }[] = [
 
 export function integrationReadiness(config: CommonMemoryConfig): string {
   return [
-    `Node ${process.versions.node} · 配置目录：${configDirectory()}`,
+    `Common Memory ${currentRuntimeVersion()} · Node ${process.versions.node}`,
+    ...runtimeInstanceLines(),
+    `配置目录：${configDirectory()}`,
     `记忆存储：${config.dataRoot}`,
     `读取：不需要 API Key · ${config.disclosure.allowedScopes.join(', ')}`,
     `对话捕获：${config.disclosure.allowedProvenance.includes('user_explicit') ? '已授权' : '未授权'}`,
@@ -105,4 +108,35 @@ export async function integrationsScreen(): Promise<void> {
   const config = loadConfig();
   if (!config) throw new Error('请先完成模型设置。');
   await chooseIntegrations(config);
+}
+
+
+/** Re-render the owned resource graph with this package's launch paths. It never adopts unowned files. */
+export function repairManagedIntegrations(config: CommonMemoryConfig, options: { home?: string; env?: NodeJS.ProcessEnv } = {}): ReturnType<typeof reconcileIntegrations> {
+  const state = readInstallationState(options.home ?? configDirectory());
+  return reconcileIntegrations(state?.targets ?? [], config.dataRoot, { ...options, expectedState: state });
+}
+
+/** Upgrade/repair is deliberately a disk transaction, not a claim that a running host has reloaded. */
+export async function repairIntegrationsScreen(): Promise<void> {
+  const config = loadConfig();
+  if (!config) throw new Error('请先完成模型设置。');
+  const state = readInstallationState();
+  if (!state?.targets.length) {
+    note([...runtimeInstanceLines(), '没有由此安装器登记的资源可重应用；不会接管现有客户端配置。'].join('\n'), 'Upgrade / Repair Integrations');
+    return;
+  }
+  const changes = repairManagedIntegrations(config);
+  const current = readInstallationState()!;
+  const probes: string[] = [];
+  for (const target of current.targets.filter(target => target.id !== 'pi')) {
+    const probe = await probeReadIntegration(current, target);
+    probes.push(`${target.name}: ${probe.ok ? 'read MCP tools/list ready' : `read MCP ${probe.code}`}`);
+  }
+  note([
+    `磁盘受管资源已按 Common Memory ${currentRuntimeVersion()} 重应用（installed ${changes.installed.length}, retained ${changes.retained.length}）。`,
+    ...probes,
+    ...runtimeInstanceLines(),
+    '磁盘已更新不等于旧宿主/MCP/Pi 已重载；已登记实例会显示其实际加载版本，未登记旧实例只显示 unknown。此操作不会终止任何进程。',
+  ].join('\n'), 'Upgrade / Repair Integrations');
 }

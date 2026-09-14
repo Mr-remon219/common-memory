@@ -140,15 +140,21 @@ it.each(['legacy','session'] as const)('explicit input cap trims complete %s gro
  expect(w.store.status().observations).toEqual([{state:'processed',count:kind==='legacy'?2:4}]);
  if(kind==='session'){expect(contexts[1]).toContain('qualifier b');expect(contexts[1]).not.toContain('qualifier a');}
 });
-it.each(['legacy','session'] as const)('optional previous %s context is dropped before any current input is trimmed',async kind=>{
+it.each(['legacy','session'] as const)('optional previous %s context is dropped before any current source is trimmed',async kind=>{
  const seen:{count:number;context:string}[]=[];
  const w=writer(async(task,reads)=>{const r=readTask(task,reads);seen.push({count:(r.projection.observations as unknown[]).length,context:JSON.stringify(r.projection.context_only)});return ignore(task);},{maxRequestBytes:20000,allowedProvenance:['user_explicit','conversation_context']});
- let add:(id:string,text:string)=>void,end=()=>{};
- if(kind==='legacy')add=(id,text)=>{w.store.enqueue(input(text,id));};
- else {const ingress=new SessionIngress(w.store),key=ingress.open({client:'pi',processInstance:'p',sessionId:'prior-cap'});add=(id,text)=>{ingress.capture(key,{...input(text),id,turnId:id,role:'user'});ingress.settle(key,id);};end=()=>ingress.end(key);for(let i=0;i<9;i++)add('old-'+i,'prior');}
- add('last-old','old-marker'+'x'.repeat(15000));expect(await w.run({force:true})).toEqual({outcome:'ignored'});
- add('new-a','a'.repeat(5500));add('new-b','b'.repeat(5500));end();
- expect(await w.run({force:true})).toEqual({outcome:'ignored'});expect(seen.at(-1)).toEqual({count:2,context:'[]'});expect(w.store.pending()).toEqual([]);expect(w.store.status().observations.some(o=>o.state==='quarantined')).toBe(false);
+ if(kind==='legacy') {
+  w.store.enqueue(input('old-marker'+'x'.repeat(15000),'last-old'));expect(await w.run({force:true})).toEqual({outcome:'ignored'});
+  w.store.enqueue(input('a'.repeat(5500),'new-a'));w.store.enqueue(input('b'.repeat(5500),'new-b'));expect(await w.run({force:true})).toEqual({outcome:'ignored'});
+ } else {
+  const ingress=new SessionIngress(w.store),key=ingress.open({client:'pi',processInstance:'p',sessionId:'prior-cap'});
+  for(let i=0;i<9;i++){const id='old-'+i;ingress.capture(key,{...input('prior',id),id,turnId:id,role:'user'});ingress.settle(key,id);}
+  ingress.capture(key,{...input('old-marker'+'x'.repeat(15000),'last-old'),id:'last-old',turnId:'last-old',role:'user'});ingress.settle(key,'last-old');
+  for(let i=0;i<10;i++)expect(await w.run({force:true})).toEqual({outcome:'ignored'});
+  ingress.capture(key,{...input('a'.repeat(5500),'new-a'),id:'new-a',turnId:'new',role:'user'});ingress.capture(key,{...input('b'.repeat(5500),'new-b'),id:'new-b',turnId:'new',role:'user'});ingress.settle(key,'new');ingress.end(key);
+  expect(await w.run({force:true})).toEqual({outcome:'ignored'});
+ }
+ expect(seen.at(-1)).toEqual({count:2,context:'[]'});expect(w.store.pending()).toEqual([]);expect(w.store.status().observations.some(o=>o.state==='quarantined')).toBe(false);
 });
 it('shared ingest parser preserves inline backticks, blank lines, heading titles and scoped qualifiers',()=>{
  const text='\n\n# C#\n\n```js``` is inline, not a fence\n\n\nOnly on weekends: '+ 'x'.repeat(40000)+'\n\n## Tail\n\n> hypothetical\n';
@@ -167,8 +173,8 @@ it.each([undefined,null,17,'PRIVATE_RUNTIME_TRANSCRIPT'.repeat(1000),'A'.repeat(
  for(const mutate of [false,true]) {
   const w=writer(async(task,reads)=>{readTask(task,reads);return {...ignore(task),promptDigest:promptDigest as never,...(mutate?{body:{version:'memory_maintenance_v2',request_id:task.request_id,decisions:[{kind:'retain',admission:'remember',lifetime:'stable',confidence:1,applicability:'global',evidence:['ev_1'],reason:'x',operations:[{op:'put_section',target:'profile',section:null,title:'Test',body:'Synthetic.'}]}]}}:{})};});
   w.store.enqueue(input());expect(await w.run({force:true})).toEqual({outcome:'failed',reason:'INVALID_PROMPT_DIGEST'});
-  expect(w.store.status().jobs[0]).toMatchObject({state:'retry',issue:'INVALID_PROMPT_DIGEST',diagnostic:{stage:'core_validation',reason:'core_rejected'}});
-  expect(w.store.db.prepare('SELECT state,text FROM observations').get()).toEqual({state:'claimed',text:'x'});
+  expect(w.store.status().jobs[0]).toMatchObject({state:'dead',issue:'INVALID_PROMPT_DIGEST',diagnostic:{stage:'core_validation',reason:'core_rejected'}});
+  expect(w.store.db.prepare('SELECT state,text FROM observations').get()).toEqual({state:'dead',text:'x'});
   expect(w.store.db.prepare('SELECT COUNT(*) AS n FROM receipts').get()!.n).toBe(0);
   const {readdirSync}=await import('node:fs');expect(readdirSync(join(w.canonical.root,'runtime/receipts'))).toEqual([]);expect(w.canonical.snapshot().every(d=>!d.sections.length)).toBe(true);
  }

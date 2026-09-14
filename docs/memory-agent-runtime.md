@@ -62,7 +62,7 @@ kind 仅表示 section、paragraph、quote、code、list、table 等结构，绝
 
 snapshot 是 Core 取得的准确短期快照，Runtime 不重新打开文件。提交后 Core 仍执行原完整 snapshot CAS。工具闭包在尝试结束即失效，每次读取检查 signal 与 lease。
 
-Core 要求**当前材料全部读完**才允许任何决定，包括 ignore：用户正文、import gaps、当前轮已授权上下文和条件都算；拒绝披露的上下文明确 unavailable，历史尾上下文为可选且非证据。编辑任一 target 前必须完整读过其快照。没有 skip 或按部分 coverage 消费队列的路径。失败尝试的 coverage 不带入重试，部分读取不算成功。
+Core 要求**当前材料全部读完**才允许任何决定，包括 ignore：用户正文、import gaps、当前轮已授权上下文和条件都算；拒绝披露的上下文明确 unavailable，历史尾上下文为可选且非证据。编辑任一 target 前必须完整读过其快照。没有 skip 或按部分 coverage 消费队列的路径。同一 Agent 中经 Core 许可的恢复保留当前授权读取进度、推理和笔记；重启进程或重新领取任务必须建立新 grant 并重新完整读取，部分读取不算成功。
 
 ## Prompt / Context / Limits
 
@@ -75,8 +75,10 @@ System 只教维护行为、来源/条件的语义使用、工具工作流及 re
 - Context Window 来自精确匹配的固定 pi-ai 官方 catalog 与官方 endpoint；当前已验证匹配为 OpenAI Responses；选择时持久记录 catalog version/digest，不保存 Pi Model 内部结构。记录不替代 Runtime 独立核实能力。其他 endpoint、网关或未匹配模型显示 **Unknown/custom**，不从模型名或 `/models` 数量猜测。
 - 已知 window 的压力处理使用 pi-ai `estimateContextTokens`（provider usage + trailing estimate），20% 工程余量仅用于判断压力，不是新输出上限。只有同一 Agent 已保存工作草稿时才能淘汰旧的完整 model/tool groups；保留任务、草稿、source/block 引用和最近完整组。没有可保留的进度或仍放不下则明确失败。遵守 Pi 0.85.1 契约，`transformContext` 本身正常返回安全上下文；stream 边界用终止 error event 停止，不再调用 provider，随后返回原始 context 诊断。
 - Unknown/custom 不按虚构 window 或“六轮”阈值丢上下文；服务商溢出明确失败。分页并不保证任意大来源都能在有限 window/期限内完成，复杂跨页判断仍需评测。模型必须在需要精确措辞时重新读取支持材料，草稿不能替代 Core evidence。
-- 默认每次最多 **64 个模型轮次**，Advanced Settings 可设置 1–1024；Core 默认**整个尝试 60 秒**，不是每轮刷新期限。二者是工程安全界限，不是经过质量优化的参数。耗尽保留持久工作供重试，不标记成功。
-- pi-ai 处理每轮请求最多两次 HTTP 重试，等待最多 5 秒；Core 仍拥有 durable job 退避/次数/永久错误规则。取消、超时和失去租约由 Core 决定，晚返回不能落档。
+- 默认每次最多 **64 个模型轮次**，Advanced Settings 可设置 1–1024；**没有整项维护任务的墙钟期限**。保留默认 30 秒请求头等待、120 秒流无进展界限，以及取消和租约 fencing。耗尽保留持久工作，不标记成功。
+- Provider 明确禁用 SDK 私有重试。Core 持久记录初次执行之外最多五次自动恢复，Agent 修复、队列重领、崩溃和配置恢复共用额度。显式 retry 不重置身份或累计计数。
+- 工具/提案错误只回传固定错误码和有界 schema 路径/关键字，不回传原异常、实参值或未知属性名；Core 仍重新验证。分页句柄混用、漏读 target、误用 section 标题等可在同一 Agent 内申请有界修复。
+- 内置 skills 只发现名称/描述，经 `load_memory_skill` 精确选择并加载后供 Agent 使用；不扫描用户/项目目录，不执行脚本或 shell。skills 不授予任何 Core 权限。
 
 工作笔记、Agent transcript、reasoning、原始输出、provider error body 都不进入永久回执。usage 汇总所有模型轮次。没有统一 refusal 标记的 pi-ai 输出不会靠文本猜拒绝；无最终工具提交就是失败。
 
@@ -86,11 +88,11 @@ System 只教维护行为、来源/条件的语义使用、工具工作流及 re
 使用 `Writer({agent: MemoryAgentRuntime, ...})`，或原来的 `createConfiguredWriter(config)`。
 `createConfiguredMemoryAgent(config)` 提供 owned Runtime，使用后 `await close()`；普通 Writer 仍只借用 neutral port，不关闭借来的 Runtime。
 
-升级到 v0.4.0 前，停止所有旧 writer/MCP/drain 并备份整个 dataRoot 后再使用新源码，不能让新旧版本同时写同一数据库；不能通过删除 SQLite“迁移”。TUI 的 Provider → URL → Key → Model 流程和现有接入操作不变。连接测试改为真正的合成 inspect/read/submit 工具链，不读取或写入用户记忆。
+升级写端前，安排旧 writer/MCP/drain 停写并备份整个 dataRoot。当前协议迁移在备份落盘后事务化升级，并通过所有持久表的连接 capability trigger 拒绝旧写端；活跃旧租约或并发变化阻止迁移。不要混用新旧写端，更不能删除 SQLite“迁移”。详见[可靠性与恢复记录](reliability-refactor.md)。TUI 的 Provider → URL → Key → Model 流程和现有接入操作不变。连接测试改为真正的合成 inspect/read/submit 工具链，不读取或写入用户记忆。
 
 ## 验证边界
 
-测试先复用临时目录、分页读取和 scripted provider fixtures；淘汰旧独立 JSON-envelope decoder 测试，改测真实 Pi Agent + SSE/tools。重复十轮/退出尾批的 adapter 测试由更强的真实 Pi SDK 测试覆盖；来源伪装、授权、独立进程 drain、强杀后的回执恢复等独有测试保留。
+测试先复用临时目录、分页读取和 scripted provider fixtures；淘汰旧独立 JSON-envelope decoder 测试，改测真实 Pi Agent + SSE/tools。逐交互封批及退出交接由真实 Pi SDK 合成 provider 测试覆盖；来源伪装、授权、独立进程 drain、强杀后的回执恢复等独有测试保留。
 
 重点文件：`tests/v2/ingest.test.ts`、`tests/memory-agent-runtime/{agent,provider}.test.ts`、`tests/v2/{writer,writer-recovery,session}.test.ts` 以及 MCP/CLI configured-loop tests。运行 `node scripts/verify.mjs`，build 后 `npm run test:consumer`；脚本假 provider 可用 `npm run test:provider-smoke`。
 

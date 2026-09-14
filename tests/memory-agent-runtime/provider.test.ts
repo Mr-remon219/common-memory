@@ -40,17 +40,17 @@ it.each(['oversized','malformed','broken','stalled'])('keeps status on a %s HTTP
   const agent=new ProviderMemoryAgent({baseUrl:'https://provider.test',model:'fake',apiKey:'synthetic',maxRetries:0,fetch:async()=>new Response(body,{status:503})});
   const error=await probeMemoryAgent(agent,controller.signal).catch(e=>e);expect(error.diagnostic).toMatchObject({httpStatus:503,retryable:true,reason:'provider_unavailable'});
 });
-it('delegates exactly two 429 retries to Pi and never retries authentication',async()=>{
+it('never retries without a Core recovery permit, including 429 and authentication',async()=>{
   for(const status of [429,401]){
     const fetch=vi.fn(async()=>new Response('{}',{status,headers:{'retry-after':'0'}}));
     const agent=new ProviderMemoryAgent({baseUrl:'https://provider.test',model:'fake',apiKey:'synthetic',fetch});
-    await expect(probeMemoryAgent(agent,new AbortController().signal)).rejects.toThrow();expect(fetch).toHaveBeenCalledTimes(status===429?3:1);
+    await expect(probeMemoryAgent(agent,new AbortController().signal)).rejects.toThrow();expect(fetch).toHaveBeenCalledTimes(1);
   }
 });
-it('cancels retry waits without another request',async()=>{
-  const controller=new AbortController();const fetch=vi.fn(async()=>{setTimeout(()=>controller.abort(new Error('CANCELLED')),10);return new Response('{}',{status:429,headers:{'retry-after':'1'}});});
-  const agent=new ProviderMemoryAgent({baseUrl:'https://provider.test',model:'fake',apiKey:'synthetic',fetch});
-  await expect(probeMemoryAgent(agent,controller.signal)).rejects.toThrow('CANCELLED');expect(fetch).toHaveBeenCalledOnce();
+it('does not create a private retry-after wait outside Core',async()=>{
+  const fetch=vi.fn(async()=>new Response('{}',{status:429,headers:{'retry-after':'60'}}));
+  const agent=new ProviderMemoryAgent({baseUrl:'https://provider.test',model:'fake',apiKey:'synthetic',fetch});const start=Date.now();
+  await expect(probeMemoryAgent(agent,new AbortController().signal)).rejects.toMatchObject({code:'RATE_LIMITED'});expect(fetch).toHaveBeenCalledOnce();expect(Date.now()-start).toBeLessThan(1000);
 });
 it('fences a fetch that ignores cancellation, without accepting a late response',async()=>{
   const controller=new AbortController();const fetch=vi.fn(()=>new Promise<Response>(()=>{}));

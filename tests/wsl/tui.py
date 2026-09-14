@@ -66,9 +66,11 @@ with open(home + '/config.json', 'w', encoding='utf8') as file:
     json.dump(config, file)
 for _ in range(2):
     output = drive([('Enter: confirm', b'\x1b[B'),
+                   ('安全重应用受管资源', b'\x1b[B'),
                    ('查找、查看与自然语言调整', b'\x1b[B'),
                    ('查看配置与更换模型', b'\x1b[A'),
                    ('查找、查看与自然语言调整', b'\x1b[A'),
+                   ('安全重应用受管资源', b'\x1b[A'),
                    ('选择需要接入的 Agent', b'\x1b')])
     assert b'Model Configuration' not in output
     assert b'Done' in output

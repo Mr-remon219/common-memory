@@ -1,5 +1,5 @@
 import { sanitizeDiagnostic, type FailureDiagnostic } from "./diagnostic.js";
-export const MEMORY_MODEL_ERROR_CODES = ["CONFIGURATION", "PROXY_AUTHENTICATION", "TIMEOUT", "CANCELLED", "RATE_LIMITED", "UNAVAILABLE", "AUTHENTICATION", "INVALID_RESPONSE"] as const;
+export const MEMORY_MODEL_ERROR_CODES = ["AGENT_TURN_LIMIT", "CONTEXT_LIMIT", "CONFIGURATION", "PROXY_AUTHENTICATION", "TIMEOUT", "CANCELLED", "RATE_LIMITED", "UNAVAILABLE", "AUTHENTICATION", "INVALID_RESPONSE"] as const;
 export type MemoryModelErrorCode = typeof MEMORY_MODEL_ERROR_CODES[number];
 export class MemoryModelError extends Error {
   readonly diagnostic: FailureDiagnostic | null;

@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-v0.4 使用所有者确认的 MIT 许可证。当前版本为 **0.4.1**，对应 npm 版本 **0.4.1**、GitHub tag **v0.4.1**，
+v0.4 使用所有者确认的 MIT 许可证。当前版本为 **0.4.2**，对应 npm 版本 **0.4.2**、GitHub tag **v0.4.2**，
 包名 `common-memory-core`，可执行命令 `common-memory`，默认发布标签 `latest`。
 这是面向早期使用者的版本，不声称已经完成全部真实客户端验收。
 
@@ -11,7 +11,7 @@ v0.4 使用所有者确认的 MIT 许可证。当前版本为 **0.4.1**，对应
 发布后，Linux、macOS 和 WSL 在 Node 22.19+（22.x）或 24+ 环境使用同一行安装命令；发布前使用下方源码构建路径：
 
 ```sh
-npm install -g common-memory-core@0.4.1
+npm install -g common-memory-core@0.4.2
 ```
 
 安装 Node / WSL 是前置要求，不包含在这个 npm 命令中。详细说明见 [README](../README.md)。
@@ -81,7 +81,7 @@ PowerShell 遵循系统脚本策略；不添加 ExecutionPolicy Bypass。
 npm run test:windows           # 原生 Windows，或具备 PowerShell interop 的 WSL
 npm run test:wsl               # 真实 WSL；先构建，Node 22.19 / 24 分别运行
 # 发布后也可对确切 registry 产物验证：
-npm run test:wsl -- --registry-version 0.4.1
+npm run test:wsl -- --registry-version 0.4.2
 ```
 
 WSL 冒烟使用真实的原生合成宿主进程，通过生成的 Hook 调用 Core；验证宿主身份、路径转换、
@@ -114,14 +114,14 @@ Release/tag 都要由维护者在对应服务上完成。本文和本地验证�
 发布后从一个新目录安装并核对 registry 中的版本：
 
 ```sh
-npm view common-memory-core@0.4.1 version dist.integrity
-npm install -g common-memory-core@0.4.1
+npm view common-memory-core@0.4.2 version dist.integrity
+npm install -g common-memory-core@0.4.2
 common-memory --version
 common-memory --help
 npm run test:published
 ```
 
-npm 发布成功并完成本地 registry 检查后，创建 GitHub Release `v0.4.1`。它会触发
+npm 发布成功并完成本地 registry 检查后，创建 GitHub Release `v0.4.2`。它会触发
 `published-package` 工作流：Ubuntu / macOS 实际执行上述一行全局安装，核对 CLI 版本，
 然后从 npm 下载 tarball 验证类型导出、Writer 提交/重启、Pi 模块和无 Key 的只读 MCP。
 也可通过 Actions 的 Run workflow 输入精确版本手动重跑。这个工作流**不发布包**，只有
@@ -191,9 +191,10 @@ v0.4.1 在既有 v2 队列上增量加入显式 edit 类型与结果列、宿主
   recovery 元数据）；dataRoot 可以在 home 外，不能只备份 `~/.common-memory`。
 - SQLite 是持久队列与来源链接存储，**不能删除后从 Markdown 重建**。备份中的 `.env`
   和对话缓存同样敏感；使用私有权限和适当的加密存储。
-- 安装新版本后重新生成受路径影响的集成，先检查 `status` / `show`，有待处理交接时显式
-  运行 `session-drain`。V1 或未知 schema 不自动迁移；不要尝试靠删除数据库完成升级。
+- 安装新版本后，在 TUI **Upgrade / Repair Integrations** 事务性更新已受管接入；不自动接管手动配置。先检查 `status` / `show`，有待处理交接时显式运行 `session-drain`。当前 v2 runtime 的协议 0→1 迁移先生成持久备份，再安装全表旧写端 fencing；活跃旧租约或并发变更会拒绝迁移。V1 旧架构或未知未来协议不自动迁移；不要删除数据库。
+- 磁盘包已更新不代表宿主已加载新代码。请正常重载/重启相关宿主；实例证明不足时保持 `unknown`。保存的维护设置会在下一任务生效，但不会替换运行中的代码。
 - 回退前停止新版本所有写端，必要时恢复同一时点的完整离线备份；不保证旧程序可打开新
   schema。恢复到新路径时需要更新配置及项目/宿主路径，不能假定路径自动迁移。
+- 优先使用 TUI 卸载：配置/凭据与 Memory Data 独立选择，默认都保留；程序 API 的历史默认值不同，应显式传入选项。升级中断、备份位置与回滚风险见[可靠性记录](reliability-refactor.md#upgrade-interruption-and-rollback)。
 - `npm uninstall -g common-memory-core` 只卸载程序。先在宿主中移除对应 hooks、MCP 配置和
   Pi 资源注册；用户数据不自动删除。不要把撤销宿主注册理解成删除远端已披露的内容。

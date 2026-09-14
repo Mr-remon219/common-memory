@@ -22,7 +22,7 @@ it.each<SessionTurnState>(['settled', 'interrupted', 'incomplete'])('keeps %s se
     key = ingress.open(identity);
     ingress.capture(key, message);
     if (terminal !== 'incomplete') ingress.settle(key, 'turn', terminal);
-    expect(ingress.status(key)).toEqual({ closing: false, complete: false, pending: 1, failed: 0, batches: 0, states: { buffered: 1 } });
+    expect(ingress.status(key)).toEqual({ closing: false, complete: false, pending: 1, failed: 0, batches: terminal==='incomplete'?0:1, states: terminal==='incomplete'?{buffered:1}:{pending:1} });
     ingress.end(key); // An open turn becomes incomplete; it is not a successful settlement.
     expect((await failed.run()).outcome).toBe('failed');
     deadJob = failed.store.status().jobs[0]!.id;

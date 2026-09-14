@@ -337,19 +337,20 @@ it('an import cannot rewrite a Section the user edited by hand, even if that Sec
  expect(readFileSync(join(path,'memory/profile.md'),'utf8')).toContain('Corrected by the user.');w.close();
 });
 
-it.each(['timeout-first','cancel-first','lease-first'] as const)('preserves %s and fences late responses even if the model ignores cancellation',async variant=>{
+it.each(['legacy-deadline','cancel-first','lease-first'] as const)('preserves %s and fences late responses even if the model ignores cancellation',async variant=>{
  const {vi}=await import('vitest');let resolveModel!:(value:Awaited<ReturnType<MemoryModelPort['analyze']>>)=>void;let request:ApprovedModelRequest|undefined;
  const caller=new AbortController();const path=root();
  // Exercise terminal-cause ordering without letting slow filesystem work expire the lease.
  vi.useFakeTimers();let w:Writer|undefined;
  try {
-  w=new Writer({dataRoot:path,allowedScopes:['global'],deadlineMs:variant==='timeout-first'?15:2000,scheduler:{leaseMs:variant==='lease-first'?30:120000},model:{analyze:r=>{request=r;return new Promise(resolve=>{resolveModel=resolve;});}}});
+  w=new Writer({dataRoot:path,allowedScopes:['global'],deadlineMs:15,scheduler:{leaseMs:variant==='lease-first'?30:120000},model:{analyze:r=>{request=r;return new Promise(resolve=>{resolveModel=resolve;});}}});
   if(variant==='lease-first')vi.spyOn(w.store,'renew').mockImplementation(()=>{throw new Error('private lease failure');});
   enqueue(w);const pending=w.run({force:true,signal:caller.signal});
-  if(variant==='cancel-first')caller.abort();
-  else await vi.advanceTimersByTimeAsync(variant==='timeout-first'?15:10);
-  const reason=variant==='timeout-first'?'TIMEOUT':variant==='cancel-first'?'CANCELLED':'LEASE_RENEWAL_FAILED';
-  expect(await pending).toEqual({outcome:variant==='cancel-first'?'cancelled':'failed',reason});
+  if(variant==='legacy-deadline'){let settled=false;void pending.then(()=>{settled=true;});await vi.advanceTimersByTimeAsync(60_001);expect(settled).toBe(false);caller.abort();}
+  else if(variant==='cancel-first')caller.abort();
+  else await vi.advanceTimersByTimeAsync(10);
+  const reason=variant==='lease-first'?'LEASE_RENEWAL_FAILED':'CANCELLED';
+  expect(await pending).toEqual({outcome:variant==='lease-first'?'failed':'cancelled',reason});
   caller.abort();resolveModel({kind:'output',body:body(request!),usage:{}});await vi.advanceTimersByTimeAsync(5);
   expect(w.store.status().jobs[0]).toMatchObject({issue:reason});expect(w.store.hasReceipt(w.store.status().jobs[0]!.id)).toBe(false);
   expect(readdirSync(join(path,'runtime/receipts'))).toEqual([]);expect(w.canonical.snapshot([]).every(d=>!d.content.includes('Chinese'))).toBe(true);
@@ -360,7 +361,7 @@ it('a competing quarantine retires a job without a receipt and must not produce 
  const path=root();const w=new Writer({dataRoot:path,allowedScopes:['global'],scheduler:{now:()=>now,leaseMs:10000},model:{analyze:async r=>{started();await delayed;return {kind:'output',body:body(r),usage:{}};}}});enqueue(w);
  const pending=w.run({force:true});await entered;
  const {RuntimeStore}=await import('../../src/v2/runtime.js');now=10001;const other=new RuntimeStore(path,{now:()=>now});
- try{const claimed=other.claim({force:true})!;other.quarantine(claimed,claimed.observations[0]!.id,'SENSITIVE_INPUT');release();expect(await pending).toEqual({outcome:'failed',reason:'STALE_LEASE'});expect(w.store.status().jobs[0]!.state).toBe('done');expect(w.store.hasReceipt(claimed.id)).toBe(false);}finally{other.close();w.close();}
+ try{const claimed=other.claim({force:true})!;other.quarantine(claimed,claimed.observations[0]!.id,'SENSITIVE_INPUT');release();expect(await pending).toEqual({outcome:'quarantined',reason:'STALE_LEASE'});expect(w.store.status().jobs[0]!.state).toBe('quarantined');expect(w.store.hasReceipt(claimed.id)).toBe(false);}finally{other.close();w.close();}
 });
 it('a rolled-back ignore has no receipt and must not report success',async()=>{
  const w=new Writer({dataRoot:root(),allowedScopes:['global'],model:model(r=>body(r,'ignore'))});enqueue(w);
@@ -385,18 +386,18 @@ it.each(['committed','ignored'] as const)('reports the winning lease receipt (%s
  }finally{b.close();a.close();}
 });
 
-it.each([200,503])('retains HTTP %s context when the Writer deadline fences a stalled provider body',async status=>{
+it.each([200,503])('retains HTTP %s context while transport bounds body progress, without a Writer deadline',async status=>{
  const {ProviderMemoryAgent}=await import('../../src/memory-agent-runtime/provider.js');
  const {Writer:CoreWriter}=await import('../../src/v2/writer.js');
- const model=new ProviderMemoryAgent({baseUrl:'https://provider.test/v1',apiKey:'test',model:'fake',maxRetries:0,fetch:async()=>new Response(new ReadableStream({pull:()=>new Promise(()=>{}),cancel:()=>new Promise(()=>{})}),{status})});
- const w=new CoreWriter({dataRoot:root(),allowedScopes:['global'],deadlineMs:30,agent:model});enqueue(w);
- try{expect(await w.run({force:true})).toEqual({outcome:'failed',reason:'TIMEOUT'});expect(w.store.status().jobs[0]).toMatchObject({diagnostic:{stage:status===200?'response_body':'http',httpStatus:status,reason:'timeout',retryable:true}});}finally{w.close();}
+ const model=new ProviderMemoryAgent({baseUrl:'https://provider.test/v1',apiKey:'test',model:'fake',idleTimeoutMs:10,fetch:async()=>new Response(new ReadableStream({pull:()=>new Promise(()=>{}),cancel:()=>new Promise(()=>{})}),{status})});
+ const w=new CoreWriter({dataRoot:root(),allowedScopes:['global'],scheduler:{maxAttempts:1},agent:model});enqueue(w);
+ try{expect(await w.run({force:true})).toEqual({outcome:'paused',reason:status===200?'TIMEOUT':'UNAVAILABLE'});expect(w.store.status().jobs[0]).toMatchObject({diagnostic:{stage:status===200?'response_body':'http',httpStatus:status,reason:status===200?'stream_idle_timeout':'provider_unavailable',retryable:true}});}finally{w.close();}
 });
 
 it('clears a previous HTTP attempt context before a retry stalls in fetch',async()=>{
  const {ProviderMemoryAgent}=await import('../../src/memory-agent-runtime/provider.js');
  const {Writer:CoreWriter}=await import('../../src/v2/writer.js');let calls=0;
- const model=new ProviderMemoryAgent({baseUrl:'https://provider.test/v1',apiKey:'test',model:'fake',fetch:async()=>{if(++calls===1)return new Response('{}',{status:429,headers:{'retry-after':'0'}});return new Promise(()=>{});}});
- const w=new CoreWriter({dataRoot:root(),allowedScopes:['global'],deadlineMs:40,agent:model});enqueue(w);
- try{expect(await w.run({force:true})).toEqual({outcome:'failed',reason:'TIMEOUT'});expect(calls).toBe(2);expect(w.store.status().jobs[0]!.diagnostic).toEqual({stage:'request',reason:'timeout',retryable:true});}finally{w.close();}
+ const model=new ProviderMemoryAgent({baseUrl:'https://provider.test/v1',apiKey:'test',model:'fake',requestTimeoutMs:10,fetch:async()=>{if(++calls===1)return new Response('{}',{status:429,headers:{'retry-after':'0'}});return new Promise(()=>{});}});
+ const w=new CoreWriter({dataRoot:root(),allowedScopes:['global'],scheduler:{maxAttempts:1},agent:model});enqueue(w);
+ try{expect(await w.run({force:true})).toEqual({outcome:'paused',reason:'TIMEOUT'});expect(calls).toBe(2);expect(w.store.status().jobs[0]!.diagnostic).toEqual({stage:'request',reason:'connection_timeout',retryable:true});}finally{w.close();}
 });

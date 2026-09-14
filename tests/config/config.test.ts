@@ -86,7 +86,7 @@ it('roundtrips old configurations and routes the explicit API through the model 
   config.remote={...config.remote,api:'chat_completions',maxOutputTokens:16384,thinking:{type:'disabled'}};
   expect(validateConfig(config).remote).toEqual(config.remote);
   const chat = createConfiguredMemoryAgent(config); expect(chat.decide).toBeTypeOf('function'); await chat.close();
-  for (const extra of [{api:'auto'},{api:'responses',thinking:{type:'disabled'}},{api:'chat_completions',reasoningEffort:'none'},{api:'chat_completions',thinking:{type:'disabled'},enableThinking:false},{maxOutputTokens:0},{maxOutputTokens:1.5},{thinking:{type:'disabled',budget:50}},{enableThinking:'false'},{arbitraryBody:{}},{api:null}]) {
+  for (const extra of [{api:'auto'},{api:'responses',thinking:{type:'disabled'}},{api:'chat_completions',thinking:{type:'disabled'},enableThinking:false},{maxOutputTokens:0},{maxOutputTokens:1.5},{thinking:{type:'disabled',budget:50}},{enableThinking:'false'},{arbitraryBody:{}},{api:null}]) {
     expect(()=>validateConfig({...config,remote:{provider:'openai-compatible',baseUrl:'https://provider.test/v1',model:'m',apiKeyEnv:'KEY',...extra}})).toThrow();
   }
 });

@@ -25,7 +25,7 @@ vi.mock('@clack/prompts', () => ({
   log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 vi.mock('../../src/cli/modify-memory.js', () => ({ modifyMemory: vi.fn() }));
-vi.mock('../../src/cli/tui-integrations.js', () => ({ integrationsScreen: vi.fn() }));
+vi.mock('../../src/cli/tui-integrations.js', () => ({ integrationsScreen: vi.fn(), repairIntegrationsScreen: vi.fn() }));
 vi.mock('../../src/cli/network-test.js', () => ({ runNetworkTest: vi.fn() }));
 vi.mock('../../src/cli/uninstall-tui.js', () => ({ runCompleteUninstall: vi.fn() }));
 vi.mock('../../src/cli/flush-command.js', () => ({ runFlush: vi.fn() }));
@@ -83,13 +83,13 @@ it('starts setup directly and cancellation creates neither configuration nor mem
   expect(existsSync(envFilePath())).toBe(false);
 });
 
-it('has only three management tasks, remembers focus, and never initializes storage while viewing', async () => {
+it('has upgrade repair plus three management tasks, remembers focus, and never initializes storage while viewing', async () => {
   const config = fixture();
   const done = choices('configuration', 'current', 'back', 'memory', 'browse', 'back', 'back', 'exit'); readAllPages();
   await runTui(); done();
   const menus = vi.mocked(clack.select).mock.calls.map(call => call[0]);
-  expect(menus[0]!.options.map(option => option.label)).toEqual(['Agent Integration', 'Memory Control', 'Model & Configuration', '退出']);
-  expect(menus[0]!.options.map(option => option.value)).toEqual(['integrations', 'memory', 'configuration', 'exit']);
+  expect(menus[0]!.options.map(option => option.label)).toEqual(['Agent Integration', 'Upgrade / Repair Integrations', 'Memory Control', 'Model & Configuration', '退出']);
+  expect(menus[0]!.options.map(option => option.value)).toEqual(['integrations', 'repair', 'memory', 'configuration', 'exit']);
   expect(menus.at(-1)!.initialValue).toBe('memory');
   expect(notes()).toContain(config.dataRoot);
   expect(notes()).toContain('按需运行');
@@ -306,7 +306,7 @@ it('shows and retries a persisted failed request without submitting its text aga
   vi.mocked(runFlush).mockImplementation(async current => {
     const retry = new RuntimeStore(current.dataRoot);
     try {
-      expect(retry.observationOutcome('previous-launch', 'submitted')!.state).toBe('pending');
+      expect(retry.observationOutcome('previous-launch', 'submitted')!.state).toBe('claimed');
       const job = retry.claim({ force: true })!; expect(job.observations).toHaveLength(1); retry.finish(job);
     } finally { retry.close(); }
     return 0;
@@ -380,12 +380,12 @@ it('preserves configuration, secrets and tuning when changing only a model', asy
   expect(readFileSync(envFilePath(), 'utf8')).toBe('CM_TUI_TEST_KEY="private-synthetic-key"\n');
   expect(notes()).not.toContain('private-synthetic-key');
 });
-it('clears incompatible thinking when changing API but preserves output limits', async () => {
+it('preserves supported reasoning effort and output limits when changing API', async () => {
   const config = fixture(); config.remote.reasoningEffort = 'high'; config.remote.maxOutputTokens = 2048; saveConfig(config);
   texts(config.remote.baseUrl, config.remote.model); choices('chat_completions');
   vi.mocked(clack.confirm).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
   const next = await runSetupWizard(loadConfig());
-  expect(next.remote.api).toBe('chat_completions'); expect(next.remote.reasoningEffort).toBeUndefined(); expect(next.remote.maxOutputTokens).toBe(2048);
+  expect(next.remote.api).toBe('chat_completions'); expect(next.remote.reasoningEffort).toBe('high'); expect(next.remote.maxOutputTokens).toBe(2048);
 });
 it('rejecting model save writes neither configuration nor entered key', async () => {
   const config = fixture(); texts('https://example.test/v1', 'new-model'); choices('responses');

@@ -14,8 +14,7 @@ export async function probeMemoryAgent(agent: MemoryAgentRuntime, signal: AbortS
     memory(handle) { if (handle !== 'probe-memory') throw new Error('INVALID_SNAPSHOT_HANDLE'); return []; },
     processing() { return { complete: read, read_bytes: read ? Buffer.byteLength(text) : 0, total_bytes: Buffer.byteLength(text) }; },
   };
-  const controller = AbortSignal.any([signal, AbortSignal.timeout(60000)]);
-  const result = await agent.decide(task, reads, { signal: controller, deadlineAt: Date.now() + 60000 });
+  const result = await agent.decide(task, reads, { signal });
   const decision = validateDecision(result.body, task.request_id, [], new Map([['ev_1', 'global']]));
   return inspected && read && decision.decisions.every(d => d.kind === 'ignore');
 }

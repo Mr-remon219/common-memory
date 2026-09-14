@@ -151,7 +151,7 @@ it('actual Pi adapter durably captures under malformed network configuration',as
  try {
   await h.emit('session_start',{reason:'startup'});await h.turn(1);
   const store=new RuntimeStore(config.dataRoot);
-  try {expect(store.db.prepare('SELECT text,state FROM observations').all()).toEqual([{text:'Synthetic preference 1',state:'buffered'}]);}
+  try {expect(store.db.prepare('SELECT text,state FROM observations').all()).toEqual([{text:'Synthetic preference 1',state:'claimed'}]);}
   finally {store.close();}
   expect(diagnostic.mock.calls.flat().join('')).not.toContain('capture unavailable');
  } finally {await h.emit('session_shutdown',{reason:'reload'});diagnostic.mockRestore();vi.unstubAllEnvs();rmSync(root,{recursive:true,force:true});}

@@ -3,7 +3,7 @@ import { configDirectory, loadConfig, type CommonMemoryConfig } from '../config/
 import { currentConfiguration } from './current-configuration.js';
 import { installationOverview } from './installation-overview.js';
 import { configureModel } from './model-configuration.js';
-import { integrationsScreen } from './tui-integrations.js';
+import { integrationsScreen, repairIntegrationsScreen } from './tui-integrations.js';
 import { memoryControlScreen } from './tui-memory.js';
 import { runAdvancedWizard, runCredentialsWizard, runNetworkWizard, runPermissionsWizard } from './tui-settings.js';
 import { runWorkspaceWizard } from './tui-workspace.js';
@@ -72,6 +72,7 @@ export async function runShowTui(): Promise<void> {
     try {
       action = await menu('Common Memory', [
         { value: 'integrations', label: 'Agent Integration', hint: '选择需要接入的 Agent' },
+        { value: 'repair', label: 'Upgrade / Repair Integrations', hint: '安全重应用受管资源；不终止旧宿主' },
         { value: 'memory', label: 'Memory Control', hint: '查找、查看与自然语言调整' },
         { value: 'configuration', label: 'Model & Configuration', hint: '查看配置与更换模型' },
         { value: 'exit', label: '退出' },
@@ -82,6 +83,7 @@ export async function runShowTui(): Promise<void> {
     let removed = false;
     await attempt(async () => {
       if (action === 'integrations') await integrationsScreen();
+      else if (action === 'repair') await repairIntegrationsScreen();
       else if (action === 'memory') await memoryControlScreen();
       else removed = await configurationScreen();
     });

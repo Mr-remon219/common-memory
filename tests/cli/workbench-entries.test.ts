@@ -104,21 +104,19 @@ it('status includes jobs and session incompleteness but never raw conversation b
   expect(result.status, result.stderr).toBe(0);
   expect(result.stdout).toContain('TEST_FAILURE');
   expect(result.stdout).not.toContain('PRIVATE_SYNTHETIC_BODY');
-  retryJob(config, status.jobs[0]!.id);
-  expect(runtimeStatus(config)!.jobs[0]!.state).toBe('done');
-  expect(runtimeStatus(config)!.observations).toContainEqual({ state: 'pending', count: 1 });
+  const jobId=status.jobs[0]!.id;retryJob(config, jobId);
+  const retried=runtimeStatus(config)!;
+  expect(retried.jobs).toHaveLength(1);expect(retried.jobs[0]).toMatchObject({id:jobId,state:'retry',attempts:1,issue:'TEST_FAILURE'});
+  expect(retried.observations).toContainEqual({ state: 'claimed', count: 1 });
 });
-it('flush and session-drain keep one-to-nine settled turns buffered and report the chain incomplete', () => {
+it('settled turns become immediately eligible without count, byte, idle, or flush readiness gates', () => {
   const config=fixture(),store=new RuntimeStore(config.dataRoot);
   try {
-    const ingress=new SessionIngress(store),key=ingress.open({client:'pi',sessionId:'buffered',processInstance:'test-process'});
+    const ingress=new SessionIngress(store),key=ingress.open({client:'pi',sessionId:'eligible',processInstance:'test-process'});
     for(let i=0;i<9;i++){ingress.capture(key,{id:`u${i}`,turnId:`t${i}`,role:'user',text:`Synthetic ${i}`,scope:'global',source:'interactive',observedAt:new Date().toISOString()});ingress.settle(key,`t${i}`);}
   } finally {store.close();}
-  const before=runtimeStatus(config)!;expect(before.observations).toContainEqual({state:'buffered',count:9});expect(before.sessions[0]!.states).toMatchObject({buffered:9});
-  writeFileSync(join(home,'.env'),'CM_TEST_UNUSED_KEY="synthetic"\n',{mode:0o600});
-  const flushed=cli(['flush']);expect(flushed.status,flushed.stderr).toBe(1);
-  const drained=cli(['session-drain']);expect(drained.status,drained.stderr).toBe(1);
-  const after=runtimeStatus(config)!;expect(after.observations).toContainEqual({state:'buffered',count:9});expect(after.sessions[0]!.batches).toBe(0);
+  const status=runtimeStatus(config)!;
+  expect(status.observations).toContainEqual({state:'pending',count:9});expect(status.sessions[0]).toMatchObject({batches:9,states:{pending:9}});
 });
 it('session-drain recovery keeps the same isolated host identity and exits incomplete when the cause remains',()=>{
   const config=fixture(),store=new RuntimeStore(config.dataRoot),recoveryId='22222222-2222-4222-8222-222222222222';

@@ -7,7 +7,8 @@ import type { MemoryTask, MemoryReadPort, MemoryAgentOptions, MemoryAgentRuntime
 import { MemoryModelError } from '../core/contracts/errors.js';
 import { externalPreflight } from '../core/safety/external-preflight.js';
 import { networkFailure } from './network/client.js';
-import { abortable, cancelBody } from './network/abort.js';
+import { cancelBody } from './network/abort.js';
+import { withProgressTimeout } from './network/progress.js';
 import { httpDiagnostic } from './network/response.js';
 import { PiMemoryAgent } from './agent.js';
 import { normalizeOpenAICompatibleBaseUrl } from './endpoint.js';
@@ -15,7 +16,10 @@ import type { RemoteTuning, RemoteApi } from './options.js';
 
 export interface ProviderOptions extends RemoteTuning {
   api?: RemoteApi; baseUrl: string; model: string; apiKey: string; fetch: typeof fetch;
-  maxInputBytes?: number | null; maxRetries?: number;
+  maxInputBytes?: number | null;
+  /** Deprecated: automatic retries are owned by the Core recovery budget. */
+  maxRetries?: number;
+  requestTimeoutMs?: number; idleTimeoutMs?: number;
 }
 export function providerModel(options: Pick<ProviderOptions, 'baseUrl' | 'model' | 'api'>): Model<Api> {
   const known = modelCapability(options).model;
@@ -35,21 +39,26 @@ export class ProviderMemoryAgent implements MemoryAgentRuntime {
     const model = providerModel(this.options);
     const agent = new PiMemoryAgent({ model, ...(this.options.maxAgentTurns === undefined ? {} : { maxAgentTurns: this.options.maxAgentTurns }),
       ...(this.options.reasoningEffort === undefined ? {} : { reasoningEffort: this.options.reasoningEffort }),
+      failure: () => outboundError ?? transportError,
       stream: () => (_model, context) => {
         run.signal.throwIfAborted();
-        const remaining = run.deadlineAt - Date.now();
-        if (remaining <= 0) throw new MemoryModelError('TIMEOUT', 'Memory Agent deadline exceeded', true);
         transportError = undefined;
+        outboundError = undefined;
         const options = {
-          apiKey: this.options.apiKey, signal: run.signal, timeoutMs: remaining,
-          maxRetries: this.options.maxRetries ?? 2, maxRetryDelayMs: 5000,
+          apiKey: this.options.apiKey, signal: run.signal,
+          // OpenAI SDK bounds headers only; our shorter detector supplies the diagnostic.
+          timeoutMs: (this.options.requestTimeoutMs ?? 30_000) + 1000,
+          maxRetries: 0,
           ...(this.options.maxOutputTokens == null ? {} : { maxTokens: this.options.maxOutputTokens }),
           fetch: async (input: string | URL | Request, init?: RequestInit) => {
             run.onDiagnosticContext?.({ stage: 'request' });
             try {
-              const pending = this.options.fetch(input, init);
-              void pending.then(response => { if (run.signal.aborted) cancelBody(response.body); }, () => {});
-              const response = await abortable(pending, run.signal);
+              const requestSignal = AbortSignal.any([run.signal, ...(init?.signal ? [init.signal] : [])]);
+              const response = await withProgressTimeout(signal => {
+                const pending = this.options.fetch(input, {...init, signal});
+                void pending.then(response => { if (signal.aborted) cancelBody(response.body); }, () => {});
+                return pending;
+              }, requestSignal, this.options.requestTimeoutMs ?? 30_000, 'request');
               run.onDiagnosticContext?.({ stage: response.ok ? 'response_body' : 'http', httpStatus: response.status });
               if (!response.ok) {
                 const status = response.status;
@@ -62,9 +71,9 @@ export class ProviderMemoryAgent implements MemoryAgentRuntime {
               const reader = response.body.getReader();
               const body = new ReadableStream<Uint8Array>({
                 pull: async controller => {
-                  try { const chunk = await abortable(reader.read(), run.signal); if (chunk.done) controller.close(); else controller.enqueue(chunk.value); }
+                  try { const chunk = await withProgressTimeout(() => reader.read(), requestSignal, this.options.idleTimeoutMs ?? 120_000, 'response_body'); if (chunk.done) controller.close(); else controller.enqueue(chunk.value); }
                   catch (error) {
-                    const mapped = networkFailure(error, false);
+                    const mapped = error instanceof MemoryModelError ? error : networkFailure(error, false);
                     transportError = new MemoryModelError(mapped.code, 'Provider stream failed', mapped.retryable, { ...mapped.diagnostic!, stage: 'response_body', httpStatus: response.status });
                     void reader.cancel().catch(() => {}); controller.error(transportError);
                   }
@@ -80,6 +89,7 @@ export class ProviderMemoryAgent implements MemoryAgentRuntime {
             const body = payload as Record<string, unknown>;
             // Legacy explicitly configured reasoning controls retain their exact wire meanings.
             if (this.options.api === 'chat_completions') {
+              if (this.options.reasoningEffort !== undefined) body.reasoning_effort = this.options.reasoningEffort;
               if (this.options.thinking !== undefined) body.thinking = this.options.thinking;
               if (this.options.enableThinking !== undefined) body.enable_thinking = this.options.enableThinking;
             } else {

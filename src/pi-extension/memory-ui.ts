@@ -7,7 +7,7 @@ import { IMPORT_BASES } from '../v2/import.js';
 import { nativeFailure, type MemoryHost, type PiMemoryService } from './memory-service.js';
 
 const clean = (text:string) => text.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g,'');
-const stateNames: Record<string,string> = {buffered:'等待批次',pending:'排队中',claimed:'处理中',running:'处理中',retry:'等待重试',dead:'处理失败',quarantined:'已隔离',processed:'已处理',done:'已完成'};
+const stateNames: Record<string,string> = {buffered:'等待当前交互结束',pending:'排队中',claimed:'处理中',running:'处理中',retry:'等待重试',paused:'已暂停',dead:'处理失败',quarantined:'已隔离',processed:'已处理',done:'作业已结束（查看回执）'};
 const state = (value:string) => stateNames[value] ?? value;
 
 /** Full body remains available by scrolling; this viewport never truncates stored/model material. */
@@ -75,7 +75,7 @@ async function processing(ctx:ExtensionCommandContext,host:MemoryHost,service:Pi
         if(!current)throw new Error('CONTEXT_UNAVAILABLE');
         return `${state(current.state)}\n\n${JSON.stringify(current,null,2)}\n\n失败任务在返回后可由用户确认重试。排队/退避中的任务由后台继续，不需要重复提交。`;
       });
-      if(job.state==='dead' && await ctx.ui.confirm('重试任务？','将重新处理原始材料，不更换身份，不修改原文；仍受当前来源与范围权限约束。')) {valid();service.retry(host,id);ctx.ui.notify('已请求重试；不代表记忆已更新。','info');}
+      if(['dead','paused'].includes(job.state) && await ctx.ui.confirm('重试任务？','将重新处理原始材料，不更换身份，不修改原文；仍受当前来源与范围权限约束。')) {valid();service.retry(host,id);ctx.ui.notify('已请求重试；不代表记忆已更新。','info');}
     }
   }
 }

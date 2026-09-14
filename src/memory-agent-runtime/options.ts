@@ -9,7 +9,7 @@ export function validateRemoteTuning(value: RemoteTuning, api: RemoteApi): Remot
   if (value.maxOutputTokens != null) { requireInteger('maxOutputTokens', value.maxOutputTokens, 1, Number.MAX_SAFE_INTEGER); result.maxOutputTokens = value.maxOutputTokens; }
   if (value.maxAgentTurns !== undefined) { requireInteger('maxAgentTurns', value.maxAgentTurns, 1, 1024); result.maxAgentTurns = value.maxAgentTurns; }
   if (value.reasoningEffort !== undefined) {
-    if (api !== 'responses' || !REASONING_EFFORTS.includes(value.reasoningEffort)) throw new TypeError('reasoningEffort requires Responses and a supported effort enum');
+    if (!REASONING_EFFORTS.includes(value.reasoningEffort)) throw new TypeError('reasoningEffort requires a supported effort enum');
     result.reasoningEffort = value.reasoningEffort;
   }
   if (value.thinking !== undefined) {

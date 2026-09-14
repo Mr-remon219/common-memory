@@ -19,13 +19,13 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }); });
 const installation = () => ({ node: process.execPath, npm: join(root, 'npm.js'), prefix: root, packageRoot: realpathSync(applicationRoot) });
-const run = (deleteMemory: boolean, removePackage = vi.fn(async () => {})) => uninstallCompletely({ config, deleteMemory, clientsStopped: true, installation: installation(), removePackage });
+const run = (deleteMemory: boolean, removePackage = vi.fn(async () => {})) => uninstallCompletely({ config, deleteMemory, deleteConfiguration: true, clientsStopped: true, installation: installation(), removePackage });
 
 it('full uninstall retains Markdown AND durable SQLite by default, removing only application credentials', async () => {
   const store = new RuntimeStore(config.dataRoot); store.enqueue({ sessionId: 's', entryId: 'e', scope: 'global', source: 'interactive', text: 'Pending user data', observedAt: new Date().toISOString() }); store.close();
   installIntegrations([{ id: 'pi', name: 'Pi', root: join(root, 'pi'), mode: 'posix', hooks: true }], config.dataRoot);
   const removePackage = vi.fn(async () => {});
-  expect(await run(false, removePackage)).toEqual({ retained: config.dataRoot });
+  expect(await run(false, removePackage)).toEqual({ retained: config.dataRoot, configurationRetained: false });
   expect(removePackage).toHaveBeenCalledTimes(1); expect(existsSync(join(home, 'config.json'))).toBe(false);
   expect(readFileSync(join(home, '.env'), 'utf8')).toBe('OTHER_KEY="preserved"\n');
   expect(readFileSync(join(config.dataRoot, 'memory/profile.md'), 'utf8')).toContain('Synthetic data'); expect(existsSync(join(config.dataRoot, 'runtime.sqlite'))).toBe(true);
@@ -35,7 +35,7 @@ it('deletes Memory only when separately requested and all clients were confirmed
   const removePackage = vi.fn(async () => {});
   await expect(uninstallCompletely({ config, deleteMemory: true, clientsStopped: false, installation: installation(), removePackage })).rejects.toThrow('先停止');
   expect(removePackage).not.toHaveBeenCalled(); expect(existsSync(config.dataRoot)).toBe(true);
-  expect(await run(true, removePackage)).toEqual({ retained: null }); expect(existsSync(config.dataRoot)).toBe(false);
+  expect(await run(true, removePackage)).toEqual({ retained: null, configurationRetained: false }); expect(existsSync(config.dataRoot)).toBe(false);
 });
 it('npm failure leaves configuration and all memory intact and reports partial integration removal', async () => {
   installIntegrations([{ id: 'pi', name: 'Pi', root: join(root, 'pi'), mode: 'posix', hooks: true }], config.dataRoot);

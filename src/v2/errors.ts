@@ -1,5 +1,6 @@
 import { sanitizeDiagnostic, type DiagnosticStage, type FailureDiagnostic } from '../core/contracts/diagnostic.js';
-const codes = new Set(['INVALID_EDIT_RESULT','INVALID_PROMPT_DIGEST','INCOMPLETE_INGEST_COVERAGE','UNREAD_MEMORY_TARGET','INVALID_DECISION','INVALID_REQUEST_REFERENCE','INVALID_EVIDENCE_REFERENCE','MISSING_EVIDENCE','INVALID_TARGET_REFERENCE','UNAUTHORIZED_SCOPE','DUPLICATE_SECTION_OPERATION','STALE_LEASE','STALE_REVISION','MODEL_REFUSAL','UNAUTHORIZED_WRITE','UNAUTHORIZED_FORGET_EVIDENCE','UNAUTHORIZED_IMPORT_OVERWRITE','SENSITIVE_CONTENT_REJECTED','CONFIGURATION','PROXY_AUTHENTICATION','TIMEOUT','CANCELLED','RATE_LIMITED','UNAVAILABLE','AUTHENTICATION','INVALID_RESPONSE','RECOVERY_CONFLICT','LEASE_RENEWAL_FAILED']);
+const readToolCodes=['INVALID_INGEST_HANDLE','INVALID_SNAPSHOT_HANDLE','INVALID_BLOCK_REFERENCE','INVALID_PAGE_OFFSET','NONCONTIGUOUS_READ'];
+const codes = new Set([...readToolCodes,'CONTEXT_LIMIT','FORGOTTEN_SOURCE','AGENT_TURN_LIMIT','RECOVERY_BUDGET_EXHAUSTED','STALE_SOURCE','INVALID_EDIT_RESULT','INVALID_PROMPT_DIGEST','INCOMPLETE_INGEST_COVERAGE','UNREAD_MEMORY_TARGET','INVALID_DECISION','INVALID_REQUEST_REFERENCE','INVALID_EVIDENCE_REFERENCE','MISSING_EVIDENCE','INVALID_TARGET_REFERENCE','UNAUTHORIZED_SCOPE','DUPLICATE_SECTION_OPERATION','STALE_LEASE','STALE_REVISION','MODEL_REFUSAL','UNAUTHORIZED_WRITE','UNAUTHORIZED_FORGET_EVIDENCE','UNAUTHORIZED_IMPORT_OVERWRITE','SENSITIVE_CONTENT_REJECTED','CONFIGURATION','PROXY_AUTHENTICATION','TIMEOUT','CANCELLED','RATE_LIMITED','UNAVAILABLE','AUTHENTICATION','INVALID_RESPONSE','RECOVERY_CONFLICT','LEASE_RENEWAL_FAILED']);
 /** Only allowlisted diagnostic enums persist; provider/model text can contain secrets. */
 export function failureCode(error: unknown): string {
   if (error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' && codes.has(error.code)) return error.code;
@@ -15,7 +16,13 @@ export function failureDiagnostic(error: unknown, stage: DiagnosticStage = 'core
   const code = failureCode(error);
   if (code === 'TIMEOUT' || code === 'CANCELLED') return {stage:'request',reason:code === 'TIMEOUT' ? 'timeout' : 'cancelled',retryable:code === 'TIMEOUT'};
   if (code === 'LEASE_RENEWAL_FAILED' || code === 'STALE_LEASE') return {stage:'lease',reason:code === 'STALE_LEASE' ? 'stale_lease' : 'lease_renewal_failed',retryable:true};
+  if (code === 'UNAVAILABLE') return {stage:'network',reason:'network_error',retryable:true};
+  if (code === 'RATE_LIMITED') return {stage:'http',reason:'rate_limited',retryable:true};
   if (code === 'MODEL_REFUSAL') return {stage:'model_output',reason:'refusal',retryable:false};
+  if (code === 'AGENT_TURN_LIMIT') return {stage:'model_output',reason:'agent_turn_limit',retryable:false};
+  if (code === 'RECOVERY_BUDGET_EXHAUSTED') return {stage:'recovery',reason:'retry_budget_exhausted',retryable:false};
+  if ([...readToolCodes,'STALE_SOURCE','INVALID_EDIT_RESULT','INCOMPLETE_INGEST_COVERAGE','UNREAD_MEMORY_TARGET','INVALID_DECISION','INVALID_REQUEST_REFERENCE','INVALID_EVIDENCE_REFERENCE','MISSING_EVIDENCE','INVALID_TARGET_REFERENCE','DUPLICATE_SECTION_OPERATION','UNAUTHORIZED_SCOPE','UNAUTHORIZED_WRITE','UNAUTHORIZED_FORGET_EVIDENCE','UNAUTHORIZED_IMPORT_OVERWRITE'].includes(code)) return {stage:'core_validation',reason:'core_rejected',retryable:true};
+  if (code === 'STALE_REVISION') return {stage:'commit',reason:'version_conflict',retryable:true};
   if (code === 'RECOVERY_CONFLICT') return {stage:'recovery',reason:'recovery_conflict',retryable:false};
   return {stage,reason:stage === 'commit' ? 'commit_failed' : 'core_rejected',retryable:false};
 }

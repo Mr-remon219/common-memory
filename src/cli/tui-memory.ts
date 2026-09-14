@@ -115,21 +115,21 @@ async function processingScreen(): Promise<void> {
     const config = configured(), status = runtimeStatus(config, afterRecoveryId);
     if (!status) { note('暂无处理请求。', 'Processing Status'); return; }
     const unfinished = status.jobs.filter(job => job.state !== 'done').slice(-20);
-    const states: Record<string, string> = { buffered:'等待满十轮/会话结束',pending: '等待处理', claimed: '处理中', processed: '已处理', running: '处理中', retry: '等待重试', dead: '处理失败', quarantined: '已隔离' };
+    const states: Record<string, string> = { buffered:'等待当前交互结束',pending: '等待处理', claimed: '处理中', processed: '已处理', running: '处理中', retry: '等待重试', paused:'已暂停（材料保留）', dead: '处理失败', quarantined: '已隔离' };
     note([
       ...status.jobs.filter(job=>job.editResult).slice(-20).map(job=>`编辑任务 ${job.id} · ${editResultMessage(job.editResult!)}`),
       ...status.observations.map(row => `${states[String(row.state)] ?? row.state}: ${row.count}`),
       ...status.jobStates.map(row=>`任务汇总 ${states[String(row.state)] ?? row.state}: ${row.count}`),
-      ...unfinished.map((job, index) => `任务 ${index + 1} · ${states[job.state] ?? job.state}${job.issue ? ` · ${job.issue}` : ''}${job.retryAt ? ` · 下次重试 ${new Date(job.retryAt).toISOString()}` : ''}`),
+      ...unfinished.map((job, index) => `任务 ${index + 1} · ${states[job.state] ?? job.state} · 自动恢复 ${job.automaticRecoveries}/5 · 模型轮次 ${job.modelTurns} · 工具 ${job.toolCalls}${job.issue ? ` · ${job.issue}` : ''}${job.retryAt ? ` · 下次重试 ${new Date(job.retryAt).toISOString()}` : ''}`),
       `宿主收件箱 ${status.host.inbox} · 会话隔离 ${status.host.isolated} · 等待终态 ${status.host.watches}`,
       ...status.host.recoveries.map((failure,index)=>`宿主会话 ${index+1} · ${failure.event} · ${failure.issue}${failure.retryRequested?' · 已请求恢复':''}`),
-      '继续处理会将队列中获授权的材料发送给当前模型。已隔离的请求不会自动重试；等待满十轮的会话材料不会被普通 Flush 强制封批。',
+      '继续处理会将队列中获授权的材料发送给当前模型。已隔离的请求不会自动重试；完整交互立即排队，Flush 不会强制提交仍在生成的交互。',
     ].join('\n'), 'Processing Status');
     const action = await menu('Processing Status', [
       { value: 'refresh', label: '刷新状态 / 返回恢复首页' },
       ...(status.host.nextRecoveryId ? [{ value: `more-host:${status.host.nextRecoveryId}`, label: '更多宿主恢复项' }] : []),
       { value: 'continue', label: '继续处理', hint: 'Ctrl+C 停止等待，已提交的请求仍保留' },
-      ...unfinished.flatMap((job, index) => job.state === 'dead' ? [{ value: `retry:${job.id}`, label: `重试失败任务 ${index + 1}`, hint: job.issue ?? '处理失败' }] : []),
+      ...unfinished.flatMap((job, index) => ['dead','paused'].includes(job.state) ? [{ value: `retry:${job.id}`, label: `重试失败任务 ${index + 1}`, hint: job.issue ?? '处理失败' }] : []),
       ...status.host.recoveries.map((failure,index)=>({value:`recover-host:${failure.id}`,label:`${failure.retryRequested?'再次唤醒':'恢复'}宿主会话 ${index+1}`,hint:failure.issue})),
       { value: 'back', label: '返回 Adjust Memory' },
     ]);

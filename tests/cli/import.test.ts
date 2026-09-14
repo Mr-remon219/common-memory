@@ -114,19 +114,16 @@ it('maps parser, preprocessing and authorization refusals to CLI failure without
   expect(seen).toEqual([]);
 }, 30000);
 
-it('a large whole-source bundle fails without partial consumption and resumes on re-import', async () => {
+it('a large whole-source bundle recovers in-context and re-import remains idempotent', async () => {
   const { url, seen } = await provider({ failPart: 1 });
   // One part per batch so that partial progress is observable; without user_explicit the Writer still runs.
   const { env, config, home } = fixture(url, ['document_import'], 1);
   const parts = Array.from({ length: 3 }, (_, i) => `## Section ${i + 1}\n\n${`Paragraph ${i + 1}. `.repeat(2000)}\n\n`).join('');
   const file = join(home, 'long.md'); writeFileSync(file, `# Long\n\n${parts}`);
   const first = await cli(['import', file], env);
-  expect(first.code).toBe(1);
-  expect(first.stdout).toContain('(1 part)'); expect(first.stdout).toContain('"complete": false'); expect(first.stdout).toContain('incomplete: some parts were not processed');
-  expect(first.stdout).toMatch(/"state": "(claimed|pending)"/);
-  expect(existsSync(join(config.dataRoot, 'memory/profile.md'))).toBe(false);
-  // Retry backoff for the first failure is one second; re-importing the same file resumes the queue.
-  await new Promise(r => setTimeout(r, 1200));
+  expect(first.code,first.stderr).toBe(0);
+  expect(first.stdout).toContain('(1 part)');expect(first.stdout).toContain('"complete": true');
+  const completed=new RuntimeStore(config.dataRoot);try{expect(completed.status().jobs).toHaveLength(1);expect(completed.db.prepare('SELECT attempts,retries FROM jobs').get()).toEqual({attempts:1,retries:1});expect(completed.db.prepare('SELECT COUNT(*) n FROM receipts').get()!.n).toBe(1);}finally{completed.close();}
   const second = await cli(['import', file], env);
   expect(second.code, second.stderr).toBe(0);
   expect(second.stdout).toContain('duplicate:'); expect(second.stdout).toContain('"complete": true');
@@ -145,9 +142,9 @@ it('a large whole-source bundle fails without partial consumption and resumes on
 it('401 stops an import without losing it; duplicate import waits for explicit retry', async () => {
   const {url,seen}=await provider({failPart:1,permanent:true});const {env,home,config}=fixture(url);
   const file=join(home,'auth.md');writeFileSync(file,'# Synthetic\n\nPrefer concise replies.\n');
-  const first=await cli(['import',file],env);expect(first.code).toBe(1);expect(first.stdout).toContain('"state": "dead"');
+  const first=await cli(['import',file],env);expect(first.code).toBe(1);expect(first.stdout).toContain('"state": "paused"');
   const store=new RuntimeStore(config.dataRoot);let jobId:string;
-  try {const job=store.status().jobs[0]!;expect(job).toMatchObject({state:'dead',attempts:1,issue:'AUTHENTICATION'});jobId=job.id;}
+  try {const job=store.status().jobs[0]!;expect(job).toMatchObject({state:'paused',attempts:1,issue:'AUTHENTICATION'});jobId=job.id;}
   finally {store.close();}
   expect((await cli(['import',file],env)).code).toBe(1);expect(seen).toHaveLength(1);
   expect((await cli(['retry',jobId!],env)).code).toBe(0);
@@ -184,21 +181,21 @@ it('mcp-config pins node, CLI entry, configuration directory and dataRoot; --wsl
   expect((await cli(['mcp-config', '--workspace', join(home, 'nope')], env)).stderr).toContain('UNREGISTERED_WORKSPACE');
 }, 30000);
 
-it('flush exits 1 for failure, backoff, claimed or dead work and 0 only after completion', async()=>{
- const {url}=await provider({failPart:1});const {env,home,config}=fixture(url);
+it('flush exits 1 for paused, backoff or claimed work and 0 only after verified completion', async()=>{
+ const {url}=await provider({failPart:1,permanent:true});const {env,home,config}=fixture(url);
  const file=join(home,'flush.md');writeFileSync(file,'# Example\n\nSynthetic fixture.\n');
  expect((await cli(['import',file,'--no-wait'],env)).code).toBe(0);
- const failed=await cli(['flush'],env);expect(failed.code,failed.stderr).toBe(1);expect(failed.stdout).toContain('"outcome":"failed"');
+ const failed=await cli(['flush'],env);expect(failed.code,failed.stderr).toBe(1);expect(failed.stdout).toContain('"outcome":"paused"');
  let store=new RuntimeStore(config.dataRoot);
- try{expect(store.status().jobs[0]).toMatchObject({diagnostic:{stage:'response_body',httpStatus:200,reason:'network_error'}});store.db.prepare("UPDATE jobs SET available=? WHERE state='retry'").run(Date.now()+600000);}finally{store.close();}
+ try{expect(store.status().jobs[0]).toMatchObject({diagnostic:{stage:'http',httpStatus:401,reason:'authentication'}});store.retry(store.status().jobs[0]!.id);store.db.prepare("UPDATE jobs SET available=? WHERE state='retry'").run(Date.now()+600000);}finally{store.close();}
  const backoff=await cli(['flush'],env);expect(backoff.code).toBe(1);expect(backoff.stdout).toContain('"outcome":"idle"');
  store=new RuntimeStore(config.dataRoot);let jobId='';
  try{store.db.prepare("UPDATE jobs SET available=0 WHERE state='retry'").run();const job=store.claim({force:true})!;jobId=job.id;}finally{store.close();}
  const claimed=await cli(['flush'],env);expect(claimed.code).toBe(1);expect(claimed.stdout).toContain('"outcome":"idle"');
  store=new RuntimeStore(config.dataRoot);
- try{store.db.prepare("UPDATE jobs SET expires=0,attempts=5 WHERE id=?").run(jobId);}finally{store.close();}
+ try{store.db.prepare("UPDATE jobs SET expires=0,attempts=6,retries=5 WHERE id=?").run(jobId);}finally{store.close();}
  expect((await cli(['flush'],env)).code).toBe(1);
- store=new RuntimeStore(config.dataRoot);try{expect(store.status().jobs[0]!.state).toBe('dead');store.retry(jobId);}finally{store.close();}
+ store=new RuntimeStore(config.dataRoot);try{expect(store.status().jobs[0]!.state).toBe('paused');store.retry(jobId);}finally{store.close();}
  const success=await cli(['flush'],env);expect(success.code,success.stderr).toBe(0);
  expect((await cli(['flush'],env)).code).toBe(0);
 },30000);

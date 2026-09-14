@@ -5,6 +5,7 @@ import { IMPORT_BASES, IMPORT_LABEL_PATTERN } from '../v2/import.js';
 import { PiMemoryService, nativeFailure } from './memory-service.js';
 import { MEMORY_READ_GUIDANCE, MEMORY_READ_DESCRIPTION, MEMORY_READ_REPLACEMENT_GUIDANCE } from '../v2/read-guidance.js';
 import { launchSessionDrain } from '../cli/session-drain.js';
+import { currentRuntimeVersion, registerRuntimeInstance } from '../cli/runtime-instances.js';
 const snapshots = (globalThis as typeof globalThis & {__commonMemoryPiSnapshots?:Map<string,MemoryView|string>}).__commonMemoryPiSnapshots ??= new Map<string,MemoryView|string>();
 const NO_AUTO_READ = 'Automatic memory read was not requested for this session lifecycle action. '+MEMORY_READ_GUIDANCE;
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -20,6 +21,8 @@ export function createCommonMemoryPiExtension(options: {runtimeFactory?: () => P
     let runtime: PiCaptureRuntime | undefined;
     let registry: ProjectRegistry | undefined;
     let config: CommonMemoryConfig | undefined;
+    // A receipt proves this extension factory loaded; stale receipts are shown as stale, never current.
+    const unregisterInstance = registerRuntimeInstance({ role: 'pi', version: currentRuntimeVersion(), pid: process.pid, executable: process.execPath, cli: new URL('./index.js', import.meta.url).pathname });
     // Only a valid configuration is cached; an unconfigured host is re-checked on the next event.
     const cfg = (): CommonMemoryConfig => {
       config ??= (options.configFactory ? options.configFactory() : loadConfig()) ?? undefined;
@@ -67,9 +70,9 @@ export function createCommonMemoryPiExtension(options: {runtimeFactory?: () => P
       try {
         const status=service.status(host(ctx));if(!('queue' in status))return;
         const count=(states:string[])=>status.queue.observations.filter(r=>states.includes(r.state)).reduce((n,r)=>n+r.count,0);
-        const waiting=count(['buffered','pending','claimed']),failed=count(['dead','quarantined']);
+        const waiting=count(['buffered','pending','claimed']),failed=count(['dead','paused','quarantined']);
         ctx.ui.setStatus('common-memory',`Memory · ${waiting?`等待/处理 ${waiting}`:'就绪'}${failed?` · 需检查 ${failed}`:''} · /memory`);
-        for(const job of status.queue.jobs)if(job.state==='dead'&&!notified.has(job.id)&&notified.size<20){notified.add(job.id);ctx.ui.notify('Common Memory 有任务处理失败；材料仍保留。打开 /memory → 处理状态查看与重试。','warning');}
+        for(const job of status.queue.jobs)if(['dead','paused'].includes(job.state)&&!notified.has(job.id)&&notified.size<20){notified.add(job.id);ctx.ui.notify('Common Memory 有任务暂停或失败；材料仍保留。打开 /memory → 处理状态查看原因；修复配置后相应任务会自动恢复。','warning');}
       } catch(error) {ctx.ui.setStatus('common-memory','Memory · 不可用 · /memory');}
     };
     const refresh=(ctx:ExtensionContext)=>{snapshots.set(snapshotKey(ctx),read(ctx));};
@@ -111,7 +114,7 @@ export function createCommonMemoryPiExtension(options: {runtimeFactory?: () => P
     pi.on("session_before_switch", (_event,ctx)=>{bind(ctx);safe(r=>{r.cancelInputs(ctx.sessionManager.getSessionId());});});
     pi.on("session_before_compact", (_event,ctx)=>{bind(ctx);});
     pi.on("session_before_tree", (_event,ctx)=>{bind(ctx);safe(r=>{r.cancelInputs(ctx.sessionManager.getSessionId());});});
-    pi.on("session_shutdown", async (event,ctx)=>{ feedbackGeneration++;if(feedbackTimer)clearInterval(feedbackTimer);feedbackTimer=undefined;uiContext=undefined;if(ctx.hasUI)ctx.ui.setStatus('common-memory',undefined); if(event.reason==='quit'){try{snapshots.delete(snapshotKey(ctx));}catch{/* unconfigured */}} if(runtime){try { bind(ctx);runtime.context(ctx.sessionManager.getSessionId(),branchContext(ctx.sessionManager.getBranch()));runtime.cancelInputs(ctx.sessionManager.getSessionId());if(event.reason==='quit'){runtime.end(ctx.sessionManager.getSessionId());launchSessionDrain();} } finally { try { await runtime.shutdown(); } finally { runtime=undefined;config=undefined;registry=undefined; } }} });
+    pi.on("session_shutdown", async (event,ctx)=>{ unregisterInstance(); feedbackGeneration++;if(feedbackTimer)clearInterval(feedbackTimer);feedbackTimer=undefined;uiContext=undefined;if(ctx.hasUI)ctx.ui.setStatus('common-memory',undefined); if(event.reason==='quit'){try{snapshots.delete(snapshotKey(ctx));}catch{/* unconfigured */}} if(runtime){try { bind(ctx);runtime.context(ctx.sessionManager.getSessionId(),branchContext(ctx.sessionManager.getBranch()));runtime.cancelInputs(ctx.sessionManager.getSessionId());if(event.reason==='quit'){runtime.end(ctx.sessionManager.getSessionId());launchSessionDrain();} } finally { try { await runtime.shutdown(); } finally { runtime=undefined;config=undefined;registry=undefined; } }} });
     pi.registerCommand("memory-refresh",{description:"Replace the frozen Common Memory snapshot",handler:async (_args,ctx)=>{refresh(ctx);if(ctx.hasUI)ctx.ui.notify('Common Memory 快照已刷新。','info');}});
     pi.registerCommand("memory-flush",{description:"Queue Common Memory maintenance",handler:async (_args,ctx)=>{if(runtime)bind(ctx);service.flush();updateFeedback();}});
     pi.registerCommand('memory',{description:'Open Common Memory: browse, adjust, import and processing status',handler:async(_args,ctx)=>{

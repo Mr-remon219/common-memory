@@ -12,13 +12,15 @@ import { externalPreflight, serializedSourceBytes } from '../core/safety/externa
 import { isImportSource, provenanceOf, type ProvenanceKind } from './import.js';
 import type { MemoryAgentRuntime } from '../core/contracts/memory-agent.js';
 import { openMemoryTask } from './memory-task.js';
+import { setTimeout as delay } from 'node:timers/promises';
 
 export interface WriterOptions {
   dataRoot: string; agent: MemoryAgentRuntime; allowedScopes: readonly string[]; writableScopes?: readonly string[];
   /** Provenance classes that may be sent to the remote model; a batch outside it is quarantined, never disclosed. Omitted means all. */
   allowedProvenance?: readonly ProvenanceKind[];
   documentSoftBytes?: number; documentHardBytes?: number; retentionMs?: number;
-  sessionCache?: SessionCacheOptions; scheduler?: RuntimeOptions; deadlineMs?: number; maxRequestBytes?: number; maxSourceBytes?: number | undefined; modelVersion?: string;
+  sessionCache?: SessionCacheOptions; scheduler?: RuntimeOptions; /** @deprecated Ignored: no whole-task deadline. */ deadlineMs?: number;
+  configurationVersion?: string; maxAgentTurns?: number; maxRequestBytes?: number; maxSourceBytes?: number | undefined; modelVersion?: string;
   checkpoint?: (phase: 'files_committed') => void;
 }
 /** Network runs outside both locks. Canonical commits are fenced inside lock -> DB. */
@@ -28,12 +30,14 @@ export class Writer {
   readonly #options: WriterOptions;
   constructor(options: WriterOptions) {
     this.#options = { ...options, allowedScopes: [...options.allowedScopes], writableScopes: [...(options.writableScopes ?? options.allowedScopes)] };
-    for (const n of [options.deadlineMs ?? 60000, options.maxRequestBytes ?? Number.MAX_SAFE_INTEGER, options.maxSourceBytes ?? Number.MAX_SAFE_INTEGER, options.retentionMs ?? 604800000, options.documentSoftBytes ?? 8192]) if (!Number.isSafeInteger(n) || n <= 0) throw new Error('INVALID_WRITER_LIMIT');
+    for (const n of [ options.maxRequestBytes ?? Number.MAX_SAFE_INTEGER, options.maxSourceBytes ?? Number.MAX_SAFE_INTEGER, options.retentionMs ?? 604800000, options.documentSoftBytes ?? 8192]) if (!Number.isSafeInteger(n) || n <= 0) throw new Error('INVALID_WRITER_LIMIT');
     if ((options.documentSoftBytes ?? 8192) > (options.documentHardBytes ?? 16384)) throw new Error('INVALID_DOCUMENT_BUDGET');
     this.canonical = new CanonicalStore(options.dataRoot, {hardLimitBytes:options.documentHardBytes ?? 16384});
     this.store = new RuntimeStore(options.dataRoot, options.scheduler);
     try { this.recover(); this.store.pruneProcessed(this.#options.retentionMs); } catch (error) { this.store.close(); throw error; }
   }
+  /** Composition may refresh settings only between tasks; each run retains its own snapshot. */
+  protected configure(options: { [K in keyof Omit<WriterOptions, 'dataRoot'>]?: WriterOptions[K] | undefined }): void { Object.assign(this.#options, options); }
   recover(): void { this.#recover(); }
   #recover(jobId?: string): 'committed' | 'ignored' | null {
     return withRepositoryLock(this.#options.dataRoot, () => this.store.transaction(() => {
@@ -47,21 +51,22 @@ export class Writer {
     }));
   }
   async run(options: { force?: boolean; signal?: AbortSignal } = {}): Promise<{outcome:string; reason?:string}> {
-    this.store.pruneProcessed(this.#options.retentionMs);
+    const settings = { ...this.#options };
+    this.store.pruneProcessed(settings.retentionMs);
     if (!this.store.hasWork()) return {outcome:'idle'};
     this.recover();
-    const claimed = this.store.claim(options);
+    const claimed = this.store.claim({...options,globalWrites:settings.writableScopes!.includes('global')});
     if (!claimed) return { outcome: 'idle' };
     let job: RuntimeJob = claimed;
+    this.store.configureTask(job, settings.configurationVersion);
     const controller = new AbortController();
     // First terminal cause wins, even if the model rejects with its own generic cancellation later.
     const terminate = (reason: 'TIMEOUT' | 'CANCELLED' | 'LEASE_RENEWAL_FAILED') => { if (!controller.signal.aborted) controller.abort(new Error(reason)); };
     const cancelled = () => terminate('CANCELLED');
     options.signal?.addEventListener('abort', cancelled, {once:true});
     if (options.signal?.aborted) cancelled();
-    const deadlineAt = Date.now() + (this.#options.deadlineMs ?? 60000);
-    const deadlineTimer = setTimeout(() => terminate('TIMEOUT'), this.#options.deadlineMs ?? 60000);
-    deadlineTimer.unref();
+    // No total-task timer. The transport detects stalled individual operations;
+    // caller cancellation and lease loss still fence every read and commit.
     const signal = controller.signal;
     let stage: DiagnosticStage = 'core_validation';
     let remoteContext: FailureDiagnostic | null = null;
@@ -70,6 +75,7 @@ export class Writer {
     try {
       signal.throwIfAborted();
       const scope = job.observations[0]!.scope;
+      if (this.store.isForgotten(job)) return this.#quarantine(job,'FORGOTTEN_SOURCE');
       if (!this.#options.allowedScopes.includes(scope)) return this.#quarantine(job, 'UNAUTHORIZED_SOURCE');
       // Disclosure authorization is per provenance class, not per process: an init-only configuration
       // processes imports while any user turn that reaches this queue stays local.
@@ -110,8 +116,35 @@ export class Writer {
         const oversized = grant.oversizedContext();
         if (oversized?.observationId != null) { this.store.quarantine(job, oversized.observationId, 'OVERSIZED_COMPLETE_SOURCE'); return {outcome:'quarantined'}; }
         if (sourceBytes() > cap) return this.#quarantine(job, 'OVERSIZED_COMPLETE_TURN');
-        result = await abortable(this.#options.agent.decide(grant.task, grant.reads, {
-          deadlineAt, signal,
+        result = await abortable(settings.agent.decide(grant.task, grant.reads, {
+          signal,
+          ...(settings.configurationVersion ? {configurationVersion:settings.configurationVersion} : {}),
+          onActivity: kind => this.store.activity(job,kind,settings.maxAgentTurns ?? 64),
+          validateDecision: body => {
+            const checked = validateDecision(body,job.id,documents,new Map(job.observations.map(o=>[`ev_${o.id}`,o.scope])),job.observations[0]!.taskKind);
+            grant.assertCoverage(checked);
+            this.#guardImports(job,checked.decisions,documents);
+            for (const d of checked.decisions) if(d.kind!=='ignore') for(const op of d.operations)this.store.assertSourceCurrent(job,op.target,d.evidence);
+            const operations = checked.decisions.flatMap(d=>d.kind==='ignore'?[]:d.operations);
+            for (const op of operations) {
+              const targetScope = op.target.startsWith('project:') ? op.target : 'global';
+              if (targetScope !== scope && (op.target.startsWith('project:') || job.observations[0]!.taskKind === 'edit')) throw new Error('UNAUTHORIZED_SCOPE');
+              if (!settings.writableScopes!.includes(targetScope)) throw new Error('UNAUTHORIZED_WRITE');
+            }
+            const updates = this.canonical.apply(documents,operations);
+            if (checked.edit_result === 'modified' && !documents.some(doc=>updates.has(doc.target)&&updates.get(doc.target)!==doc.content)) throw new Error('INVALID_EDIT_RESULT');
+            externalPreflight(Object.fromEntries(updates),{maxExcerptBytes:cap,maxCandidateBytes:cap,maxTotalBytes:cap});
+          },
+          recover: async error => {
+            signal.throwIfAborted();
+            const diagnostic = failureDiagnostic(error);
+            const code = failureCode(error);
+            if (!diagnostic.retryable || ['AUTHENTICATION','PROXY_AUTHENTICATION','CONFIGURATION','CANCELLED','SENSITIVE_CONTENT_REJECTED'].includes(code)) return false;
+            const used = this.store.reserveRecovery(job);
+            if (used === null) return false;
+            if (['network','request','http','response_body'].includes(diagnostic.stage)) await delay(Math.min(30_000,1000*2**(used-1)),undefined,{signal});
+            return true;
+          },
           onDiagnosticContext: context => { remoteContext = sanitizeDiagnostic({...context,reason:'timeout',retryable:true}); },
         }), signal);
         signal.throwIfAborted();
@@ -124,6 +157,7 @@ export class Writer {
       const evidence = new Map(job.observations.map(o => [`ev_${o.id}`,o.scope]));
       const decision = validateDecision(result.body, job.id, documents, evidence, job.observations[0]!.taskKind);
       this.#guardImports(job, decision.decisions, documents);
+      for(const d of decision.decisions)if(d.kind!=='ignore')for(const op of d.operations)this.store.assertSourceCurrent(job,op.target,d.evidence);
       const operations = decision.decisions.flatMap(d => d.kind === 'ignore' ? [] : d.operations);
       if (job.observations[0]!.taskKind === 'edit' && operations.some(op => (op.target.startsWith('project:') ? op.target : 'global') !== scope)) throw new Error('UNAUTHORIZED_WRITE');
       for (const op of operations) if (op.target.startsWith('project:') && op.target !== scope) throw new Error('UNAUTHORIZED_SCOPE');
@@ -134,6 +168,8 @@ export class Writer {
       stage = 'commit';
       withRepositoryLock(this.#options.dataRoot, () => this.store.transaction(() => {
         signal.throwIfAborted(); this.store.assertLease(job);
+        if (this.store.isForgotten(job)) throw new Error('FORGOTTEN_SOURCE');
+        for(const d of decision.decisions)if(d.kind!=='ignore')for(const op of d.operations)this.store.assertSourceCurrent(job,op.target,d.evidence);
         if (scope !== 'global' && !new ProjectRegistry(this.#options.dataRoot).list().some(p => `project:${p.id}` === scope)) throw new Error('UNAUTHORIZED_SCOPE');
         // Even ignore is tied to the complete snapshot, never consume a stale analysis.
         const current = this.canonical.snapshot(scope === 'global' ? [] : [scope.slice(8)]);
@@ -167,8 +203,9 @@ export class Writer {
       }
       try { this.store.fail(job, cause, diagnostic); } catch { /* A recovered receipt or superseded lease owns this batch. */ }
       const reason = failureCode(cause);
-      return {outcome:reason === 'CANCELLED' ? 'cancelled' : 'failed',reason};
-    } finally { clearInterval(timer); clearTimeout(deadlineTimer); options.signal?.removeEventListener('abort', cancelled); }
+      const state=this.store.db.prepare('SELECT state FROM jobs WHERE id=?').get(job.id)?.state;
+      return {outcome:reason === 'CANCELLED' ? 'cancelled' : state==='paused'?'paused':state==='quarantined'?'quarantined':'failed',reason};
+    } finally { clearInterval(timer); options.signal?.removeEventListener('abort', cancelled); }
   }
   #quarantine(job: RuntimeJob, issue: string): {outcome:string} { this.store.quarantine(job, job.observations[0]!.id, issue); return {outcome:'quarantined'}; }
   /**
@@ -201,7 +238,7 @@ export class Writer {
     }
   }
   #receipt(job: RuntimeJob, documents: DocumentSnapshot[], decisions: Decision[], updates: Map<string,string>): RuntimeReceipt & { removeTargets:string[] } {
-    const associations: {target:string;sourceIds:number[]}[] = [], removeTargets:string[] = [], forget = new Set<number>();
+    const associations: {target:string;sourceIds:number[]}[] = [], removeTargets:string[] = [], forget = new Set<number>(), purge = new Set<number>();
     // Manual Markdown edits invalidate title-based sidecar identities. Keep current
     // Markdown, but conservatively purge this document's short-lived source bodies
     // and stale links in the same recoverable receipt, never guess a rename.
@@ -211,7 +248,7 @@ export class Writer {
       if (prior !== null && prior !== doc.hash) {
         externallyEdited.add(doc.target);
         for (const key of this.store.documentSourceKeys(doc.target)) {
-          removeTargets.push(key); for (const id of this.store.sources(key)) forget.add(id);
+          removeTargets.push(key); for (const id of this.store.sources(key)) purge.add(id);
         }
       }
     }
@@ -236,7 +273,10 @@ export class Writer {
       }
     }
 
-    return {documents:documents.map(doc => ({target:doc.target,after:updates.has(doc.target)?digest(updates.get(doc.target)!):doc.hash})),jobId:job.id,observationIds:job.observations.map(o => o.id),associations,removeTargets,forgetSourceIds:[...forget]};
+    const at=Math.max(...job.observations.map(o=>Date.parse(o.observedAt))),sourceId=Math.max(...job.observations.map(o=>o.id));
+    const protectedTargets=[...new Set(decisions.flatMap(d=>d.kind==='ignore'?[]:d.kind==='forget'||d.kind==='retain'&&['update','correct'].includes(d.admission)||job.observations[0]!.taskKind==='edit'?d.operations.map(op=>op.target):[]))];
+    const correctionWatermarks=Number.isFinite(at)?protectedTargets.map(target=>({target,at,sourceId})):[];
+    return {purgeSourceIds:[...purge],correctionWatermarks,documents:documents.map(doc => ({target:doc.target,after:updates.has(doc.target)?digest(updates.get(doc.target)!):doc.hash})),jobId:job.id,observationIds:job.observations.map(o => o.id),associations,removeTargets,forgetSourceIds:[...forget]};
   }
   close(): void { this.store.close(); }
 }

@@ -44,14 +44,14 @@ it.each(['unrelated-host-key', '', undefined])('old configs use private credenti
   try { await expect(probeMemoryAgent(model, new AbortController().signal)).rejects.toMatchObject({code:'AUTHENTICATION'}); } finally { await model.close(); }
   expect(authorization).toBe('Bearer private-key');expect(resolveApiKey(config,env)).toBe('private-key');
 });
-it.each([undefined, '', 'CM_LOCAL_KEY=  '])('missing or empty private credentials never fall back to a host key (%s)', body => {
+it.each([undefined, '', 'CM_LOCAL_KEY=  '])('missing or empty private credentials pause durable work without falling back to a host key (%s)', async body => {
   const home=root();if(body!==undefined)writeFileSync(join(home,'.env'),body);
   vi.stubEnv('COMMON_MEMORY_HOME',home);vi.stubEnv('CM_LOCAL_KEY','host-only-key');
   const config=defaultConfig();config.remote.model='fake';config.remote.apiKeyEnv='CM_LOCAL_KEY';delete config.remote.apiKeySource;
   expect(()=>createConfiguredMemoryAgent(config)).toThrow('configure it in the Common Memory TUI');
-  expect(()=>createConfiguredWriter(config)).toThrow('configure it in the Common Memory TUI');
   expect(()=>resolveApiKey(config)).toThrow('configure it in the Common Memory TUI');
   expect(existsSync(config.dataRoot)).toBe(false);
+  const writer=createConfiguredWriter(config);try {writer.store.enqueue({sessionId:'s',entryId:'e',source:'interactive',scope:'global',text:'Synthetic preference',observedAt:new Date().toISOString()});expect(await writer.run()).toEqual({outcome:'paused',reason:'CONFIGURATION'});expect(writer.store.pending()).toHaveLength(1);expect(writer.store.status().jobs).toHaveLength(0);}finally{await writer.close();}
 });
 it('explicit setup credentials cannot be replaced by an inherited provider key', async () => {
   const home=root();writeFileSync(join(home,'.env'),'CM_LOCAL_KEY=entered-private-key');
@@ -64,7 +64,7 @@ it('explicit setup credentials cannot be replaced by an inherited provider key',
   expect(()=>validateConfig({...config,remote:{...config.remote,apiKeySource:'unknown'}})).toThrow('API key source');
   expect(()=>validateConfig({...config,remote:{...config.remote,preset:'unknown'}})).toThrow('provider preset');
 });
-it('configured Writer uses only private credentials and stops 401 retries until explicit recovery', async () => {
+it('configured Writer pauses 401 and automatically resumes the same job only after private credentials change', async () => {
   const home=root();vi.stubEnv('COMMON_MEMORY_HOME',home);vi.stubEnv('OPENAI_API_KEY','host-key-must-be-ignored');
   saveApiKeyToEnvFile('OPENAI_API_KEY','private-key');const headers: unknown[]=[];
   const server=createServer((req,res)=>{headers.push(req.headers.authorization);res.writeHead(401);res.end('{}');});
@@ -73,12 +73,12 @@ it('configured Writer uses only private credentials and stops 401 retries until 
   let writer: ReturnType<typeof createConfiguredWriter>|undefined;
   try {
     writer=createConfiguredWriter(config);writer.store.enqueue({sessionId:'s',entryId:'e',source:'interactive',scope:'global',text:'Synthetic preference',observedAt:new Date().toISOString()});
-    expect(await writer.run({force:true})).toMatchObject({outcome:'failed',reason:'AUTHENTICATION'});
-    expect(writer.store.status().jobs[0]).toMatchObject({state:'dead',attempts:1});
-    expect(await writer.run({force:true})).toEqual({outcome:'idle'});expect(headers).toEqual(['Bearer private-key']);
+    expect(await writer.run({force:true})).toMatchObject({outcome:'paused',reason:'AUTHENTICATION'});
+    expect(writer.store.status().jobs[0]).toMatchObject({state:'paused',attempts:1});
+    expect(await writer.run({force:true})).toEqual({outcome:'paused',reason:'AUTHENTICATION'});expect(headers).toEqual(['Bearer private-key']);
     const id=writer.store.status().jobs[0]!.id;await writer.close();
     saveApiKeyToEnvFile('OPENAI_API_KEY','rotated-private-key');writer=createConfiguredWriter(config);
-    writer.store.retry(id);await writer.run({force:true});expect(headers).toEqual(['Bearer private-key','Bearer rotated-private-key']);
+    await writer.run({force:true});expect(headers).toEqual(['Bearer private-key','Bearer rotated-private-key']);expect(writer.store.status().jobs).toHaveLength(1);expect(writer.store.status().jobs[0]).toMatchObject({id,attempts:2});
     expect(process.env.OPENAI_API_KEY).toBe('host-key-must-be-ignored');
   } finally {await writer?.close();server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}
 });
@@ -141,7 +141,7 @@ it('Writer durably queues before malformed ambient network admission and freezes
     writer.store.enqueue({sessionId:'s',entryId:'e',source:'interactive',scope:'global',text:'Synthetic preference',observedAt:new Date().toISOString()});
     // The environment is frozen at construction, not read again on the first request.
     vi.stubEnv('NO_PROXY','*');
-    expect(await writer.run({force:true})).toMatchObject({outcome:'failed',reason:'CONFIGURATION'});
+    expect(await writer.run({force:true})).toMatchObject({outcome:'paused',reason:'CONFIGURATION'});
     expect(writer.store.db.prepare('SELECT text,state FROM observations').get()).toMatchObject({text:'Synthetic preference'});
     expect(JSON.stringify(writer.store.status())).not.toContain('private.invalid');
   } finally {await writer.close();}
@@ -164,7 +164,7 @@ it.each(['env','custom'] as const)('deferred %s transport honors literal CIDRs a
    const config=defaultConfig({COMMON_MEMORY_HOME:home});config.dataRoot=join(home,`data${n}`);config.remote.model='fake';config.remote.baseUrl=`http://127.0.0.1:${(origin.address() as {port:number}).port}`;
    config.remote.proxy=mode==='env'?{mode}:{mode,urlEnv:'SYNTHETIC_PROXY',noProxy:list};
    const writer=createConfiguredWriter(config);
-   try {expect(originHits+proxyHits).toBe(n);writer.store.enqueue({sessionId:'s',entryId:'e',source:'interactive',scope:'global',text:'Synthetic preference',observedAt:new Date().toISOString()});expect(await writer.run({force:true})).toMatchObject({outcome:'failed',reason:'AUTHENTICATION'});}
+   try {expect(originHits+proxyHits).toBe(n);writer.store.enqueue({sessionId:'s',entryId:'e',source:'interactive',scope:'global',text:'Synthetic preference',observedAt:new Date().toISOString()});expect(await writer.run({force:true})).toMatchObject({outcome:'paused',reason:'AUTHENTICATION'});}
    finally {await writer.close();}
   }
   expect(originHits).toBe(1);expect(proxyHits).toBe(1);

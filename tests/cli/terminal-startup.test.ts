@@ -58,9 +58,11 @@ it('prints queued startup warnings before rendering the menu, then redraws and e
   let output = '', stderr = '', step = 0;
   const navigation = [
     { rendered: 'Enter: confirm', key: '\x1b[B' },
+    { rendered: '安全重应用受管资源；不终止旧宿主', key: '\x1b[B' },
     { rendered: '查找、查看与自然语言调整', key: '\x1b[B' },
     { rendered: '查看配置与更换模型', key: '\x1b[A' },
     { rendered: '查找、查看与自然语言调整', key: '\x1b[A' },
+    { rendered: '安全重应用受管资源；不终止旧宿主', key: '\x1b[A' },
     { rendered: '选择需要接入的 Agent', key: '\x1b' },
   ];
   let frame = '';

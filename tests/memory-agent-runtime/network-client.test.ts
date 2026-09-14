@@ -98,7 +98,7 @@ it('rejects redirects and cross-origin reuse without following to another host',
   await expect(network.fetch(endpoint)).rejects.toMatchObject({diagnostic:{reason:'network_error'}});
   await expect(network.fetch(`http://127.0.0.1:${other}`)).rejects.toMatchObject({code:'CONFIGURATION'});expect(escaped).toBe(0);
 });
-it('keeps the route and dispatcher across Pi request retries when environment changes', async () => {
+it('keeps an explicitly frozen route across calls without introducing SDK retries', async () => {
   let attempts=0,otherCalls=0;
   const env={HTTP_PROXY:''};
   const second=await listen(httpServer((_q,r)=>{otherCalls++;r.writeHead(401);r.end('{}');}));
@@ -106,6 +106,7 @@ it('keeps the route and dispatcher across Pi request retries when environment ch
   env.HTTP_PROXY=`http://127.0.0.1:${first}`;
   const endpoint='http://endpoint.invalid',network=new NetworkClient(endpoint,resolveRoute(endpoint,{mode:'env'},env));cleanup.push(()=>network.close());
   const agent=new ProviderMemoryAgent({baseUrl:endpoint,apiKey:'synthetic',model:'fake',fetch:network.fetch,maxRetries:1});
+  await expect(probeMemoryAgent(agent,new AbortController().signal)).rejects.toMatchObject({code:'UNAVAILABLE'});expect(attempts).toBe(1);
   await expect(probeMemoryAgent(agent,new AbortController().signal)).rejects.toMatchObject({code:'AUTHENTICATION'});
   expect(attempts).toBe(2);expect(otherCalls).toBe(0);
 });

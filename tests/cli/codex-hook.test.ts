@@ -34,7 +34,7 @@ it('Stop reconciles a completion appended later without a new prompt, deduplicat
  f.append({type:'user_message',message:'Actual user expression',images:[],local_images:[]});f.append({type:'message',role:'assistant',content:[{type:'output_text',text:'Suggestion'}]},'response_item');
  expect(f.read('Stop')).toEqual({});expect(f.read('Stop')).toEqual({});const consuming=consumeCodexInbox(f.config);
  const timer=setTimeout(()=>f.append({type:'task_complete',turn_id:'t'}),50);await consuming;clearTimeout(timer);
- const store=new RuntimeStore(f.config.dataRoot);try {expect(store.db.prepare('SELECT text,state FROM observations').all()).toEqual([{text:'Actual user expression',state:'buffered'}]);expect(store.db.prepare('SELECT state FROM session_turns').get()!.state).toBe('settled');}finally{store.close();}
+ const store=new RuntimeStore(f.config.dataRoot);try {expect(store.db.prepare('SELECT text,state FROM observations').all()).toEqual([{text:'Actual user expression',state:'pending'}]);expect(store.db.prepare('SELECT state FROM session_turns').get()!.state).toBe('settled');}finally{store.close();}
 });
 it('SessionEnd persists the tail body before the transcript disappears and closes with incomplete state',async()=>{
  const f=fixture();f.read();f.read('UserPromptSubmit','startup','s','test-process','Delivered tail');f.append({type:'task_started',turn_id:'t'});f.append({type:'user_message',message:'Delivered tail'});f.read('SessionEnd');rmSync(f.path);await consumeCodexInbox(f.config);
@@ -132,7 +132,7 @@ it.each(['no-active-turn','missing-item-turn','bad-time'] as const)('source-defi
  f.read('SessionEnd');expect(await consumeCodexInbox(f.config)).toMatchObject({complete:false,isolated:1,recoveries:[{issue:'CODEX_UNCONFIRMED_DELIVERY'}]});
  const store=new RuntimeStore(f.config.dataRoot);try{expect(store.db.prepare('SELECT * FROM observations').all()).toEqual([]);expect(store.db.prepare('SELECT text FROM codex_candidates').get()!.text).toBe('Synthetic delivery');}finally{store.close();}
 });
-it('0.154.0 ten-turn item/legacy duplicate fixture has exactly ten observations, never retained context evidence',async()=>{
+it('0.154.0 item/legacy duplicate fixture seals each settled turn exactly once, never retained context evidence',async()=>{
  const f=fixture();writeFileSync(f.path,JSON.stringify({type:'session_meta',payload:{cli_version:'0.154.0'}})+'\n');f.read();
  f.append({items:[{role:'user',content:'not evidence'}]},'retained_context');
  for(let n=1;n<=10;n++){
@@ -141,5 +141,5 @@ it('0.154.0 ten-turn item/legacy duplicate fixture has exactly ten observations,
   f.append({type:'task_started',turn_id:turn});f.append({type:'item_completed',turn_id:turn,item:{type:'UserMessage',id:`u${n}`,content:[{type:'text',text}]}});f.append({type:'user_message',message:text});f.append({type:'task_complete',turn_id:turn});
  }
  f.read('SessionEnd');await consumeCodexInbox(f.config);const store=new RuntimeStore(f.config.dataRoot);
- try{expect(store.pending()).toHaveLength(10);expect(store.db.prepare('SELECT count(*) AS n FROM session_batches').get()!.n).toBe(1);}finally{store.close();}
+ try{expect(store.pending()).toHaveLength(10);expect(store.db.prepare('SELECT count(*) AS n FROM session_batches').get()!.n).toBe(10);}finally{store.close();}
 });

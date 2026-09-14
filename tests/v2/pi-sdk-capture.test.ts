@@ -10,7 +10,7 @@ import {createCommonMemoryPiExtension} from '../../src/pi-extension/index.js';
 import {RuntimeStore} from '../../src/v2/runtime.js';
 vi.mock('../../src/cli/session-drain.js',()=>({launchSessionDrain:vi.fn()}));
 
-it('Pi 0.84.4 SDK delivers, persists and settles ten authenticated turns despite unavailable maintenance transport',async()=>{
+it('Pi 0.84.4 SDK delivers, persists, and immediately seals each authenticated turn despite unavailable maintenance transport',async()=>{
  const home=mkdtempSync(join(tmpdir(),'pi-sdk-capture-'));
  vi.stubEnv('COMMON_MEMORY_HOME',home);saveApiKeyToEnvFile('OPENAI_API_KEY','synthetic');vi.stubEnv('HTTPS_PROXY','http://proxy.invalid');vi.stubEnv('https_proxy',undefined);vi.stubEnv('NO_PROXY','synthetic.invalid/8');vi.stubEnv('no_proxy',undefined);
  const config=defaultConfig({COMMON_MEMORY_HOME:home});config.remote.model='synthetic';config.remote.proxy={mode:'env'};
@@ -35,13 +35,13 @@ it('Pi 0.84.4 SDK delivers, persists and settles ten authenticated turns despite
   const store=new RuntimeStore(config.dataRoot);
   try {
    expect(store.db.prepare('SELECT count(*) AS n FROM observations').get()!.n).toBe(10);
-   expect(store.db.prepare('SELECT count(*) AS n FROM session_batches').get()!.n).toBe(1);
+   expect(store.db.prepare('SELECT count(*) AS n FROM session_batches').get()!.n).toBe(10);
    expect(store.db.prepare("SELECT count(*) AS n FROM session_turns WHERE state='settled'").get()!.n).toBe(10);
   } finally {store.close();}
   await session.prompt('Synthetic quit tail');
  } finally {
   await session.extensionRunner.emit({type:'session_shutdown',reason:'quit'});session.dispose();
-  const store=new RuntimeStore(config.dataRoot);try{expect(store.db.prepare('SELECT count(*) AS n FROM session_batches').get()!.n).toBe(2);}finally{store.close();}
+  const store=new RuntimeStore(config.dataRoot);try{expect(store.db.prepare('SELECT count(*) AS n FROM session_batches').get()!.n).toBe(11);}finally{store.close();}
   vi.unstubAllEnvs();rmSync(home,{recursive:true,force:true});
  }
 });

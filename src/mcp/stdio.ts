@@ -4,6 +4,7 @@ import { createConfiguredWriter } from '../config/runtime.js';
 import { MCP_CAPABILITIES, McpIngress, type McpCapability, type McpOptions } from './ingress.js';
 import { createMcpServer } from './server.js';
 import { MCP_MAX_MESSAGE_BYTES } from './contract.js';
+import { currentRuntimeVersion, registerRuntimeInstance } from '../cli/runtime-instances.js';
 
 export function parseMcpOptions(args: string[]): McpOptions {
   const options: McpOptions = { clientId: '', workspaces: [], global: false, accept: false, capabilities: [] };
@@ -34,11 +35,13 @@ export async function runMcp(args: string[]): Promise<void> {
   const options = parseMcpOptions(args);
   const config = loadConfig();
   if (!config) throw new Error('Run common-memory config first');
+  // This receipt is filesystem-only: read profiles still never open Runtime SQLite.
+  const unregister = registerRuntimeInstance({ role: 'mcp', version: currentRuntimeVersion(), pid: process.pid, executable: process.execPath, cli: process.argv[1] ?? 'unknown' });
   const readOnly = options.capabilities.every(c => c === 'read');
   const writer = readOnly ? null : createConfiguredWriter(config);
   let ingress: McpIngress;
   try { ingress = new McpIngress(writer?.store ?? null, config, options); }
-  catch { await writer?.close(); throw new Error('MCP context configuration is invalid'); }
+  catch (error) { unregister(); await writer?.close(); throw error; }
   const abort = new AbortController();
   let running: Promise<void> | undefined;
   let closing: Promise<void> | undefined;
@@ -55,7 +58,7 @@ export async function runMcp(args: string[]): Promise<void> {
   try {
     transport = new StdioServerTransport(process.stdin, process.stdout, { maxBufferSize: MCP_MAX_MESSAGE_BYTES });
     handle = serveStdio(() => createMcpServer(ingress), { transport, onerror: report });
-  } catch (error) { await writer?.close(); throw error; }
+  } catch (error) { unregister(); await writer?.close(); throw error; }
   const timer = setInterval(check, 1000); timer.unref();
   const shutdown = () => {
     if (closing) return;
@@ -67,6 +70,7 @@ export async function runMcp(args: string[]): Promise<void> {
       try { await handle.close(); await running; }
       finally {
         try { await writer?.close(); } finally {
+          unregister();
           process.stdin.off('end', shutdown); process.stdin.off('error', shutdown);
           process.stdout.off('error', shutdown);
           process.off('SIGINT', shutdown); process.off('SIGTERM', shutdown);

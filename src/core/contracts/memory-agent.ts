@@ -45,7 +45,13 @@ export interface MemoryReadPort {
 }
 export interface MemoryAgentOptions {
   signal: AbortSignal;
-  deadlineAt: number;
+  /** Legacy compatibility only; runtimes must not enforce a whole-task deadline. */
+  deadlineAt?: number;
+  configurationVersion?: string;
+  validateDecision?: (body: unknown) => void;
+  /** Core owns and persists the shared recovery budget. No nested SDK retries. */
+  recover?: (error: unknown) => Promise<boolean>;
+  onActivity?: (kind: 'model_turn' | 'tool_call') => void;
   onDiagnosticContext?: (context: ModelDiagnosticContext) => void;
 }
 export interface MemoryDecision { body: unknown; usage: ModelUsage; promptDigest: string }

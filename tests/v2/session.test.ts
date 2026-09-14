@@ -12,17 +12,15 @@ afterEach(()=>cleanup.splice(0).reverse().forEach(f=>f()));
 function root(){const p=mkdtempSync(join(tmpdir(),'session-'));cleanup.push(()=>rmSync(p,{recursive:true,force:true}));return p;}
 const message=(id:string,turnId=id,text='user expression')=>({id,turnId,text,role:'user' as const,source:'interactive',scope:'global',observedAt:'2026-09-09T00:00:00.000Z'});
 function fixture(){const store=new RuntimeStore(root());cleanup.push(()=>store.close());const ingress=new SessionIngress(store);const a=ingress.open({client:'pi',processInstance:'process-a',sessionId:'a'}),b=ingress.open({client:'pi',processInstance:'process-a',sessionId:'b'});return {store,ingress,a,b};}
-it('isolates nine plus nine; tenth settled seals immediately independently of legacy thresholds',()=>{
- const {store,ingress,a,b}=fixture();for(let i=0;i<9;i++)for(const key of [a,b]){ingress.capture(key,message(String(i)));ingress.settle(key,String(i));}
- store.requestFlush();expect(store.claim({force:true})).toBeNull();
- ingress.capture(a,message('9'));expect(store.claim()).toBeNull();ingress.settle(a,'9');
- const job=store.claim()!;expect(job.observations).toHaveLength(10);expect(new Set(job.observations.map(o=>o.sessionId))).toEqual(new Set([a]));expect(ingress.status(b).batches).toBe(0);
+it('isolates sessions and schedules the first settled turn while leaving streaming input untouched',()=>{
+ const {store,ingress,a,b}=fixture();ingress.capture(a,message('a'));ingress.capture(b,message('b'));store.requestFlush();expect(store.claim({force:true})).toBeNull();
+ ingress.settle(a,'a');const job=store.claim()!;expect(job.observations.map(o=>o.sessionId)).toEqual([a]);expect(ingress.status(b)).toMatchObject({batches:0,states:{buffered:1}});store.finish(job);expect(store.claim()).toBeNull();ingress.settle(b,'b');expect(store.claim()!.observations.map(o=>o.sessionId)).toEqual([b]);
 });
-it('21 interactions yield 10+10+1 with duplicates and delivery grouping',()=>{
+it('21 complete interactions each schedule once, preserving duplicate and delivery grouping',()=>{
  const {store,ingress,a}=fixture();for(let i=0;i<21;i++){const m=message(String(i));ingress.capture(a,m);ingress.capture(a,m);ingress.capture(a,message(`steer-${i}`,String(i)));ingress.settle(a,String(i));ingress.settle(a,String(i));}
- expect(ingress.status(a).batches).toBe(2);ingress.end(a);ingress.end(a);expect(ingress.status(a).batches).toBe(3);
+ expect(ingress.status(a).batches).toBe(21);ingress.end(a);ingress.end(a);expect(ingress.status(a).batches).toBe(21);
  const sizes=[];for(let job=store.claim();job;job=store.claim()){sizes.push(job.observations.length);store.finish(job);}
- expect(sizes).toEqual([20,20,2]);expect(ingress.status(a).complete).toBe(true);
+ expect(sizes).toEqual(Array(21).fill(2));expect(ingress.status(a).complete).toBe(true);
 });
 it('capacity refusal preserves existing bodies and allows terminal envelopes',()=>{
  const {store,a}=fixture(),ingress=new SessionIngress(store,{maxSessionBytes:20,maxTotalBytes:30});ingress.capture(a,message('a','a','1234567890'));
@@ -46,16 +44,16 @@ it('Writer pages complete interactions without splitting evidence and related co
  const requests:ApprovedModelRequest[]=[];
  const writer=new Writer({dataRoot:root(),allowedScopes:['global'],allowedProvenance:['user_explicit','conversation_context'],maxRequestBytes:20000,model:{async analyze(r){requests.push(r);return response(r);}}});cleanup.push(()=>writer.close());const ingress=new SessionIngress(writer.store),key=ingress.open({client:'pi',processInstance:'p',sessionId:'s'});
  for(const turn of ['a','b']){ingress.capture(key,message(turn,turn,'x'.repeat(4000)));ingress.capture(key,message(turn+'-steer',turn,'confirm'));ingress.capture(key,{...message(turn+'-assistant',turn,'suggestion'),role:'assistant',source:'conversation_context'});ingress.settle(key,turn);}
- ingress.end(key);await drainSessions(writer,{sessionId:key});expect(requests.length).toBe(1);for(const r of requests)expect(r.projection.observations).toHaveLength(4);
+ ingress.end(key);await drainSessions(writer,{sessionId:key});expect(requests.length).toBe(2);for(const r of requests)expect(r.projection.observations).toHaveLength(2);
 });
 it('drain actually waits for retry instead of declaring idle success',async()=>{
- let attempts=0;const writer=new Writer({dataRoot:root(),allowedScopes:['global'],model:{async analyze(r){if(!attempts++)throw new Error('temporary');return response(r);}}});cleanup.push(()=>writer.close());
+ let attempts=0;const writer=new Writer({dataRoot:root(),allowedScopes:['global'],model:{async analyze(r){if(!attempts++)throw new Error('TIMEOUT');return response(r);}}});cleanup.push(()=>writer.close());
  const ingress=new SessionIngress(writer.store),key=ingress.open({client:'pi',processInstance:'p',sessionId:'s'});ingress.capture(key,message('u'));ingress.settle(key,'u');ingress.end(key);
  expect(await drainSessions(writer,{sessionId:key})).toBe(true);expect(attempts).toBe(2);expect(writer.store.status().jobs[0]!.attempts).toBe(2);
 });
-it('sealed sessions bypass an ineligible legacy head without mixing it into the job',()=>{
+it('legacy and sealed sessions are both immediately eligible, without mixing job boundaries',()=>{
  const {store,ingress,a}=fixture();store.enqueue({sessionId:'legacy',entryId:'l',text:'legacy',scope:'global',source:'rpc',observedAt:'2026-09-09T00:00:00Z'});
- ingress.capture(a,message('u'));ingress.settle(a,'u');ingress.end(a);const job=store.claim()!;expect(job.observations.map(o=>o.sessionId)).toEqual([a]);store.finish(job);expect(store.claim()).toBeNull();
+ ingress.capture(a,message('u'));ingress.settle(a,'u');ingress.end(a);const job=store.claim()!;expect(job.observations.map(o=>o.sessionId)).toEqual(['legacy']);store.finish(job);expect(store.claim()!.observations.map(o=>o.sessionId)).toEqual([a]);
 });
 it('an oversized complete interaction quarantines all user expressions together and retains the original bodies',async()=>{
  let calls=0;const writer=new Writer({dataRoot:root(),allowedScopes:['global'],allowedProvenance:['user_explicit','conversation_context'],maxRequestBytes:20000,model:{async analyze(r){calls++;return response(r);}}});cleanup.push(()=>writer.close());const ingress=new SessionIngress(writer.store),key=ingress.open({client:'pi',processInstance:'p',sessionId:'oversized'});

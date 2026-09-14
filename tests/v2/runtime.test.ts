@@ -17,11 +17,11 @@ describe("durable V2 runtime",()=>{
     expect(store.db.prepare('SELECT count(*) AS n FROM observations').get()!.n).toBe(0);
     add(store, 2); expect(store.pending()).toHaveLength(1);
   });
-  it("hybrid count, idle, bytes and oldest wait; no empty calls",()=>{
-    let now=0;const {store}=setup({now:()=>now});expect(store.claim({force:true})).toBeNull();add(store,1);expect(store.claim()).toBeNull();now=120000;let job=store.claim()!;expect(job.observations).toHaveLength(1);store.finish(job);
+  it("complete input is immediately ready regardless of obsolete thresholds; no empty calls",()=>{
+    let now=0;const {store}=setup({now:()=>now});expect(store.claim({force:true})).toBeNull();add(store,1);let job=store.claim()!;expect(job.observations).toHaveLength(1);store.finish(job);
     for(let n=2;n<=7;n++)add(store,n);job=store.claim()!;expect(job.observations).toHaveLength(6);store.finish(job);
     add(store,8,"x".repeat(16384));job=store.claim()!;store.finish(job);
-    add(store,9);now+=599999;add(store,10);expect(store.claim()).toBeNull();now++;expect(store.claim()!.observations).toHaveLength(2);
+    add(store,9);now+=599999;add(store,10);expect(store.claim()!.observations).toHaveLength(2);
   });
   it("fences expired owners across connections and freezes batches",()=>{
     let now=0;const {store,root}=setup({now:()=>now});const second=new RuntimeStore(root,{now:()=>now});stores.push(second);add(store,1);const old=store.claim({force:true})!;add(store,2);expect(second.claim({force:true})).toBeNull();now=120000;const fresh=second.claim({force:true})!;expect(fresh.generation).toBe(2);expect(fresh.observations.map(o=>o.id)).toEqual(old.observations.map(o=>o.id));expect(()=>store.finish(old)).toThrow("STALE_LEASE");second.finish(fresh);expect(second.pending()).toHaveLength(1);
@@ -35,15 +35,15 @@ describe("durable V2 runtime",()=>{
   it("quarantines ambiguous and extension-originated input without blocking FIFO",()=>{
     const {store}=setup();for(let i=0;i<2;i++)store.stageInput({sessionId:"s",text:"same",scope:"global",source:"interactive"});store.delivered("s","same",10);store.bind("s",[{id:"a",text:"same",timestamp:10}]);expect(store.pending()).toEqual([]);expect(store.status().observations).toContainEqual({state:"quarantined",count:1});add(store,3);expect(store.claim({force:true})!.observations).toHaveLength(1);
   });
-  it("retries with backoff, dead letters and explicitly requeues",()=>{
-    let now=0;const {store}=setup({now:()=>now,maxAttempts:2});add(store,1);let job=store.claim({force:true})!;store.fail(job,new Error("do not persist raw text"));expect(store.claim({force:true})).toBeNull();now=1000;job=store.claim({force:true})!;store.fail(job,new Error());expect(store.status().jobs[0]!.state).toBe("dead");store.retry(job.id);expect(store.claim({force:true})).not.toBeNull();
+  it("distinguishes unknown permanent errors from retryable failures and retains identity on explicit retry",()=>{
+    const {store}=setup({maxAttempts:2});add(store,1);const job=store.claim()!;store.fail(job,new Error("do not persist raw text"));expect(store.claim()).toBeNull();expect(store.status().jobs[0]).toMatchObject({state:'dead',issue:'VALIDATION_OR_STORAGE_FAILURE'});expect(JSON.stringify(store.status())).not.toContain('do not persist');store.retry(job.id);expect(store.claim()!.id).toBe(job.id);
   });
-  it.each([401,403])('HTTP %s dies after one attempt, preserves evidence, deduplicates and allows explicit recovery', status => {
+  it.each([401,403])('HTTP %s pauses after one attempt, preserves evidence, deduplicates and allows explicit recovery', status => {
     let now=0;const {store}=setup({now:()=>now});const observation=add(store,1,'Synthetic retained evidence');
     const job=store.claim({force:true})!;
     store.fail(job,new MemoryModelError('AUTHENTICATION','Do not persist provider secrets',false,{stage:'http',reason:'authentication',retryable:false,httpStatus:status}));
-    expect(store.status().jobs[0]).toMatchObject({state:'dead',attempts:1,issue:'AUTHENTICATION',retryAt:null,diagnostic:{httpStatus:status,retryable:false}});
-    expect(add(store,1,'Synthetic retained evidence')).toMatchObject({id:observation.id,state:'dead'});
+    expect(store.status().jobs[0]).toMatchObject({state:'paused',attempts:1,issue:'AUTHENTICATION',retryAt:null,diagnostic:{httpStatus:status,retryable:false}});
+    expect(add(store,1,'Synthetic retained evidence')).toMatchObject({id:observation.id,state:'paused'});
     now=600000;expect(store.claim({force:true})).toBeNull();
     expect(store.db.prepare('SELECT text FROM observations WHERE id=?').get(observation.id)!.text).toBe('Synthetic retained evidence');
     expect(JSON.stringify(store.status())).not.toContain('provider secrets');
@@ -52,21 +52,21 @@ describe("durable V2 runtime",()=>{
   });
   it.each(['AUTHENTICATION','PROXY_AUTHENTICATION','CONFIGURATION'] as const)('permanent %s is terminal even without a provider diagnostic', code => {
     const {store}=setup();add(store,1);store.fail(store.claim({force:true})!,new MemoryModelError(code,'synthetic',false));
-    expect(store.status().jobs[0]).toMatchObject({state:'dead',attempts:1,issue:code});
+    expect(store.status().jobs[0]).toMatchObject({state:'paused',attempts:1,issue:code});
   });
   it.each([429,503])('transient HTTP %s retains bounded queue backoff', status => {
     let now=0;const {store}=setup({now:()=>now,maxAttempts:2});add(store,1);
     const failure=new MemoryModelError(status===429?'RATE_LIMITED':'UNAVAILABLE','synthetic',true,{stage:'http',reason:status===429?'rate_limited':'provider_unavailable',retryable:true,httpStatus:status});
     store.fail(store.claim({force:true})!,failure);expect(store.status().jobs[0]).toMatchObject({state:'retry',attempts:1,retryAt:1000});
     expect(store.claim({force:true})).toBeNull();now=1000;store.fail(store.claim({force:true})!,failure);
-    expect(store.status().jobs[0]).toMatchObject({state:'dead',attempts:2});
+    expect(store.status().jobs[0]).toMatchObject({state:'retry',attempts:2,retryAt:3000});now=3000;store.fail(store.claim()!,failure);expect(store.status().jobs[0]).toMatchObject({state:'paused',attempts:3});
   });
   it('provider protocol errors stop but host cancellation leaves work resumable', () => {
     let now=0;const {store}=setup({now:()=>now});add(store,1);const job=store.claim({force:true})!;
     store.fail(job,new MemoryModelError('INVALID_RESPONSE','synthetic',false,{stage:'response_envelope',reason:'invalid_json',retryable:false,httpStatus:200}));
     expect(store.status().jobs[0]!.state).toBe('dead');store.retry(job.id);
-    const resumed=store.claim({force:true})!;store.fail(resumed,new Error('CANCELLED'));expect(store.status().jobs.at(-1)!.state).toBe('retry');
-    now=1000;expect(store.claim({force:true})).not.toBeNull();
+    const resumed=store.claim({force:true})!;store.fail(resumed,new Error('CANCELLED'));expect(store.status().jobs.at(-1)!.state).toBe('paused');
+    now=1000;expect(store.claim({force:true})).toBeNull();store.retry(job.id);expect(store.claim()!.id).toBe(job.id);
   });
   it("trim preserves whole turns and quarantining doesn't mark them processed",()=>{
     const {store}=setup();add(store,1);add(store,2);let job=store.claim({force:true})!;job=store.trim(job,1);expect(store.pending()).toHaveLength(1);store.quarantine(job,job.observations[0]!.id,"oversized");expect(store.pending()).toHaveLength(1);expect(store.status().observations).toContainEqual({state:"quarantined",count:1});

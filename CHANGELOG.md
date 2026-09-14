@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.2 — 2026-09-14
+
+- Completed, delivered interactions queue immediately instead of waiting for ten turns; open interactions remain buffered and source/target ordering remains enforced.
+- Saved model, credential, network and scheduler settings refresh between tasks. In-flight tasks retain their snapshot; maintenance no longer has a whole-task 60-second deadline.
+- Core owns a durable budget of five automatic recoveries beyond the initial attempt. SDK retries are disabled; same-Agent repairs, queue recovery and restart recovery share counters. Explicit retry preserves job identity and receipts.
+- Protocol-1 migration creates a durable data backup, rejects active legacy writers, and fences mutations on all durable tables. Exact-source forget tombstones and ordinary correction watermarks prevent stale replays; manual Markdown edits do not imply semantic forget.
+- Add TUI Upgrade / Repair Integrations, loaded-instance evidence, separate uninstall retention choices, paused-state visibility and durable progress counters.
+- Add bounded built-in maintenance/recovery skills and sanitized schema feedback. Fix credential/redaction and numeric-identifier scanner cases without allowing the reviewed credential-prefix/card-masking bypasses.
+- Validation: 845 tests, isolated package consumers, real WSL bridge/TUI, and synthetic real-model remember/correct/forget/replay checks. Full deidentified historical-corpus replay and existing real-client reload/lifecycle acceptance remain incomplete; see `docs/reliability-refactor.md`.
+- Upgrade: stop old writers normally, preserve the full data/configuration backup, repair managed integrations and reload hosts. Do not delete SQLite, downgrade its protocol marker or mix old/new writers.
+
 ## 0.4.1 — 2026-09-13
 
 - Isolate malformed Codex/Work activations without blocking healthy inboxes; retain original inputs/cursors and stable explicit recovery IDs. Bound the complete drain, reject stale failure records after concurrent consumption, and page all recovery entries.

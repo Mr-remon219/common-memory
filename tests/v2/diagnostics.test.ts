@@ -19,27 +19,28 @@ it('migrates an old database idempotently without changing jobs, evidence or rec
   db.exec("CREATE TABLE jobs(id TEXT PRIMARY KEY,token TEXT NOT NULL,generation INTEGER NOT NULL,state TEXT NOT NULL,expires INTEGER NOT NULL,attempts INTEGER NOT NULL,available INTEGER NOT NULL,issue TEXT); INSERT INTO jobs VALUES('old','token',3,'done',100,2,200,'TIMEOUT')");db.close();
   const a=open(p),b=open(p);
   expect(b.db.prepare('PRAGMA table_info(jobs)').all().filter(r=>r.name==='diagnostic')).toHaveLength(1);
-  expect(a.status().jobs).toEqual([{id:'old',state:'done',attempts:2,issue:'TIMEOUT',diagnostic:null,retryAt:null}]);
+  expect(a.status().jobs).toEqual([{id:'old',state:'done',attempts:2,issue:'TIMEOUT',diagnostic:null,retryAt:null,automaticRecoveries:1,modelTurns:0,toolCalls:0,configurationVersion:null,receiptVerified:false}]);
   expect(a.hasIncompleteWork()).toBe(false);add(a);const job=a.claim({force:true})!;expect(job).toBeTruthy();
 });
-it('persists only controlled diagnostics, reloads on restart, and hides history after success or retirement',()=>{
+it('persists controlled diagnostics, pauses configuration failures, and retries the durable job identity',()=>{
   const p=root();let now=100;let s=open(p,()=>now);add(s);const first=s.claim({force:true})!;
   s.fail(first,{code:'INVALID_RESPONSE',diagnostic:{...diagnostic,secret:'do-not-persist',message:'private-provider-text'}});
   const raw=String(s.db.prepare('SELECT diagnostic FROM jobs').get()!.diagnostic);expect(JSON.parse(raw)).toEqual(diagnostic);
   expect(raw).not.toContain('private');expect(raw).not.toContain('secret');
   stores.splice(stores.indexOf(s),1);s.close();s=open(p,()=>now);
-  expect(s.observationOutcome('s','e')).toMatchObject({jobId:first.id,state:'dead',jobState:'dead',attempts:1,retryAt:null,diagnostic,issue:'INVALID_RESPONSE'});
+  expect(s.observationOutcome('s','e')).toMatchObject({jobId:first.id,state:'paused',jobState:'paused',attempts:1,retryAt:null,diagnostic,issue:'INVALID_RESPONSE'});
   now=1100;expect(s.claim({force:true})).toBeNull();
-  s.retry(first.id);expect(s.observationOutcome('s','e')).toMatchObject({state:'pending',jobId:null,diagnostic:null,issue:null,attempts:0});
-  expect(s.status().jobs[0]).toMatchObject({state:'done',diagnostic});
-  const last=s.claim({force:true})!;s.fail(last,new Error('TIMEOUT'));now+=1000;
-  const retry=s.claim({force:true})!;s.finish(retry,{jobId:retry.id,observationIds:retry.observations.map(o=>o.id)});
-  expect(s.observationOutcome('s','e')).toMatchObject({state:'processed',issue:null,diagnostic:null,retryAt:null,attempts:2});
-  expect(s.status().jobs.at(-1)).toMatchObject({issue:'TIMEOUT',diagnostic:{reason:'timeout'}});expect(s.hasReceipt(retry.id)).toBe(true);
+  s.retry(first.id);
+  expect(s.status().jobs).toHaveLength(1);expect(s.observationOutcome('s','e')).toMatchObject({jobId:first.id,state:'claimed',jobState:'retry',attempts:1,retryAt:0,diagnostic,issue:'INVALID_RESPONSE'});
+  expect(s.db.prepare('SELECT text FROM observations WHERE jobId=?').get(first.id)!.text).toBe('private observation');
+  const resumed=s.claim({force:true})!;expect(resumed.id).toBe(first.id);s.fail(resumed,new Error('TIMEOUT'));now+=1000;
+  const retry=s.claim({force:true})!;expect(retry.id).toBe(first.id);s.finish(retry,{jobId:retry.id,observationIds:retry.observations.map(o=>o.id)});
+  expect(s.observationOutcome('s','e')).toMatchObject({state:'processed',issue:null,diagnostic:null,retryAt:null,attempts:3});
+  expect(s.status().jobs).toHaveLength(1);expect(s.status().jobs[0]).toMatchObject({id:first.id,issue:'TIMEOUT',diagnostic:{reason:'timeout'}});expect(s.hasReceipt(retry.id)).toBe(true);
 });
 it('reads malformed or unknown legacy diagnostics as null and does not persist an arbitrary error',()=>{
   const s=open(root());add(s);const job=s.claim({force:true})!;s.fail(job,new Error('private arbitrary message'));
-  expect(s.status().jobs[0]!.issue).toBe('VALIDATION_OR_STORAGE_FAILURE');
+  expect(s.status().jobs[0]).toMatchObject({state:'dead',issue:'VALIDATION_OR_STORAGE_FAILURE'});
   for(const value of ['{oops','{"stage":"secret","reason":"secret","retryable":true}']){s.db.prepare('UPDATE jobs SET diagnostic=?').run(value);expect(s.observationOutcome('s','e')!.diagnostic).toBeNull();}
 });
 it.each(['relay','init'] as const)('MCP %s query follows only the current linked job and never returns bodies', mode=>{
@@ -49,7 +50,7 @@ it.each(['relay','init'] as const)('MCP %s query follows only the current linked
   else ingress.init({importId:'e',contextId:'global',sourceLabel:'fixture',basis:'unknown',understanding:'private data'});
   const job=s.claim({force:true})!;s.fail(job,new MemoryModelError('INVALID_RESPONSE','private error',false,diagnostic));
   const result=mode==='relay'?ingress.status({submissionId:'e'}):ingress.initStatus('e');
-  expect(result).toMatchObject({diagnostic,jobId:job.id,jobState:'dead',attempts:1,retryAt:null});expect(JSON.stringify(result)).not.toContain('private');
+  expect(result).toMatchObject({diagnostic,jobId:job.id,jobState:'paused',attempts:1,retryAt:null});expect(JSON.stringify(result)).not.toContain('private');
 });
 it('Markdown part outcome includes current job diagnostics',()=>{
   const s=open(root());
@@ -57,7 +58,7 @@ it('Markdown part outcome includes current job diagnostics',()=>{
   const p={importId:'md-test',contentDigest:'test',fileName:'fixture.md',sourceLabel:'fixture',declaredAuthor:'unknown' as const,bytes:1,chunks:[{entryId:'part-1',text:'x',headingPath:[],bytes:1}]};
   return import('../../src/v2/document-import.js').then(({admitDocumentImport})=>{
     admitDocumentImport(s,p,'global');const job=s.claim({force:true})!;s.fail(job,new MemoryModelError('INVALID_RESPONSE','private',false,diagnostic));
-    expect(documentImportOutcome(s,'md-test','global',1)).toMatchObject({complete:false,parts:[{part:1,jobId:job.id,diagnostic,attempts:1,state:'dead',retryAt:null}]});
+    expect(documentImportOutcome(s,'md-test','global',1)).toMatchObject({complete:false,parts:[{part:1,jobId:job.id,diagnostic,attempts:1,state:'paused',retryAt:null}]});
   });
 });
 

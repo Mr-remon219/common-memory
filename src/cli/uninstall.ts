@@ -9,6 +9,8 @@ import { PRIVATE_NETWORK_KEYS } from '../memory-agent-runtime/network/route.js';
 import { applicationRoot, readInstallationState, removeIntegrations } from './integrations.js';
 import { scanIntegrationTargets } from './integration-targets.js';
 import { assertSafePath, installationTransaction, readInstallationFile } from './installation-files.js';
+import { parse as parseToml } from 'smol-toml';
+import { listRuntimeInstances, type RuntimeInstance } from './runtime-instances.js';
 
 export interface NpmInstallation { node: string; npm: string; prefix: string; packageRoot: string }
 const contains = (parent: string, child: string): boolean => {
@@ -63,29 +65,65 @@ export function withoutMemorySecrets(body: string | null, config: CommonMemoryCo
   return kept.trim() ? kept : null;
 }
 
-/** Fail rather than leave a hand-installed hook/extension pointing at a removed package. */
-function assertNoUnmanagedReferences(roots: string[], read = readInstallationFile): void {
-  const directories = new Set([...roots, resolve(process.env.CODEX_HOME || join(homedir(), '.codex')), resolve(process.env.PI_CODING_AGENT_DIR || join(homedir(), '.pi/agent')), ...scanIntegrationTargets().map(t => t.root)]);
+/** Parse only live MCP/hook/package keys. Comments and unrelated trust paths are not registrations. */
+const object = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === 'object' && !Array.isArray(value));
+function commandReference(value: unknown): boolean {
+  if (typeof value === 'string') return /(?:common-memory-core|(?:^|[\/\s'"]common-memory(?:[./\s'"]|$)))/u.test(value);
+  return Array.isArray(value) ? value.some(commandReference) : object(value) && Object.values(value).some(commandReference);
+}
+function hasMcpRegistration(body: string): boolean {
+  try {
+    const parsed = parseToml(body), servers = object(parsed) && object(parsed.mcp_servers) ? parsed.mcp_servers : undefined;
+    return Boolean(servers && Object.entries(servers).some(([name, server]) => /^common_memory(?:_|$)/u.test(name) || commandReference(server)));
+  } catch { return false; }
+}
+function hasHookRegistration(body: string): boolean {
+  try { const value: unknown = JSON.parse(body.replace(/^\ufeff/u, '')); return object(value) && commandReference(value.hooks); }
+  catch { return false; }
+}
+function hasPiRegistration(body: string): boolean {
+  try {
+    const value: unknown = JSON.parse(body.replace(/^\ufeff/u, ''));
+    if (!object(value)) return false;
+    // Pi trust/project metadata is intentionally not examined.
+    return commandReference(value.extensions) || commandReference(value.packages);
+  } catch { return false; }
+}
+export function assertNoUnmanagedReferences(roots: string[], read = readInstallationFile, options: { directories?: string[]; home?: string } = {}): void {
+  const directories = new Set(options.directories ?? [...roots, resolve(process.env.CODEX_HOME || join(homedir(), '.codex')), resolve(process.env.PI_CODING_AGENT_DIR || join(homedir(), '.pi/agent')), ...scanIntegrationTargets().map(t => t.root)]);
   for (const root of directories) {
     assertSafePath(root);
-    // Codex profile files are independently loaded and may retain launch commands after base removal.
     const profiles = existsSync(root) ? readdirSync(root).filter(name => name.endsWith('.config.toml')) : [];
-    for (const file of ['config.toml', 'hooks.json', 'settings.json', ...profiles]) {
+    for (const file of ['config.toml', ...profiles]) {
       const body = read(join(root, file));
-      if (body && /common-memory-core|common_memory|common-memory[./\\\s'"]/u.test(body)) throw new Error('检测到未由此安装器管理的 Common Memory 接入；保留程序和数据，避免留下失效客户端配置。');
+      if (body && hasMcpRegistration(body)) throw new Error('检测到未由此安装器管理的 Common Memory 接入；保留程序和数据，避免留下失效客户端配置。');
     }
+    const hooks = read(join(root, 'hooks.json'));
+    if (hooks && hasHookRegistration(hooks)) throw new Error('检测到未由此安装器管理的 Common Memory 接入；保留程序和数据，避免留下失效客户端配置。');
+    const settings = read(join(root, 'settings.json'));
+    if (settings && hasPiRegistration(settings)) throw new Error('检测到未由此安装器管理的 Common Memory 接入；保留程序和数据，避免留下失效客户端配置。');
   }
+}
+
+/** Known self-registered MCP/Pi instances are machine-verifiable; unknown legacy candidates are never killed. */
+export function assertNoLiveManagedInstances(rows: RuntimeInstance[] = listRuntimeInstances()): void {
+  const active = rows.filter(row => row.status === 'loaded' && (row.role === 'mcp' || row.role === 'pi'));
+  if (active.length) throw new Error(`仍有已确认加载的 Common Memory 实例：${active.map(row => `${row.role} pid ${row.pid}`).join('、')}。未终止任何进程。`);
 }
 
 /** A requested data deletion needs its own confirmation AND stopped clients; npm failures stop cleanup. */
 export async function uninstallCompletely(options: {
   config: CommonMemoryConfig;
   deleteMemory: boolean;
+  /** Independent selection; the TUI defaults to retain, legacy API callers preserve destructive semantics. */
+  deleteConfiguration?: boolean;
   clientsStopped: boolean;
   installation: NpmInstallation;
   removePackage?: (installation: NpmInstallation) => Promise<void>;
-}): Promise<{ retained: string | null }> {
+}): Promise<{ retained: string | null; configurationRetained: boolean }> {
+  const deleteConfiguration = options.deleteConfiguration ?? true;
   if (!options.clientsStopped) throw new Error('请先停止所有客户端及 Common Memory 后台任务。');
+  assertNoLiveManagedInstances();
   const home = configDirectory(), config = options.config;
   const beforeConfig = readInstallationFile(configFilePath());
   if (!isDeepStrictEqual(loadConfig(), config)) throw new Error('配置已变化，请重新打开卸载页面。');
@@ -111,8 +149,10 @@ export async function uninstallCompletely(options: {
     const stateFile = join(home, '.installation/state.json');
     commit([
       { path: stateFile, before: readInstallationFile(stateFile), after: JSON.stringify({ version: 1, setupComplete: false, targets: [], resources: [], dataRoot: config.dataRoot }) + '\n' },
-      { path: configFilePath(), before: beforeConfig, after: null },
-      { path: envPath, before: beforeEnv, after: withoutMemorySecrets(beforeEnv, config) },
+      ...(deleteConfiguration ? [
+        { path: configFilePath(), before: beforeConfig, after: null },
+        { path: envPath, before: beforeEnv, after: withoutMemorySecrets(beforeEnv, config) },
+      ] : []),
     ]);
   });
   if (options.deleteMemory) {
@@ -125,5 +165,5 @@ export async function uninstallCompletely(options: {
   }
   // The remaining administrative record is intentionally kept when data is retained: it remembers
   // a custom dataRoot and proves removed integration ownership without containing API keys.
-  return { retained: options.deleteMemory ? null : config.dataRoot };
+  return { retained: options.deleteMemory ? null : config.dataRoot, configurationRetained: !deleteConfiguration };
 }

@@ -19,7 +19,7 @@ beforeEach(() => {
   Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: true }); Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
   const config = defaultConfig(); config.remote.model = 'synthetic'; saveConfig(config);
   vi.mocked(npmInstallation).mockReturnValue({ node: process.execPath, npm: '/fake/npm', prefix: '/fake', packageRoot: '/fake/package' });
-  vi.mocked(uninstallCompletely).mockResolvedValue({ retained: config.dataRoot });
+  vi.mocked(uninstallCompletely).mockResolvedValue({ retained: config.dataRoot, configurationRetained: true });
 });
 afterEach(() => {
   vi.unstubAllEnvs(); for (const [stream, descriptor] of [[process.stdin, originalIn], [process.stdout, originalOut]] as const) { if (descriptor) Object.defineProperty(stream, 'isTTY', descriptor); else Reflect.deleteProperty(stream, 'isTTY'); }
@@ -33,12 +33,12 @@ it('integration removal is a multiselect and keeps Core configuration and memory
 });
 it('Memory Data confirmation defaults to keep, separate from Application/Integrations', async () => {
   vi.mocked(clack.select).mockResolvedValueOnce('complete');
-  vi.mocked(clack.confirm).mockImplementation(async opts => { expect(opts.initialValue).toBe(false); return !opts.message.includes('永久删除'); });
-  await runUninstallTui(); expect(uninstallCompletely).toHaveBeenCalledWith(expect.objectContaining({ deleteMemory: false, clientsStopped: true }));
-  expect(clack.multiselect).not.toHaveBeenCalled(); expect(clack.confirm).toHaveBeenCalledTimes(2);
+  vi.mocked(clack.confirm).mockImplementation(async opts => { expect(opts.initialValue).toBe(false); return !opts.message.includes('私有凭据') && !opts.message.includes('永久删除'); });
+  await runUninstallTui(); expect(uninstallCompletely).toHaveBeenCalledWith(expect.objectContaining({ deleteMemory: false, deleteConfiguration: false, clientsStopped: true }));
+  expect(clack.multiselect).not.toHaveBeenCalled(); expect(clack.confirm).toHaveBeenCalledTimes(3);
 });
 it('explicitly selected data deletion is passed separately to the backend', async () => {
-  vi.mocked(clack.select).mockResolvedValueOnce('complete'); vi.mocked(clack.confirm).mockResolvedValue(true); vi.mocked(uninstallCompletely).mockResolvedValue({ retained: null });
+  vi.mocked(clack.select).mockResolvedValueOnce('complete'); vi.mocked(clack.confirm).mockResolvedValue(true); vi.mocked(uninstallCompletely).mockResolvedValue({ retained: null, configurationRetained: false });
   await runUninstallTui(); expect(uninstallCompletely).toHaveBeenCalledWith(expect.objectContaining({ deleteMemory: true }));
 });
 it('Esc on the data question cancels the operation without invoking uninstall', async () => {

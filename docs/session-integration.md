@@ -1,6 +1,6 @@
 # 会话接入：当前实现与验收边界
 
-2026-09-09。此文替代历史记录中的 Pi 六条触发、每轮自动读、Codex 只读 Hook
+2026-09-14。此文替代历史记录中的六条/十轮触发、每轮自动读、Codex 只读 Hook
 及退出只排队的描述。Canonical Markdown、Core 写权限和 MCP stdio 固定 capability
 没有改变；没有新增检索、索引、长期记忆 revision、监听同步或一致性协议。
 
@@ -14,11 +14,9 @@ leases、jobs、receipts、associations 继续承担队列与恢复职责。迁�
 只作为上下文缓存。每条消息有稳定身份、角色、来源、顺序和摘要；重放相同消息是
 no-op，冲突拒绝。一个交互必须含实际已交付用户表达；候选输入不算轮。
 
-满十次 settled（含终止后的 interrupted）即原子封逻辑批次。未满十轮保持 buffered，
-不受 legacy 六条/字节/idle/flush 触发；退出将 open 标为 incomplete 并封尾。
+每次已交付交互 settled（含终止后的 interrupted）即原子封一个逻辑批次，不再等待数量、字节或 idle 阈值。尚未完成的交互保持 buffered；退出将 open 标为 incomplete。启动时封存旧版已经 settled、尚未入批的交互，不重新导入。
 关闭屏障由 sessions.closing 与该 session 全部观察的持久状态共同构成。
-complete 要求 closing、全部处理成功且不存在 incomplete 回合；dead/quarantined
-或未完成尾轮保留 incomplete。模型服务的永久认证、配置和协议错误不自动重复请求，首个失败即 dead，保留输入供显式 retry；瞬时网络错误仍按退避和次数上限处理。宿主取消保留可恢复工作，Core 决策校验失败仍可重新生成决定。
+complete 要求 closing、全部处理成功且不存在 incomplete 回合；paused/dead/quarantined 或未完成尾轮保留 incomplete。认证、配置与取消暂停工作；未知不可恢复错误停止自动处理。初次执行之外，Agent、队列、崩溃回收和配置恢复合计最多五次自动恢复，计数跨重启持久保存。显式 retry 保留任务身份、计数和回执。
 空尾不制造证据。status 命令列出各 session 汇总，
 不打印正文；显式 retry 后状态可重新计算，不存容易失真的成功标志。
 
@@ -53,9 +51,9 @@ Pi 捕获/维护诊断只打印受控原因与修复入口；相同原因去重�
 
 Pi 原生管理（当前源码，未发布）：`/memory` 使用官方 `SettingsList` / `ctx.ui.custom`，在页面内浏览 Profile、Preferences、全部已授权项目及关键词结果；正文滚动完整可达。页面展示不会追加模型消息或扩大 Agent 的当前项目范围。自然语言调整由用户 editor/confirm 提交，使用独立稳定 `pi-adjust:<session>` / requestId 身份，以原文 `interactive` 来源和可信 `taskKind: edit` 进入同一 Core；单请求单任务，返回接受不代表已落档。普通 interactive 捕获和旧观察仍是 observation；四类有界编辑结果见[编辑与限制契约](edit-and-input-contract.md)。导入页面与原生 `memory_init` 共同使用 `queueAgentImport`，要求配置 `agent_observation` 授权及实际用户确认；使用 `pi-init:<session>` / importId，保留幂等、冲突及来源保护，非交互模型调用不能自行批准。
 
-`memory_status` 发现当前 global/project 权限，并提供无正文的有界队列/近期请求结果、原 ID 状态及共享 `next` 指引。近期请求和任务明细最多 20 项，但 observation/job 状态汇总覆盖全部当前可见项，不因明细 LIMIT 漏报未完成；编辑结果在 TUI 中附原 request ID 或稳定 job ID，避免相同结果无法对应。用户页面可以查看全部已授权项目，模型工具不能因此读取其他项目。部分范围不可见的任务不展示 job ID，也不可重试；只有完整来源与范围仍授权的 dead 任务能由用户确认重试，不清除自动退避、不解除 quarantine。原生页面刷新/继续处理不依赖用户捕获权限。
+`memory_status` 发现当前 global/project 权限，并提供无正文的有界队列/近期请求结果、原 ID 状态及共享 `next` 指引。近期请求和任务明细最多 20 项，但 observation/job 状态汇总覆盖全部当前可见项，不因明细 LIMIT 漏报未完成；编辑结果在 TUI 中附原 request ID 或稳定 job ID，避免相同结果无法对应。用户页面可以查看全部已授权项目，模型工具不能因此读取其他项目。部分范围不可见的任务不展示 job ID，也不可重试；只有完整来源与范围仍授权的 dead/paused 任务能由用户确认重试，不清除自动退避、不解除 quarantine。原生页面刷新/继续处理不依赖用户捕获权限。
 
-有 UI 的会话每两秒读取无正文状态，更新扩展自己的状态栏条目；失败终态通知去重，不触发模型轮次，不记录正文、状态消息或额外 canonical 副本。shutdown 清理定时器；等待确认期间发生会话替换会拒绝提交。原生读取每次重新核验权限；冻结快照在撤权/项目移除时丢弃不再授权的文档，不自动重读或在重新授权后复活已丢弃内容。运行中的维护配置仍是启动快照，修改配置后须重启。新增覆盖见 `tests/v2/pi-memory.test.ts`。
+有 UI 的会话每两秒读取无正文状态，更新扩展自己的状态栏条目；失败终态通知去重，不触发模型轮次，不记录正文、状态消息或额外 canonical 副本。shutdown 清理定时器；等待确认期间发生会话替换会拒绝提交。原生读取每次重新核验权限；冻结快照在撤权/项目移除时丢弃不再授权的文档，不自动重读或在重新授权后复活已丢弃内容。维护配置在每项任务开始前重新读取，当前任务保持快照；代码升级仍需宿主重载。新增覆盖见 `tests/v2/pi-memory.test.ts`。
 
 Codex host：`src/cli/codex/transcript-codex-host.ts` 独立解析 rollout。最低版本 0.153.4，
 接受严格三段数字版本且无上限；不接受 prerelease/build 标签。以 0.153.4/0.154.0 tagged
@@ -79,7 +77,7 @@ busy timeout，生成器给三秒宿主期限；不在 hook 内运行模型。�
 `src/cli/session-drain.ts` 使用 detached＋独立 stdio＋unref 启动真正的 configured Writer。
 它先事务性将 inbox 正文转为 session 状态，同事务删除副本；Stop 核对会继续读取后续
 终态记录，不等待下一输入。单次核对最多 60 秒，失败保留 durable watch。消费者使用
-`src/v2/session-drain.ts` 等待正常租约、退避，直到已封工作处理或 dead/quarantined。
+`src/v2/session-drain.ts` 等待正常租约、退避，直到已封工作处理或 paused/dead/quarantined。这里的宿主信封核对期限不是维护模型的整次期限；模型维护没有整次墙钟期限。
 
 Codex-host 的解析、游标或交付认证失败按 activation 持久隔离：失败事务整体回滚，原 inbox、cursor、
 candidate 与正文都保留；消费者越过该 activation 继续处理其他健康会话。状态只展示固定错误码、
@@ -89,8 +87,7 @@ inbox/watch 数量和有界恢复 ID，不展示正文。恢复列表每页最�
 原子消费且不重复创建 observation。未知 transcript 与未认证交付仍 fail-closed；不在固定宿主协议错误
 集合中的 SQLite、文件 I/O 和瞬时容量错误直接上抛，不会被误记成某个坏会话。
 
-普通 `common-memory flush` 不封不足十轮的 settled 会话；buffered、host inbox/isolation/watch 都使
-命令返回 incomplete，状态分别覆盖 buffered、pending/claimed、running/retry、dead、processed。
+普通 `common-memory flush` 处理已完成交互，不把尚未完成的交互伪装成 settled；buffered、host inbox/isolation/watch 都使命令返回 incomplete，状态覆盖 buffered、pending/claimed、running/retry、paused/dead、processed。
 消费者崩溃后可由下一次写端事件或 `common-memory session-drain` 恢复；不会清空数据。
 父宿主与 MCP 退出不会撤销独立消费者。kill、重启、磁盘失败不承诺正常结束保证。
 
@@ -100,14 +97,13 @@ inbox/watch 数量和有界恢复 ID，不展示正文。恢复列表每页最�
 
 ## 验收证据与限制
 
-- `tests/v2/session.test.ts`：A/B 各九轮隔离，第十轮 settled 即可领取；21 轮形成
-  10＋10＋1；steering、重复交付/封口、容量回滚、incomplete 尾轮、混合来源隔离、
+- `tests/v2/session.test.ts`：A/B 隔离、每次 settled 即可领取；21 轮形成 21 个完整交互批次；steering、重复交付/封口、容量回滚、incomplete 尾轮、混合来源隔离、
   独立上下文权限、forget 清理后重放不复活、完整回合拆请求和真实退避等待。
 - `tests/cli/codex-hook.test.ts`：一次启动读取、新进程恢复、compact 不补读；Stop 重复
   且终态延迟写入；排除 response_item 用户环境文本；删除 transcript 后仍交接尾批；
   未知格式保留 inbox、版本拒绝、部分行拒绝、输入/快照上限、五种事件配置。
 - `tests/v2/pi-integration.test.ts` 和 `pi-sdk-capture.test.ts`：真实 SDK 合成 provider 及
-  事件级十轮/尾批、网络不可用时仍持久捕获、诊断去重；保留交付认证、队列来源、图片隔离；冻结附加块与
+  事件级逐交互封批、网络不可用时仍持久捕获、诊断去重；保留交付认证、队列来源、图片隔离；冻结附加块与
   宿主新 systemPrompt 组合、reload 保留快照。
 - `tests/cli/host-recovery-boundaries.test.ts`：连续进展仍遵守整次期限、并发成功及 rowid 复用不留过期隔离、超过二十条恢复项可分页访问。
 - `tests/cli/session-drain.test.ts`：实际 Node 宿主退出与 MCP EOF 后才释放本地假提供者，
@@ -184,7 +180,7 @@ Windows PowerShell 5.1 → Ubuntu WSL 的合成宿主测试验证 Unicode STDIO�
 ### v0.3.6 回归覆盖
 
 网络默认路由、Pi 捕获与诊断、Codex 新版本/未知结构、Work 保留项升级均先有失败回归。
-`tests/v2/pi-sdk-capture.test.ts` 通过真实 Pi SDK 和合成 provider 验证交付、持久化、十轮封批与退出尾批，
+`tests/v2/pi-sdk-capture.test.ts` 通过真实 Pi SDK 和合成 provider 验证交付、持久化、逐交互封批与退出交接，
 并验证维护网络不可用时仍能捕获；开发依赖基线为 Pi 0.84.4，另在本机 Pi 0.85.1 SDK 下验证。
 `tests/cli/codex-hook.test.ts` 覆盖官方 task_* / turn_* 等价回合事件、候选匹配及未知结构保留队列。
 `tests/cli/integrations.test.ts` 覆盖默认自动接入不新增 init 权限、已有只读接入升级、共享资源及安全卸载。

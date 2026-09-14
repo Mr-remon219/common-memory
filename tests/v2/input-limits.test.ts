@@ -13,6 +13,7 @@ import { queueAgentImport } from '../../src/v2/agent-ingress.js';
 import { prepareDocumentImport } from '../../src/v2/document-import.js';
 import { PiMemoryService } from '../../src/pi-extension/memory-service.js';
 import { McpIngress } from '../../src/mcp/ingress.js';
+import { readTask } from '../helpers/decision-runtime.js';
 
 const roots=tempRoots('cm-input-limits-');const close:(()=>void)[]=[];
 afterEach(()=>{for(const fn of close.splice(0).reverse())fn();roots.cleanup();});
@@ -80,15 +81,15 @@ it.each(['maxExcerptBytes','maxCandidateBytes','maxTotalBytes'] as const)('nativ
   config.disclosure[key]=serializedSourceBytes(text);
   expect(()=>validateMemoryEdit(edit,access)).not.toThrow();expect(native.adjust({cwd:root,sessionId:'native'},'global',text).accepted).toBe(true);expect(relay.submit({contextId:'global',submissionId:'original',text}).accepted).toBe(true);
 });
-it('oversized later context quarantines its own complete turn, never the healthy queue head',async()=>{
-  const writer=new Writer({dataRoot:roots.root(),allowedScopes:['global'],allowedProvenance:['user_explicit','conversation_context'],agent:{decide:vi.fn()},maxSourceBytes:80});close.push(()=>writer.close());
+it('oversized later context quarantines its own complete turn after the healthy immediate batch',async()=>{
+  const writer=new Writer({dataRoot:roots.root(),allowedScopes:['global'],allowedProvenance:['user_explicit','conversation_context'],agent:{decide:async(task,reads)=>{readTask(task,reads);return {body:{version:'memory_maintenance_v2',request_id:task.request_id,decisions:[{kind:'ignore',applicability:'uncertain',confidence:1,evidence:[],reason:'synthetic'}]},usage:{},promptDigest:'9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08'};}},maxSourceBytes:80});close.push(()=>writer.close());
   const ingress=new SessionIngress(writer.store),session=ingress.open({client:'pi',processInstance:'test',sessionId:'two-turns'});
   for(const turnId of ['healthy','oversized']) {
     const message={id:turnId,turnId,role:'user' as const,source:'interactive',scope:'global',text:'Review this.',observedAt:new Date().toISOString()};
     ingress.capture(session,message);ingress.capture(session,{...message,id:turnId+'-a',role:'assistant',source:'conversation_context',text:turnId==='healthy'?'Short context.':'long paragraph\n\n'.repeat(20)});ingress.settle(session,turnId);
   }
-  ingress.end(session);expect(await writer.run()).toEqual({outcome:'quarantined'});
-  expect(writer.store.db.prepare('SELECT entryId,state FROM observations ORDER BY id').all()).toEqual([{entryId:'healthy',state:'pending'},{entryId:'oversized',state:'quarantined'}]);
+  ingress.end(session);expect(await writer.run()).toEqual({outcome:'ignored'});expect(await writer.run()).toEqual({outcome:'quarantined'});
+  expect(writer.store.db.prepare('SELECT entryId,state FROM observations ORDER BY id').all()).toEqual([{entryId:'healthy',state:'processed'},{entryId:'oversized',state:'quarantined'}]);
 });
 
 it.each(['maxExcerptBytes','maxCandidateBytes'] as const)('configured Writer forwards legacy %s even with Unlimited total input',async key=>{

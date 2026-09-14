@@ -28,7 +28,7 @@ export function checkConfigUnchanged(previous: CommonMemoryConfig | null): void 
 export function saveSettings(next: CommonMemoryConfig, previous: CommonMemoryConfig): void {
   checkConfigUnchanged(previous);
   saveConfig(next);
-  clack.log.success('设置已保存。请重启正在运行的助手，新权限不会即时撤销旧会话中的访问。');
+  clack.log.success('设置已保存；维护参数在下一任务生效，当前任务保留原设置。宿主固定权限和已注入内容仍需重启会话更新。');
 }
 
 export async function runSetupWizard(existing: CommonMemoryConfig | null = loadConfig()): Promise<CommonMemoryConfig> {
@@ -52,7 +52,7 @@ export async function runSetupWizard(existing: CommonMemoryConfig | null = loadC
   const next: CommonMemoryConfig = { ...current, dataRoot, remote: {
     ...remote, baseUrl: normalizeOpenAICompatibleBaseUrl(baseUrl), model, apiKeyEnv: apiKeyEnv.trim(),
     ...(sameApi && current.remote.api === undefined ? {} : { api }),
-    ...(sameApi && reasoningEffort !== undefined ? { reasoningEffort } : {}),
+    ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
     ...(sameApi && thinking !== undefined ? { thinking } : {}),
     ...(sameApi && enableThinking !== undefined ? { enableThinking } : {}),
   } };
@@ -63,7 +63,7 @@ export async function runSetupWizard(existing: CommonMemoryConfig | null = loadC
   // Validate everything before the first write. Secret and config are separate private files.
   if (apiKey !== undefined) saveApiKeyToEnvFile(next.remote.apiKeyEnv, apiKey);
   saveConfig(next);
-  clack.log.success('模型设置已保存。正在运行的助手需要重启后生效。');
+  clack.log.success('模型设置已保存，将用于下一维护任务；当前任务不变。升级前已运行的旧版本助手仍需重启。');
   return loadConfig()!;
 }
 
@@ -95,7 +95,7 @@ export async function runCredentialsWizard(current: CommonMemoryConfig): Promise
   if (!await confirm('保存新密钥？模型和其他设置保持不变。')) return;
   checkConfigUnchanged(current);
   saveApiKeyToEnvFile(current.remote.apiKeyEnv, key);
-  clack.log.success('密钥已保存。请重启助手，并用「测试模型连接」检查。');
+  clack.log.success('密钥已保存，下一维护任务将重新读取；可用「测试模型连接」检查。');
 }
 
 async function keyInput(): Promise<string> {
@@ -162,7 +162,7 @@ export async function runNetworkWizard(existing: CommonMemoryConfig | null = loa
       { path: configFilePath(), before: readInstallationFile(configFilePath()), after: JSON.stringify(next, null, 2) + '\n' },
     ]);
   });
-  clack.log.success('网络设置已保存。请重启助手；可用「测试模型连接」检查。');
+  clack.log.success('网络设置已保存，下一维护任务生效；可用「测试模型连接」检查。');
   return loadConfig()!;
 }
 
@@ -185,6 +185,7 @@ export async function runAdvancedWizard(current: CommonMemoryConfig): Promise<vo
     const field = await menu('要调整哪一项？', [
       { value: 'tokens', label: '最大输出长度', hint: `${current.remote.maxOutputTokens ?? 'Unlimited'} tokens` },
       { value: 'thinking', label: '思考方式', hint: '只选择服务商支持的参数' },
+      ...(current.remote.api==='chat_completions'?[{value:'effort',label:'思考强度',hint:'reasoning_effort；独立于 thinking 开关'}]:[]),
       { value: 'turns', label: 'Agent 模型轮次上限', hint: `${current.remote.maxAgentTurns ?? 64}；独立于 Unlimited 输入/输出` },
       { value: 'back', label: '返回' },
     ]);
@@ -199,11 +200,11 @@ export async function runAdvancedWizard(current: CommonMemoryConfig): Promise<vo
       const n = await numberInput('每次处理最多模型轮次（1–1024；留空恢复 64）', remote.maxAgentTurns, 1, 1024, true);
       if (n === undefined) delete remote.maxAgentTurns;
       else remote.maxAgentTurns = n;
-      review = `Agent 模型轮次：${current.remote.maxAgentTurns ?? 64} → ${n ?? 64}；整次处理期限仍为 60 秒。`;
+      review = `Agent 模型轮次：${current.remote.maxAgentTurns ?? 64} → ${n ?? 64}；无整任务时间上限；轮次累计跨自动恢复和重启。`;
     } else {
-      delete remote.reasoningEffort; delete remote.thinking; delete remote.enableThinking;
-      if ((remote.api ?? 'responses') === 'responses') {
-        const effort = await menu('思考强度（Responses，需要模型支持）', [
+      if ((remote.api ?? 'responses') === 'responses' || field==='effort') {
+        delete remote.reasoningEffort;
+        const effort = await menu('思考强度（需要服务商和模型支持）', [
           { value: 'default', label: '使用接口默认', hint: '不发送 reasoningEffort' },
           ...REASONING_EFFORTS.map(value => ({ value, label: value })),
           { value: 'back', label: '返回' },
@@ -212,6 +213,7 @@ export async function runAdvancedWizard(current: CommonMemoryConfig): Promise<vo
         if (effort !== 'default') remote.reasoningEffort = effort as ReasoningEffort;
         review = `思考强度：${current.remote.reasoningEffort ?? '接口默认'} → ${effort === 'default' ? '接口默认' : effort}`;
       } else {
+        delete remote.thinking; delete remote.enableThinking;
         const initial = current.remote.thinking ? `thinking:${current.remote.thinking.type}` : current.remote.enableThinking !== undefined ? `enableThinking:${current.remote.enableThinking}` : 'default';
         const mode = await menu('思考方式（Chat Completions，按服务商文档选择）', [
           { value: 'default', label: '使用接口默认', hint: '不发送思考参数' },
@@ -230,19 +232,16 @@ export async function runAdvancedWizard(current: CommonMemoryConfig): Promise<vo
     next = { ...current, remote };
   } else {
     const group = await menu('哪一类限制？', [
-      { value: 'scheduler', label: '队列处理节奏', hint: '不改变会话每 10 次交互封批的规则' },
+      { value: 'scheduler', label: '队列处理节奏', hint: '完整交互立即处理；兼容保留的旧等待阈值不再生效' },
       { value: 'sessionCache', label: '会话暂存容量' },
       { value: 'disclosure', label: '发送给模型的内容上限', hint: '单位为字节' },
       { value: 'back', label: '返回' },
     ]);
     if (group === 'back') return;
     const fields = group === 'scheduler' ? [
-      { value: 'turnThreshold', label: '普通队列批量阈值', unit: '条' },
-      { value: 'byteThreshold', label: '普通队列大小阈值', unit: '字节' },
-      { value: 'idleMs', label: '空闲后开始处理', unit: '毫秒' },
-      { value: 'maxWaitMs', label: '最长等待时间', unit: '毫秒' },
+      { value: 'turnThreshold', label: '旧入口单批容量（不是等待阈值）', unit: '条' },
       { value: 'leaseMs', label: '任务占用期限', unit: '毫秒' },
-      { value: 'maxAttempts', label: '最多尝试次数', unit: '次' },
+      { value: 'maxAttempts', label: '最多自动恢复次数（不超过 5）', unit: '次' },
     ] : group === 'sessionCache' ? [
       { value: 'maxSessionBytes', label: '单个会话暂存上限', unit: '字节' },
       { value: 'maxTotalBytes', label: '所有会话暂存上限', unit: '字节' },
@@ -264,7 +263,7 @@ export async function runAdvancedWizard(current: CommonMemoryConfig): Promise<vo
       review = '会话暂存将使用内置默认值，其他设置不变。';
     } else {
       const option = fields.find(f => f.value === field)!;
-      const n = await numberInput(`${option.label}（${option.unit}）`, values[field] == null ? undefined : Number(values[field]), field === 'contextTailTurns' ? 0 : 1, Number.MAX_SAFE_INTEGER, group === 'disclosure');
+      const n = await numberInput(`${option.label}（${option.unit}）`, values[field] == null ? undefined : Number(values[field]), field === 'contextTailTurns' ? 0 : 1, field==='maxAttempts'?5:Number.MAX_SAFE_INTEGER, group === 'disclosure');
       const previous = group === 'scheduler' ? current.scheduler : group === 'sessionCache' ? current.sessionCache : current.disclosure;
       next = validateConfig({ ...current, [group]: { ...previous, [field]: n ?? null } });
       review = `${option.label}：${values[field]} → ${n} ${option.unit}\n其他设置保持不变。`;

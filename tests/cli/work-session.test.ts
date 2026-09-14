@@ -49,7 +49,7 @@ it('failed reads and capacity rejection roll back replacement including pending 
  f.memory('x'.repeat(1000));expect(()=>refreshSession(f.home,'chatgpt-work','host','s')).toThrow('SESSION_CAPACITY_EXCEEDED');
  expect(f.inspect(s=>s.db.prepare('SELECT body FROM host_snapshots').get()!.body)).toBe(snapshot);
 });
-it('actual item delivery settles the tenth turn, deduplicates legacy delivery and excludes environment records',async()=>{
+it('actual item delivery seals each settled turn, deduplicates legacy delivery and excludes environment records',async()=>{
  const f=fixture();f.hook();
  for(let i=0;i<10;i++){
   const turn='t'+i,text='Synthetic expression '+i;f.hook('UserPromptSubmit','startup','s',text,turn);
@@ -57,7 +57,7 @@ it('actual item delivery settles the tenth turn, deduplicates legacy delivery an
   f.append({type:'item_completed',turn_id:turn,item:{type:'UserMessage',id:'u'+i,content:[{type:'text',text}]}});
   f.append({type:'user_message',message:text});f.append({type:'message',role:'user',content:[{type:'input_text',text:'Skill/environment instructions'}]},'response_item');f.append({type:'task_complete',turn_id:turn});
   f.hook('PostToolUse');await consumeCodexInbox(f.config);
-  f.inspect(s=>expect(s.pending()).toHaveLength(i===9?10:0));
+  f.inspect(s=>expect(s.pending()).toHaveLength(i+1));
  }
  f.inspect(s=>expect(s.db.prepare('SELECT COUNT(*) AS n FROM observations').get()!.n).toBe(10));
 });

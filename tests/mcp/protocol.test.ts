@@ -151,8 +151,8 @@ it.each(['EOF', ...(process.platform === 'win32' ? [] : ['SIGTERM'])])('%s abort
   await closed;
   const store = new RuntimeStore(config.dataRoot);
   try {
-    expect(store.status().jobs).toContainEqual(expect.objectContaining({ state: 'retry' }));
-    expect(store.db.prepare('SELECT text,state FROM observations').get()).toMatchObject({ text: submission.text, state: 'claimed' });
+    expect(store.status().jobs).toContainEqual(expect.objectContaining({ state: 'paused' }));
+    expect(store.db.prepare('SELECT text,state FROM observations').get()).toMatchObject({ text: submission.text, state: 'paused' });
   } finally { store.close(); }
 });
 it('exits on stdin EOF without protocol output pollution', async () => {

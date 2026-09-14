@@ -97,7 +97,7 @@ it.each(['provenance', 'read', 'write', 'empty', 'secret', 'oversized', 'excerpt
 it('keeps failed requests durably recoverable and never returns a malformed decision as success', async () => {
   decide = () => ({ unexpected: true });
   const result = await modifyMemory(config, 'A durable correction');
-  expect(result.complete).toBe(false); expect(result.outcome.jobState).toBe('retry');
+  expect(result.complete).toBe(false); expect(result.outcome.jobState).toBe('paused');
   expect(inspect(store => store.db.prepare('SELECT text,source FROM observations').get())).toEqual({ text: 'A durable correction', source: 'interactive' });
   expect(existsSync(join(config.dataRoot, 'memory/preferences.md'))).toBe(false);
 });

@@ -169,7 +169,7 @@ it('authorized failed work retries with its original body; import-only continuat
   const {config,store:s,service,host,wake}=fixture(true),store=s!;
   const request=service.adjust(host,'global','Preserve this complete qualifier.');const job=store.claim({force:true})!;
   store.db.prepare("UPDATE jobs SET state='dead' WHERE id=?").run(job.id);store.db.prepare("UPDATE observations SET state='dead' WHERE jobId=?").run(job.id);
-  service.retry(host,job.id);expect(service.status(host,{requestId:request.requestId})).toMatchObject({item:{state:'pending'}});
+  service.retry(host,job.id);expect(service.status(host,{requestId:request.requestId})).toMatchObject({item:{state:'claimed'}});
   expect(store.db.prepare('SELECT text FROM observations').get()!.text).toBe('Preserve this complete qualifier.');
   config.disclosure.allowedProvenance=['agent_observation'];service.import(host,imported);expect(service.flush()).toBe(true);expect(wake).toHaveBeenCalled();
 });

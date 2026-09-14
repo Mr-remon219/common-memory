@@ -5,6 +5,7 @@ import { loadConfig } from "../config/config.js";
 import { runFlush } from "./flush-command.js";
 import { listProjects, registerProject, removeProject, retryJob, runtimeStatus, showMemory } from './operations.js';
 import { printStatus, runNetworkWizard, runShowTui, runTui, UserCancelled } from "./tui.js";
+import { currentRuntimeVersion, registerRuntimeInstance } from './runtime-instances.js';
 
 async function main(): Promise<void> {
   // Imports can queue Node warnings (notably SQLite). Let them reach the terminal
@@ -86,4 +87,8 @@ Existing automation and protocol commands remain supported; see docs/usage.md.`)
   }
   throw new TypeError("Unknown command or unexpected arguments; use --help");
 }
-try {await main();}catch(error){if(error instanceof UserCancelled)process.exitCode=0;else{console.error(error instanceof Error?error.message:"Common Memory failed");process.exitCode=1;}}
+// Non-interactive/help/version paths must remain side-effect free. MCP and Pi register independently.
+const unregister = process.stdin.isTTY && process.stdout.isTTY
+  ? registerRuntimeInstance({ role: 'cli', version: currentRuntimeVersion(), pid: process.pid, executable: process.execPath, cli: process.argv[1] ?? 'unknown' })
+  : () => {};
+try {await main();}catch(error){if(error instanceof UserCancelled)process.exitCode=0;else{console.error(error instanceof Error?error.message:"Common Memory failed");process.exitCode=1;}}finally {unregister();}

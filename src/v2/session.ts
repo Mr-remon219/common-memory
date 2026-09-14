@@ -84,11 +84,13 @@ export class SessionIngress {
       this.seal(key,false);
     });
   }
-  seal(key:string,tail=false):void {
+  seal(key:string,_tail=false):void {
     this.store.transaction(()=>{
       const turns=this.store.db.prepare("SELECT t.id FROM session_turns t WHERE sessionId=? AND batchId IS NULL AND state!='open' AND EXISTS(SELECT 1 FROM session_messages m WHERE m.turn=t.id AND role='user') ORDER BY t.id").all(key);
-      while(turns.length>=10 || tail && turns.length) {
-        const group=turns.splice(0,10);
+      // A delivered, settled interaction is the semantic boundary. Never wait
+      // for a fixed count, and never include an open/streaming interaction.
+      while(turns.length) {
+        const group=turns.splice(0,1);
         const batch=this.store.db.prepare('INSERT INTO session_batches(sessionId) VALUES(?)').run(key).lastInsertRowid;
         for(const t of group) {
           this.store.db.prepare('UPDATE session_turns SET batchId=? WHERE id=?').run(batch,t.id!);
@@ -113,7 +115,7 @@ export class SessionIngress {
     const unbound=Number(this.store.db.prepare("SELECT COUNT(*) AS n FROM deliveries WHERE sessionId=? AND state='unbound'").get(key)!.n);
     const isolated=Number(this.store.db.prepare("SELECT COUNT(*) AS n FROM deliveries WHERE sessionId=? AND state='quarantined'").get(key)!.n);
     const pending=unbound+rows.filter(r=>['buffered','pending','claimed'].includes(String(r.state))).reduce((n,r)=>n+Number(r.n),0);
-    const failed=isolated+rows.filter(r=>['dead','quarantined'].includes(String(r.state))).reduce((n,r)=>n+Number(r.n),0);
+    const failed=isolated+rows.filter(r=>['dead','paused','quarantined'].includes(String(r.state))).reduce((n,r)=>n+Number(r.n),0);
     const incomplete=Boolean(this.store.db.prepare("SELECT 1 FROM session_turns WHERE sessionId=? AND state='incomplete' LIMIT 1").get(key));
     return {closing,complete:closing&&!pending&&!failed&&!incomplete,pending,failed,batches:Number(this.store.db.prepare('SELECT COUNT(*) AS n FROM session_batches WHERE sessionId=?').get(key)!.n),states};
   }

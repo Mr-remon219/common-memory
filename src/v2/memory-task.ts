@@ -21,7 +21,7 @@ export function openMemoryTask(store: RuntimeStore, job: RuntimeJob, documents: 
   const inspected = new Set<string>();
   const memoryCoverage = new Map<string, number>();
   let active = true;
-  const check = () => { options.signal.throwIfAborted(); if (!active) throw new Error('EXPIRED_TASK'); store.assertLease(job); };
+  const check = () => { options.signal.throwIfAborted(); if (!active) throw new Error('EXPIRED_TASK'); store.assertLease(job); if(store.isForgotten(job))throw new Error('FORGOTTEN_SOURCE'); };
   const add = (handle: string, ranges: BlockRange[], fields: Record<string, string>, metadata: Record<string, unknown>, evidence: string | undefined, required: boolean) => {
     const list = blocks.get(handle) ?? [];
     for (const range of ranges) {
