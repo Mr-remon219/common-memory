@@ -17,6 +17,7 @@ const packageRoot=resolve(args[1]??'.');
 const {defaultConfig}=await import(pathToFileURL(join(packageRoot,'dist/config/config.js')));
 const {RuntimeStore}=await import(pathToFileURL(join(packageRoot,'dist/v2/runtime.js')));
 const {installIntegrations,removeIntegrations}=await import(pathToFileURL(join(packageRoot,'dist/cli/integrations.js')));
+const {installService,stopService}=await import(pathToFileURL(join(packageRoot,'dist/service/manager.js')));
 const {SessionIngress}=await import(pathToFileURL(join(packageRoot,'dist/v2/session.js')));
 const powershell='/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe';
 if(!process.env.WSL_DISTRO_NAME||!existsSync(powershell))throw new Error('Requires WSL and Windows PowerShell interop');
@@ -43,6 +44,7 @@ try {
  const transcript=join(home,'转录.jsonl');writeFileSync(transcript,JSON.stringify({type:'session_meta',payload:{cli_version:'0.154.0'}})+'\n');
  mkdirSync(join(config.dataRoot,'memory'),{recursive:true});const profile=join(config.dataRoot,'memory/profile.md');writeFileSync(profile,'# Profile\n\n## Synthetic\nSNAPSHOT_A');
  const output=join(nativeRoot,'bundle'),bridge=join(output,'common-memory-bridge.ps1');
+ await installService(config,home);
  const targets=['codex','chatgpt'].map(id=>({id,name:id,root:output,mode:'windows-wsl',hooks:true}));
  installIntegrations(targets,config.dataRoot,{home});
  const hooksBefore=readFileSync(join(output,'hooks.json'),'utf8'),skillBefore=readFileSync(join(output,'skills/memory-refresh/SKILL.md'),'utf8'),bridgeBefore=readFileSync(bridge);
@@ -113,4 +115,4 @@ exit 0
  }finally{identities.close();}
  removeIntegrations(['chatgpt'],home);assert.equal(existsSync(bridge),false);assert.equal(existsSync(join(output,'hooks.json')),false);
  console.log('PASS: automatic shared Work/Codex installation and owner removal, native host identity, Unicode STDIO, path conversion, explicit refresh, exit code, canonical Writer/Core drain after native host exit, and independent direct WSL host identity.');
-} finally {release=true;server.closeAllConnections();await new Promise(r=>server.close(r));rmSync(home,{recursive:true,force:true});rmSync(nativeRoot,{recursive:true,force:true});}
+} finally {release=true;await stopService(home,true);server.closeAllConnections();await new Promise(r=>server.close(r));rmSync(home,{recursive:true,force:true});rmSync(nativeRoot,{recursive:true,force:true});}

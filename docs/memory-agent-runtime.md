@@ -88,7 +88,7 @@ System 只教维护行为、来源/条件的语义使用、工具工作流及 re
 使用 `Writer({agent: MemoryAgentRuntime, ...})`，或原来的 `createConfiguredWriter(config)`。
 `createConfiguredMemoryAgent(config)` 提供 owned Runtime，使用后 `await close()`；普通 Writer 仍只借用 neutral port，不关闭借来的 Runtime。
 
-升级写端前，安排旧 writer/MCP/drain 停写并备份整个 dataRoot。当前协议迁移在备份落盘后事务化升级，并通过所有持久表的连接 capability trigger 拒绝旧写端；活跃旧租约或并发变化阻止迁移。不要混用新旧写端，更不能删除 SQLite“迁移”。详见[可靠性与恢复记录](reliability-refactor.md)。TUI 的 Provider → URL → Key → Model 流程和现有接入操作不变。连接测试改为真正的合成 inspect/read/submit 工具链，不读取或写入用户记忆。
+升级时保留整个 dataRoot。当前协议迁移在备份落盘后，在 canonical 锁和 DB 事务内撤销旧运行租约并替换精确归属的 capability trigger；旧 SELECT 租约检查和写入均被 fencing。并发变化或冲突 schema 会阻止迁移。不能删除 SQLite“迁移”。生产 Writer 由独立 Core 服务拥有，渠道升级与重载、恢复和卸载边界见[生命周期说明](service-lifecycle.md)。TUI 的 Provider → URL → Key → Model 流程和现有接入操作不变。连接测试改为真正的合成 inspect/read/submit 工具链，不读取或写入用户记忆。
 
 ## 验证边界
 
@@ -110,7 +110,7 @@ Linux 自动检查不证明 Windows/WSL、Desktop UI 信任和真实模型语义
 | Pi `memory_read`, `memory_status`, `memory_init`, `/memory`, `/memory-refresh`, `/memory-flush` | 原生 SettingsList 页面浏览/查找、用户 prompt 调整、逐次确认的 attributed 导入、状态/授权重试；沿用 Core ingress 和共享 next 指引，不复制 MCP server，不直接调用 Memory Agent；浏览其他授权项目不扩大模型工具范围或注入 | `tests/v2/pi-memory.test.ts`, `pi-integration.test.ts`, `pi-sdk-capture.test.ts` |
 | CLI `import` | 原 flags/作者/label/scope 与状态结果；新来源一 observation，旧 v1 exact namespace 保留 parts/status/receipts，不复活 purged/dead/quarantined | `tests/cli/import.test.ts`, `tests/v2/ingest.test.ts` |
 | CLI `show`, `status`, `flush`, `retry`, `project list/register/remove` | 原命令、授权、完整只读输出、排队重试、注册不授权且移除不删 Markdown | reader/writer tests、`tests/cli/tui.test.ts`, installed consumer |
-| CLI `codex-hook`, `work-hook`, `session-refresh`, `session-drain`, `codex-config`, `work-config`, `mcp`, `mcp-config` | 原 host 投递身份、事件语义、payload、启动固定 profiles 和诊断；后台 drain 现在组合独立 Runtime，不改 hook 协议 | CLI host/session tests、真实子进程 recovery；WSL 实测仍另行要求 |
+| CLI `codex-hook`, `work-hook`, `session-refresh`, `session-drain`, `codex-config`, `work-config`, `mcp`, `mcp-config` | 原 host 投递身份、事件语义、payload、启动固定 profiles 和诊断；渠道通过私有 IPC 交付给独立 Core；drain 不再在渠道内构造 Writer，不改 hook 协议 | CLI host/session tests、真实子进程 recovery；WSL 实测仍另行要求 |
 | TUI 记忆修改 / 模型连接测试 | 修改仍进入用户观察与 Core；连接测试改为无用户数据的真实工具链；不直接编辑 canonical | `modify-memory.test.ts`, `network-test.test.ts`, `setup.test.ts` |
 | JS `chunkMarkdown` / 旧大小常量 | **保留公开导出但 deprecated**，隔离在 `src/v2/compat/markdown-chunks.ts`，只供已有 standalone 调用者；不是新导入、模型或迁移的路径/上限 | 原 standalone helper 行为测试保留；共享 parser 的 lossless/inline-backtick/大块读取另测 |
 

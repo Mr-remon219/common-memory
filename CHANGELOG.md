@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.3 — 2026-09-15
+
+- Move production maintenance into an independently supervised Core service. Pi, stdio MCP, Codex/Work hooks and CLI use private Unix IPC with server-owned fixed-profile grants and durable request/digest replay; channel exit does not cancel accepted tasks.
+- Add systemd user, macOS LaunchAgent and WSL Windows Scheduled Task management, stable channel launchers, explicit cancellation and budget-preserving service handoff. WSL uses foreground wsl.exe plus a repeating recovery trigger; native crash recovery verifies one task and one canonical receipt.
+- Fence protocol-1 writers' leases and mutations during transactional protocol-2 takeover without discarding task identity, source links or recovery counters. Repair paused-only queues and known repairable legacy failures without reviving cancellation or quarantine.
+- Scan legacy registrations even without ownership records; confirm structural migration and preserve unrelated hooks/configuration. Disable service admission before safe uninstall; retain configuration, credentials and memory by default, including a restricted unreadable-config path.
+- Keep in-flight configuration snapshots while refreshing settings for later tasks. Fix repeated explicit retry/refresh IDs, truthful cancellation results, revoked snapshot replay authorization and native host identity validation.
+- Validation: 885 passing tests, package consumers, installed real WSL PTY/read/init MCP and Windows-to-WSL synthetic host bridge, plus separately enabled native Core crash recovery. Native macOS/Linux supervisor behavior, full WSL logout/reboot and real Desktop UI trust flows remain unverified.
+- Upgrade: preserve the complete dataRoot, activate Core through Upgrade / Repair Integrations, then reload legacy Pi/MCP/host integrations. Unknown embedded hosts can still safely block uninstall; no host is forcibly terminated. See docs/service-lifecycle.md.
+
 ## 0.4.2 — 2026-09-14
 
 - Completed, delivered interactions queue immediately instead of waiting for ten turns; open interactions remain buffered and source/target ordering remains enforced.

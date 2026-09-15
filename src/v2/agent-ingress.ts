@@ -23,6 +23,6 @@ export function queueAgentImport(store: RuntimeStore, sessionId: string, input: 
       throw error;
     }
     store.requestFlush();
-    return {accepted:true as const,duplicate,state:observation.state,contextId:observation.scope};
+    return {taskId:`task_${observation.id}`,accepted:true as const,duplicate,state:observation.state,contextId:observation.scope};
   });
 }

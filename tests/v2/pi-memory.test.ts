@@ -13,17 +13,17 @@ import { PiMemoryService } from '../../src/pi-extension/memory-service.js';
 import { createCommonMemoryPiExtension } from '../../src/pi-extension/index.js';
 import { PiCaptureRuntime } from '../../src/pi-extension/extraction-runtime.js';
 import { MemoryViewer, openMemoryPanel } from '../../src/pi-extension/memory-ui.js';
+import { DispatchPort } from '../helpers/service-dispatch.js';
 
 const roots=tempRoots('cm-pi-native-');const close:(()=>void|Promise<void>)[]=[];
 afterEach(async()=>{for(const fn of close.splice(0))await fn();vi.useRealTimers();vi.restoreAllMocks();roots.cleanup();});
-function fixture(open=false){
-  const root=roots.root(),config=defaultConfig({COMMON_MEMORY_HOME:root});
-  const store=open?new RuntimeStore(config.dataRoot):undefined;if(store)close.push(()=>store.close());
-  const wake=vi.fn();const service=new PiMemoryService({config:()=>config,activeStore:()=>store?{dataRoot:config.dataRoot,store}:undefined,wake});
-  const host={cwd:root,sessionId:'session'};return {root,config,store,service,host,wake};
+function fixture(_open=false){
+  const root=roots.root(),config=defaultConfig({COMMON_MEMORY_HOME:root}),store=new RuntimeStore(config.dataRoot);close.push(()=>store.close());
+  const service=new PiMemoryService({config:()=>config,client:new DispatchPort(store,()=>config)});
+  const host={cwd:root,sessionId:'session'};return {root,config,store,service,host};
 }
 const imported={importId:'original',contextId:'global',sourceLabel:'prior-agent',basis:'unknown' as const,understanding:'Only during Rust review, prefers concise comments.',gaps:'No evidence about other work.'};
-it('read/discovery work without a key or database; a human may browse authorized projects without expanding model scope',()=>{
+it('read/discovery work without a key; a human may browse authorized projects without expanding model scope',async()=>{
   const {root,config,service,host}=fixture();const other=join(root,'other');mkdirSync(other);
   const project=new ProjectRegistry(config.dataRoot).register(other,'Other');config.disclosure.allowedScopes=[...config.disclosure.allowedScopes,`project:${project.id}`];
   mkdirSync(join(config.dataRoot,'memory/projects'),{recursive:true});writeFileSync(join(config.dataRoot,'memory/projects',`${project.id}.md`),'# Other\n\n## Note\nPRIVATE_OTHER');
@@ -31,51 +31,49 @@ it('read/discovery work without a key or database; a human may browse authorized
   expect(service.read(host).documents).toHaveLength(2);
   expect(()=>service.read(host,`project:${project.id}`)).toThrow('CONTEXT_UNAVAILABLE');
   expect(service.read(host,`project:${project.id}`,true).documents[0]!.content).toContain('PRIVATE_OTHER');
-  expect(service.status(host)).toMatchObject({initEnabled:false,readEnabled:true});
-  expect(existsSync(join(config.dataRoot,'runtime.sqlite'))).toBe(false);
+  expect(await service.status(host)).toMatchObject({initEnabled:false,readEnabled:true});
   config.disclosure.allowedScopes=['global'];expect(()=>service.read(host,`project:${project.id}`,true)).toThrow('CONTEXT_UNAVAILABLE');
 });
-it('native Init uses structural Core ingress, stable session identity and exact replay across reopen',()=>{
+it('native Init uses structural Core ingress, stable session identity and exact replay across reopen',async()=>{
   const {config,service,host}=fixture();config.disclosure.allowedProvenance=[...config.disclosure.allowedProvenance,'agent_observation'];
-  expect(service.import(host,imported)).toMatchObject({accepted:true,duplicate:false,next:{arguments:{importId:'original'}}});
-  expect(service.import(host,imported)).toMatchObject({duplicate:true});
-  expect(()=>service.import(host,{...imported,understanding:'changed'})).toThrow('SUBMISSION_CONFLICT');
+  expect(await service.import(host,imported)).toMatchObject({accepted:true,duplicate:false,next:{arguments:{importId:'original'}}});
+  expect(await service.import(host,imported)).toMatchObject({duplicate:true});
+  await expect(service.import(host,{...imported,understanding:'changed'})).rejects.toThrow('SUBMISSION_CONFLICT');
   const store=new RuntimeStore(config.dataRoot);try{
     const rows=store.db.prepare('SELECT source,text FROM observations').all();expect(rows).toHaveLength(1);expect(rows[0]!.source).toBe('agent_import');expect(rows[0]!.text).toContain(imported.gaps);
     expect(store.db.prepare('SELECT COUNT(*) AS n FROM ingest_blocks').get()!.n).toBe(2);
   }finally{store.close();}
-  expect(service.status(host,{importId:'original'})).toMatchObject({item:{state:'pending'}});
-  expect(service.status({...host,sessionId:'other'},{importId:'original'})).toMatchObject({item:null});
+  expect(await service.status(host,{importId:'original'})).toMatchObject({item:{state:'pending'}});
+  expect(await service.status({...host,sessionId:'other'},{importId:'original'})).toMatchObject({item:null});
 });
-it.each(['permission','scope','size','cancel'])('denies native import %s without admitting material',reason=>{
-  const {config,service,host}=fixture();config.disclosure.allowedProvenance=[...config.disclosure.allowedProvenance,'agent_observation'];const signal=new AbortController();
+it.each(['permission','scope','size','cancel'])('denies native import %s without admitting material',async reason=>{
+  const {config,service,host,store}=fixture();config.disclosure.allowedProvenance=[...config.disclosure.allowedProvenance,'agent_observation'];const signal=new AbortController();
   if(reason==='permission')config.disclosure.allowedProvenance=[];
   if(reason==='scope')config.disclosure.allowedScopes=[];
   if(reason==='size')config.disclosure.maxTotalBytes=1;
   if(reason==='cancel')signal.abort();
-  expect(()=>service.import(host,imported,signal.signal)).toThrow();
-  if(existsSync(join(config.dataRoot,'runtime.sqlite'))){const s=new RuntimeStore(config.dataRoot);try{expect(s.status().observations).toEqual([]);}finally{s.close();}}
+  await expect(service.import(host,imported,signal.signal)).rejects.toThrow();expect(store.status().observations).toEqual([]);
 });
-it('an accepted explicit adjustment ID remains queryable unchanged, while colon IDs are rejected',()=>{
+it('an accepted explicit adjustment ID remains queryable unchanged, while colon IDs are rejected',async()=>{
   const {service,host,store}=fixture(true);const requestId='edit_original-1';
-  const accepted=service.adjust(host,'global','A complete editing request.',requestId);
+  const accepted=await service.adjust(host,'global','A complete editing request.',requestId);
   expect(accepted).toMatchObject({accepted:true,requestId,next:{arguments:{requestId}}});
-  expect(service.status(host,{requestId})).toMatchObject({item:{state:'pending'},next:{arguments:{requestId}}});
-  expect(service.adjust(host,'global','A complete editing request.',requestId)).toMatchObject({duplicate:true,requestId});
-  expect(()=>service.adjust(host,'global','Another request.','not:queryable')).toThrow('INVALID_SUBMISSION_ID');
+  expect(await service.status(host,{requestId})).toMatchObject({item:{state:'pending'},next:{arguments:{requestId}}});
+  expect(await service.adjust(host,'global','A complete editing request.',requestId)).toMatchObject({duplicate:true,requestId});
+  await expect(service.adjust(host,'global','Another request.','not:queryable')).rejects.toThrow('INVALID_SUBMISSION_ID');
   expect(store!.pending()).toHaveLength(1);
 });
-it('bounds recent requests without truncating aggregate unfinished counts',()=>{
+it('bounds recent requests without truncating aggregate unfinished counts',async()=>{
   const {service,host,store}=fixture(true);
-  for(let i=0;i<25;i++)service.adjust(host,'global',`Complete editing request ${i}.`,`edit-${i}`);
-  const status=service.status(host);
+  for(let i=0;i<25;i++)await service.adjust(host,'global',`Complete editing request ${i}.`,`edit-${i}`);
+  const status=await service.status(host);
   expect('recent' in status && status.recent).toHaveLength(20);
   if(!('recent' in status))throw new Error('missing recent status');
   expect(status.recent.map(row=>row.requestId)).toEqual(Array.from({length:20},(_,i)=>`edit-${24-i}`));
   expect(status.queue.observations).toContainEqual({state:'pending',count:25});
   expect(store!.db.prepare("SELECT COUNT(*) AS n FROM observations WHERE state='pending'").get()!.n).toBe(25);
   for(let i=0;i<25;i++){const job=store!.claim({force:true})!;store!.db.prepare("UPDATE jobs SET state='dead' WHERE id=?").run(job.id);store!.db.prepare("UPDATE observations SET state='dead' WHERE jobId=?").run(job.id);}
-  const failed=service.status(host);if(!('recent' in failed))throw new Error('missing failed status');
+  const failed=await service.status(host);if(!('recent' in failed))throw new Error('missing failed status');
   expect(failed.recent).toHaveLength(20);expect(failed.queue.jobs).toHaveLength(20);
   expect(failed.queue.observations).toContainEqual({state:'dead',count:25});expect(failed.queue.jobStates).toContainEqual({state:'dead',count:25});
 });
@@ -89,35 +87,36 @@ it('prompt adjustment is verbatim user evidence, with Core retain/correct/forget
     return {body:{edit_result:'modified',version:'memory_maintenance_v2',request_id:task.request_id,decisions:[{...decision,applicability:'global',confidence:1,evidence:projection.observations.map(o=>o.ref),reason:'synthetic'}]},usage:{},promptDigest:'a'.repeat(64)};
   }}});close.push(()=>writer.close());
   for(const prompt of ['  Only during review: use A.\n','Replace A with B, only during review.','Forget that review preference.']){
-    const accepted=service.adjust(host,'global',prompt);expect(accepted.next.action).toBe('poll');
-    expect(service.status(host,{requestId:accepted.requestId})).toMatchObject({item:{state:'pending'}});
+    const accepted=await service.adjust(host,'global',prompt);expect(accepted.next.action).toBe('poll');
+    expect(await service.status(host,{requestId:accepted.requestId})).toMatchObject({item:{state:'pending'}});
     expect(await writer.run({force:true})).toMatchObject({outcome:'committed'});
-    expect(service.status(host,{requestId:accepted.requestId})).toMatchObject({item:{state:'processed',editResult:'modified'},next:{action:'read'}});phase++;
+    expect(await service.status(host,{requestId:accepted.requestId})).toMatchObject({item:{state:'processed',editResult:'modified'},next:{action:'read'}});phase++;
   }
   expect(readFileSync(join(config.dataRoot,'memory/preferences.md'),'utf8')).not.toContain('## Review');
 });
-it.each(['read','write','provenance','empty','secret','size'])('adjustment refuses %s before queue creation',reason=>{
-  const {config,service,host}=fixture();let prompt='Complete condition.';
+it.each(['read','write','provenance','empty','secret','size'])('adjustment refuses %s before queue creation',async reason=>{
+  const {config,service,host,store}=fixture();let prompt='Complete condition.';
   if(reason==='read')config.disclosure.allowedScopes=[];if(reason==='write')config.writableScopes=[];if(reason==='provenance')config.disclosure.allowedProvenance=[];
   if(reason==='empty')prompt=' ';if(reason==='secret')prompt='password=verysecret';if(reason==='size')config.disclosure.maxTotalBytes=1;
-  expect(()=>service.adjust(host,'global',prompt)).toThrow();expect(existsSync(join(config.dataRoot,'runtime.sqlite'))).toBe(false);
+  await expect(service.adjust(host,'global',prompt)).rejects.toThrow();expect(store.status().observations).toEqual([]);
 });
-it('body-free scoped status cannot disclose/retry a partly unauthorized job or reset automatic backoff',()=>{
+it('body-free scoped status cannot disclose/retry a partly unauthorized job or reset automatic backoff',async()=>{
   const {config,store:s,service,host}=fixture(true);const store=s!;
-  const accepted=service.adjust(host,'global','SENSITIVE_TO_STATUS_NOT_A_SECRET');const job=store.claim({force:true})!;store.fail(job,new Error('UNAVAILABLE'));
-  expect(()=>service.retry(host,job.id)).toThrow('RETRY_UNAVAILABLE');
-  expect(JSON.stringify(service.status(host))).not.toContain('SENSITIVE_TO_STATUS_NOT_A_SECRET');
+  const accepted=await service.adjust(host,'global','SENSITIVE_TO_STATUS_NOT_A_SECRET');const job=store.claim({force:true})!;store.fail(job,new Error('UNAVAILABLE'));
+  await expect(service.retry(host,job.id)).rejects.toThrow('RETRY_UNAVAILABLE');
+  expect(JSON.stringify(await service.status(host))).not.toContain('SENSITIVE_TO_STATUS_NOT_A_SECRET');
   store.db.prepare("UPDATE jobs SET state='dead' WHERE id=?").run(job.id);store.db.prepare("UPDATE observations SET state='dead' WHERE jobId=?").run(job.id);
-  config.disclosure.allowedProvenance=[];expect(()=>service.retry(host,job.id)).toThrow('RETRY_UNAVAILABLE');config.disclosure.allowedProvenance=['user_explicit'];
+  config.disclosure.allowedProvenance=[];await expect(service.retry(host,job.id)).rejects.toThrow('RETRY_UNAVAILABLE');config.disclosure.allowedProvenance=['user_explicit'];
   store.enqueue({sessionId:'other',entryId:'one',scope:'project:hidden',text:'PRIVATE',source:'interactive',observedAt:new Date().toISOString()});store.db.prepare("UPDATE observations SET jobId=?,state='dead' WHERE sessionId='other'").run(job.id);
-  expect(JSON.stringify(service.status(host))).not.toContain('PRIVATE');expect(()=>service.retry(host,job.id)).toThrow('RETRY_UNAVAILABLE');
+  expect(JSON.stringify(await service.status(host))).not.toContain('PRIVATE');await expect(service.retry(host,job.id)).rejects.toThrow('RETRY_UNAVAILABLE');
   // Hidden material is excluded from the general queue view; item identity stays scope-gated too.
-  config.disclosure.allowedScopes=[];expect(service.status(host,{requestId:accepted.requestId})).toMatchObject({item:null});
+  config.disclosure.allowedScopes=[];expect(await service.status(host,{requestId:accepted.requestId})).toMatchObject({item:null});
 });
 function extension(config:ReturnType<typeof defaultConfig>,runtime?:PiCaptureRuntime){
+  const serviceStore=new RuntimeStore(config.dataRoot);close.push(()=>serviceStore.close());const service=new PiMemoryService({config:()=>config,client:new DispatchPort(serviceStore,()=>config)});
   const handlers=new Map<string,(e:any,c:any)=>any>(),tools=new Map<string,any>(),commands=new Map<string,any>();
   const pi={on:(n:string,f:any)=>handlers.set(n,f),registerTool:(t:any)=>tools.set(t.name,t),registerCommand:(n:string,c:any)=>commands.set(n,c),sendMessage:vi.fn(),appendEntry:vi.fn()} as unknown as ExtensionAPI;
-  createCommonMemoryPiExtension({configFactory:()=>config,...(runtime?{runtimeFactory:()=>runtime}:{})})(pi);
+  createCommonMemoryPiExtension({configFactory:()=>config,serviceFactory:()=>service,...(runtime?{runtimeFactory:()=>runtime}:{})})(pi);
   const ctx={cwd:join(config.dataRoot,'..'),mode:'tui',hasUI:true,hasPendingMessages:()=>false,sessionManager:{getSessionId:()=>'native',getBranch:()=>[],getLeafId:()=>null},ui:{confirm:vi.fn(async()=>false),setStatus:vi.fn(),notify:vi.fn()}} as unknown as ExtensionContext;
   return {handlers,tools,commands,pi,ctx};
 }
@@ -134,7 +133,7 @@ it('native import needs actual UI confirmation; noninteractive, denial, cancella
 it('pending import confirmation cannot submit into a replaced/reloaded session',async()=>{
   const {config}=fixture();config.disclosure.allowedProvenance=[...config.disclosure.allowedProvenance,'agent_observation'];const h=extension(config);
   vi.mocked(h.ctx.ui.confirm).mockImplementation(async()=>{await h.handlers.get('session_shutdown')!({reason:'reload'},h.ctx);return true;});
-  await expect(h.tools.get('memory_init').execute('t',imported,undefined,undefined,h.ctx)).rejects.toThrow('CANCELLED');expect(existsSync(join(config.dataRoot,'runtime.sqlite'))).toBe(false);
+  await expect(h.tools.get('memory_init').execute('t',imported,undefined,undefined,h.ctx)).rejects.toThrow('CANCELLED');const check=new RuntimeStore(config.dataRoot);try{expect(check.status().observations).toEqual([]);}finally{check.close();}
 });
 it('frozen injection and native read both stop exposing revoked scope; regrant does not revive the discarded snapshot',()=>{
   const {config}=fixture();mkdirSync(join(config.dataRoot,'memory'),{recursive:true});writeFileSync(join(config.dataRoot,'memory/profile.md'),'# Profile\n\n## Entry\nPRIVATE_PROFILE');const h=extension(config);
@@ -153,29 +152,29 @@ it('new nested-project resolution discards the former project snapshot without a
   expect(before()).not.toContain('PARENT_PRIVATE');expect(before()).not.toContain('NESTED_PRIVATE');
   const result=await h.tools.get('memory_read').execute('r',{},undefined,undefined,ctx);expect(JSON.stringify(result)).toContain('NESTED_PRIVATE');
 });
-it('human cross-project outcome stays visible without recommending an unauthorized model read',()=>{
+it('human cross-project outcome stays visible without recommending an unauthorized model read',async()=>{
   const {root,config,store,service,host}=fixture(true);const other=join(root,'other');mkdirSync(other);const p=new ProjectRegistry(config.dataRoot).register(other,'Other'),scope=`project:${p.id}`;
   config.disclosure.allowedScopes=['global',scope];config.writableScopes=['global',scope];
-  const request=service.adjust(host,scope,'Other project correction.');
+  const request=await service.adjust(host,scope,'Other project correction.');
   store!.db.prepare("UPDATE observations SET state='processed' WHERE entryId=?").run(request.requestId);
   const id=store!.db.prepare('SELECT id FROM observations WHERE entryId=?').get(request.requestId)!.id!;
   store!.db.prepare('INSERT INTO associations VALUES(?,?)').run(scope,id);
-  expect(service.status(host,{requestId:request.requestId},true)).toMatchObject({item:{state:'processed',retainedIn:[scope]},next:{action:'review'}});
-  const all=service.status(host,{},true);expect('recent' in all && all.recent[0]!.next.tool).toBeUndefined();
-  expect(service.status(host,{requestId:request.requestId})).toMatchObject({item:null});
+  expect(await service.status(host,{requestId:request.requestId},true)).toMatchObject({item:{state:'processed',retainedIn:[scope]},next:{action:'review'}});
+  const all=await service.status(host,{},true);expect('recent' in all && all.recent[0]!.outcome).toBeDefined();
+  expect(await service.status(host,{requestId:request.requestId})).toMatchObject({item:null});
   expect(()=>service.read(host,scope)).toThrow('CONTEXT_UNAVAILABLE');
 });
-it('authorized failed work retries with its original body; import-only continuation does not require capture permission',()=>{
-  const {config,store:s,service,host,wake}=fixture(true),store=s!;
-  const request=service.adjust(host,'global','Preserve this complete qualifier.');const job=store.claim({force:true})!;
+it('authorized failed work retries with its original body; import-only continuation does not require capture permission',async()=>{
+  const {config,store:s,service,host}=fixture(true),store=s!;
+  const request=await service.adjust(host,'global','Preserve this complete qualifier.');const job=store.claim({force:true})!;
   store.db.prepare("UPDATE jobs SET state='dead' WHERE id=?").run(job.id);store.db.prepare("UPDATE observations SET state='dead' WHERE jobId=?").run(job.id);
-  service.retry(host,job.id);expect(service.status(host,{requestId:request.requestId})).toMatchObject({item:{state:'claimed'}});
+  await service.retry(host,job.id);expect(await service.status(host,{requestId:request.requestId})).toMatchObject({item:{state:'claimed'}});
   expect(store.db.prepare('SELECT text FROM observations').get()!.text).toBe('Preserve this complete qualifier.');
-  config.disclosure.allowedProvenance=['agent_observation'];service.import(host,imported);expect(service.flush()).toBe(true);expect(wake).toHaveBeenCalled();
+  config.disclosure.allowedProvenance=['agent_observation'];await service.import(host,imported);expect(await service.flush(host)).toBe(true);
 });
 it('native feedback observes background state without adding messages or leaking raw diagnostics, and stops on shutdown',async()=>{
   vi.useFakeTimers();const {config,store:s}=fixture(true),store=s!;
-  const runtime=new PiCaptureRuntime({store,run:async()=>({outcome:'idle'}),close:()=>{}});close.unshift(()=>runtime.shutdown());const h=extension(config,runtime);
+  const runtime=new PiCaptureRuntime(new DispatchPort(store,()=>config));close.unshift(()=>runtime.shutdown());const h=extension(config,runtime);
   await h.handlers.get('session_start')!({reason:'startup'},h.ctx);
   store.enqueue({sessionId:'x',entryId:'e',scope:'global',source:'interactive',text:'private body',observedAt:new Date().toISOString()});const job=store.claim({force:true})!;store.fail(job,new Error('UNAVAILABLE'));
   store.db.prepare("UPDATE jobs SET state='dead',diagnostic=? WHERE id=?").run(JSON.stringify({stage:'model_request',reason:'unavailable',retryable:true,raw:'secret'}),job.id);store.db.prepare("UPDATE observations SET state='dead' WHERE jobId=?").run(job.id);
@@ -208,7 +207,7 @@ it.each([false,true])('prompt adjustment uses confirmed user text and refuses st
     else component.handleInput!('\x1b');step++;
   })}} as unknown as ExtensionCommandContext;
   await openMemoryPanel(ctx,service,()=>{},()=>{},()=>{if(!active)throw new Error('CANCELLED');});expect(ctx.ui.confirm).toHaveBeenCalledOnce();
-  if(replaced){expect(existsSync(join(config.dataRoot,'runtime.sqlite'))).toBe(false);return;}
+  if(replaced){const check=new RuntimeStore(config.dataRoot);try{expect(check.status().observations).toEqual([]);}finally{check.close();}return;}
   const store=new RuntimeStore(config.dataRoot);try{expect(store.db.prepare('SELECT text,source,state FROM observations').get()).toEqual({text:'  Only during review: replace A with B.\n',source:'interactive',state:'pending'});}finally{store.close();}
   expect(existsSync(join(config.dataRoot,'memory/preferences.md'))).toBe(false);
 });

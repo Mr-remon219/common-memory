@@ -18,7 +18,7 @@ export interface RuntimeJob { id: string; token: string; generation: number; obs
 export interface RuntimeReceipt { purgeSourceIds?: number[]; correctionWatermarks?: {target:string;at:number;sourceId:number}[]; editResult?: EditResult; documents?: {target:string;after:string}[]; id?: string; token?: string; generation?: number; requestId?: string; jobId: string; observationIds: number[]; associations?: {target: string; sourceIds: number[]}[]; forgetSourceIds?: number[]; removeTargets?: string[] }
 export interface RuntimeOptions { sqliteTimeoutMs?:number; now?: () => number; turnThreshold?: number; byteThreshold?: number; idleMs?: number; maxWaitMs?: number; leaseMs?: number; maxAttempts?: number }
 export interface JobStatus extends JobProgress { editResult?: EditResult; id: string; state: string; attempts: number; issue: string | null; diagnostic: FailureDiagnostic | null; retryAt: number | null }
-export interface ObservationOutcome { editResult?: EditResult; state: string; issue: string | null; retainedIn: string[]; jobId: string | null; jobState: string | null; attempts: number; retryAt: number | null; diagnostic: FailureDiagnostic | null }
+export interface ObservationOutcome { automaticRecoveries?: number; editResult?: EditResult; state: string; issue: string | null; retainedIn: string[]; jobId: string | null; jobState: string | null; attempts: number; retryAt: number | null; diagnostic: FailureDiagnostic | null }
 type Row = Record<string, string | number | null>;
 
 function enableWal(db: DatabaseSync, timeout=5000): void {
@@ -128,11 +128,11 @@ export class RuntimeStore {
   }
   /** Outcome without bodies: which documents currently link Sections to this observation, plus the diagnostic code. */
   observationOutcome(sessionId: string, entryId: string, allowedScopes?: readonly string[]): ObservationOutcome | null {
-    const row = this.db.prepare("SELECT o.id,o.scope,o.state,o.issue,o.jobId,j.state AS jobState,j.attempts,j.available,j.issue AS jobIssue,j.diagnostic,j.editResult FROM observations o LEFT JOIN jobs j ON j.id=o.jobId WHERE o.sessionId=? AND o.entryId=?").get(sessionId, entryId);
+    const row = this.db.prepare("SELECT o.id,o.scope,o.state,o.issue,o.jobId,j.state AS jobState,j.attempts,j.available,j.issue AS jobIssue,j.diagnostic,j.editResult,j.retries FROM observations o LEFT JOIN jobs j ON j.id=o.jobId WHERE o.sessionId=? AND o.entryId=?").get(sessionId, entryId);
     if (!row || allowedScopes && !allowedScopes.includes(String(row.scope))) return null;
     const targets = this.db.prepare("SELECT DISTINCT target FROM associations WHERE sourceId=?").all(row.id!).map(link => String(link.target).replace(/:[a-f0-9]{64}$/, ''));
     const processed = row.state === 'processed';
-    return {...editResultField(row.editResult), state:String(row.state), issue:processed ? null : nullableString(row.issue ?? row.jobIssue), retainedIn:[...new Set(targets)].sort(), jobId:nullableString(row.jobId), jobState:nullableString(row.jobState), attempts:Number(row.attempts ?? 0), retryAt:row.jobState === 'retry' && !processed ? Number(row.available) : null, diagnostic:processed ? null : readDiagnostic(row.diagnostic)};
+    return {automaticRecoveries:Number(row.retries ?? 0),...editResultField(row.editResult), state:String(row.state), issue:processed ? null : nullableString(row.issue ?? row.jobIssue), retainedIn:[...new Set(targets)].sort(), jobId:nullableString(row.jobId), jobState:nullableString(row.jobState), attempts:Number(row.attempts ?? 0), retryAt:row.jobState === 'retry' && !processed ? Number(row.available) : null, diagnostic:processed ? null : readDiagnostic(row.diagnostic)};
   }
   hasReceipt(jobId: string): boolean { return Boolean(this.db.prepare('SELECT 1 FROM receipts WHERE id=?').get(jobId)); }
   /** Current incomplete work only. Retired jobs and historical quarantine do not block a flush. */
@@ -274,11 +274,32 @@ export class RuntimeStore {
   systemPause(): string | null { return nullableString(this.db.prepare("SELECT value FROM settings WHERE key='system_pause'").get()?.value); }
   resumeConfiguration(version: string): void {
     this.transaction(() => {
+      // Old releases stored repairable configuration failures as dead. Reclassify
+      // only known external conditions with intact sources, never cancellation,
+      // quarantine, completed receipts or unknown storage/validation failures.
+      this.db.prepare(`UPDATE jobs SET state='paused' WHERE state='dead' AND (${configurationConditions})
+        AND NOT EXISTS(SELECT 1 FROM receipts WHERE receipts.id=jobs.id)
+        AND EXISTS(SELECT 1 FROM observations o WHERE o.jobId=jobs.id)
+        AND NOT EXISTS(SELECT 1 FROM observations o WHERE o.jobId=jobs.id AND (o.state!='dead' OR o.text IS NULL))`).run();
+      this.db.prepare("UPDATE observations SET state='paused' WHERE state='dead' AND jobId IN (SELECT id FROM jobs WHERE state='paused')").run();
       const jobs = this.db.prepare(`SELECT id FROM jobs WHERE state='paused' AND (${configurationConditions}) AND (configurationVersion IS NULL OR configurationVersion!=?) AND retries<?`).all(version,Math.min(5,this.#options.maxAttempts));
       for (const job of jobs) {
         this.db.prepare("UPDATE jobs SET state='retry',available=0,retries=retries+1 WHERE id=?").run(job.id!);
         this.db.prepare("UPDATE observations SET state='claimed' WHERE jobId=? AND state='paused'").run(job.id!);
       }
+    });
+  }
+  /** Management handoff is not an automatic task retry or a user cancellation. */
+  handoff(job:RuntimeJob):void {
+    this.transaction(()=>{this.assertLease(job);this.db.prepare("UPDATE jobs SET state='retry',token=?,generation=generation+1,expires=0,available=0 WHERE id=?").run(randomUUID(),job.id);});
+  }
+  /** Fence immediately; a late provider response cannot pass the commit lease check. */
+  cancel(id:string):boolean {
+    return this.transaction(()=>{
+      const row=this.db.prepare("SELECT state FROM jobs WHERE id=? AND state IN ('running','retry','paused','dead')").get(id);
+      if(!row)return false;
+      this.db.prepare("UPDATE jobs SET state='paused',issue='CANCELLED',diagnostic=?,token=?,generation=generation+1,expires=0 WHERE id=?").run(JSON.stringify(failureDiagnostic(new Error('CANCELLED'))),randomUUID(),id);
+      this.db.prepare("UPDATE observations SET state='paused',issue='CANCELLED' WHERE jobId=? AND state!='processed'").run(id);return true;
     });
   }
   /** Reserve before retrying, so cancellation/crash cannot reset the budget. */
@@ -355,8 +376,9 @@ export class RuntimeStore {
   close(): void {this.db.close();}
 }
 
-const externalConfigurationConditions = "issue IN ('AUTHENTICATION','PROXY_AUTHENTICATION','CONFIGURATION') OR json_extract(diagnostic,'$.reason')='model_not_found'";
-const configurationConditions = `${externalConfigurationConditions} OR issue IN ('AGENT_TURN_LIMIT','CONTEXT_LIMIT') OR json_extract(diagnostic,'$.reason')='context_length_exceeded'`;
+const diagnosticReason = "CASE WHEN json_valid(diagnostic) THEN json_extract(diagnostic,'$.reason') END";
+const externalConfigurationConditions = `issue IN ('AUTHENTICATION','PROXY_AUTHENTICATION','CONFIGURATION') OR ${diagnosticReason}='model_not_found'`;
+const configurationConditions = `${externalConfigurationConditions} OR issue IN ('AGENT_TURN_LIMIT','CONTEXT_LIMIT') OR ${diagnosticReason}='context_length_exceeded'`;
 function sourceDigest(source:string,text:string):string { return createHash('sha256').update(material(source,text).text).digest('hex'); }
 function nullableString(value: unknown): string | null { return value === null || value === undefined ? null : String(value); }
 function readDiagnostic(value: unknown): FailureDiagnostic | null { if (typeof value !== 'string') return null; try { return sanitizeDiagnostic(JSON.parse(value)); } catch { return null; } }

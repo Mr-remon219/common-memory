@@ -10,10 +10,14 @@ import { parse as parseTomlDocument, stringify as stringifyToml } from 'smol-tom
 import { configDirectory, validateConfig, type CommonMemoryConfig } from '../config/config.js';
 import type { LaunchOptions } from './host-launch.js';
 import { installationTransaction, readInstallationFile, type FileChange } from './installation-files.js';
+import type { IntegrationMigrationPlan } from './integration-migration.js';
 import type { IntegrationId, IntegrationTarget } from './integration-targets.js';
 
+import { loadServiceControl } from '../service/control.js';
+import { launcherPath } from '../service/manager.js';
+
 export const applicationRoot = fileURLToPath(new URL('../../', import.meta.url));
-interface Resource {
+export interface Resource {
   path: string;
   kind: 'file' | 'toml' | 'array';
   content?: string;
@@ -87,25 +91,28 @@ export function integrationHealth(state: InstallationState, id: IntegrationId): 
 }
 
 function desiredResources(target: IntegrationTarget, home: string, env: NodeJS.ProcessEnv): Resource[] {
-  const owner = [target.id], cli = join(applicationRoot, 'dist/cli/main.js');
+  const managedCore=loadServiceControl(home);
+  const owner = [target.id], cli = managedCore?launcherPath(home):join(applicationRoot, 'dist/cli/main.js');
+  const executable=managedCore?'/bin/sh':process.execPath;
   if (target.id === 'pi') {
     if (target.init) throw new Error('Pi 不支持 MCP 导入接入。');
     const wrapper = join(home, 'integrations/pi/common-memory.js');
     const extension = pathToFileURL(join(applicationRoot, 'dist/pi-extension/index.js')).href;
-    const body = `// Common Memory managed integration\nimport { resolve } from 'node:path';\nexport default async function(pi) {\n  const home = ${JSON.stringify(home)};\n  if (process.env.COMMON_MEMORY_HOME && resolve(process.env.COMMON_MEMORY_HOME) !== home) throw new Error('Common Memory home conflicts with the installed Pi integration');\n  process.env.COMMON_MEMORY_HOME = home;\n  const { default: extension } = await import(${JSON.stringify(extension)});\n  return extension(pi);\n}\n`;
+    const loadExtension=managedCore?`const { readFileSync } = await import('node:fs');\n  const { dirname } = await import('node:path');\n  const { pathToFileURL } = await import('node:url');\n  const target = JSON.parse(readFileSync(resolve(home, '.service/control.json'), 'utf8'));\n  const { default: extension } = await import(pathToFileURL(resolve(dirname(target.cli), '../pi-extension/index.js')).href);`:`const { default: extension } = await import(${JSON.stringify(extension)});`;
+    const body = `// Common Memory managed integration\nimport { resolve } from 'node:path';\nexport default async function(pi) {\n  const home = ${JSON.stringify(home)};\n  if (process.env.COMMON_MEMORY_HOME && resolve(process.env.COMMON_MEMORY_HOME) !== home) throw new Error('Common Memory home conflicts with the installed Pi integration');\n  process.env.COMMON_MEMORY_HOME = home;\n  ${loadExtension}\n  return extension(pi);\n}\n`;
     return [
       { kind: 'file', path: join(home, 'integrations/pi/package.json'), content: '{"private":true,"type":"module"}\n', owners: owner },
       { kind: 'file', path: wrapper, content: body, owners: owner },
       { kind: 'array', path: join(target.root, 'settings.json'), keys: ['extensions'], value: wrapper, owners: owner },
     ];
   }
-  let command = process.execPath;
+  let command = executable;
   let args = [cli, 'mcp', '--client-id', 'common-memory-local', '--capability', 'read', '--global', ...(target.readWorkspace ? ['--workspace', target.readWorkspace, '--workspace-project-id', target.readWorkspaceProjectId!] : [])];
   let environment: Record<string, string> | undefined = { COMMON_MEMORY_HOME: home };
   if (target.mode === 'windows-wsl') {
     if (!env.WSL_DISTRO_NAME) throw new Error('无法确定当前 WSL 发行版，未写入 Windows 客户端。');
     command = 'C:\\Windows\\System32\\wsl.exe';
-    args = ['-d', env.WSL_DISTRO_NAME, '-u', userInfo().username, '-e', '/usr/bin/env', `COMMON_MEMORY_HOME=${home}`, process.execPath, ...args];
+    args = ['-d', env.WSL_DISTRO_NAME, '-u', userInfo().username, '-e', '/usr/bin/env', `COMMON_MEMORY_HOME=${home}`, executable, ...args];
     environment = undefined;
   }
   const tag = createHash('sha256').update(home).digest('hex').slice(0, 12);
@@ -127,7 +134,7 @@ function desiredResources(target: IntegrationTarget, home: string, env: NodeJS.P
     resources.push({ kind: 'toml', path: join(target.root, 'config.toml'), content: `\n# common-memory:${tag}:init:begin\n${initConfig}# common-memory:${tag}:init:end\n`, owners: owner });
   }
   if (target.hooks) {
-    const launch:LaunchOptions={wsl:target.mode==='windows-wsl',cli};
+    const launch:LaunchOptions={wsl:target.mode==='windows-wsl',cli,executable};
     const launchEnv={...env,COMMON_MEMORY_HOME:home};
     const bridge=join(target.root,'common-memory-bridge.ps1');
     const nativeBridge=launch.wsl?execFileSync('/usr/bin/wslpath',['-w',bridge],{encoding:'utf8',timeout:3000}).trim():undefined;
@@ -304,6 +311,10 @@ export interface IntegrationChanges { installed: IntegrationId[]; removed: Integ
 /** Apply the final selected state in one recoverable transaction, keeping unchanged integrations intact. */
 export function reconcileIntegrations(targets: IntegrationTarget[], dataRoot: string, options: {
   home?: string; env?: NodeJS.ProcessEnv; expectedState?: InstallationState | null;
+  /** Future lifecycle control must quiesce asynchronously before this call; this guard asserts that state immediately before commit. */
+  assertMutationQuiesced?: () => void;
+  /** Exact legacy registration removals already reviewed by the caller; staged with the final owned graph. */
+  migration?: IntegrationMigrationPlan;
   /** Only set after an explicit disclosure confirmation; committed with host registration. */
   authorizeAgentImport?: { expectedConfig: CommonMemoryConfig };
 } = {}): IntegrationChanges {
@@ -311,6 +322,10 @@ export function reconcileIntegrations(targets: IntegrationTarget[], dataRoot: st
   return installationTransaction(home, commit => {
     const plan = integrationPlan(); plan.get(statePath(home));
     const previous = readInstallationState(home);
+    if (options.migration) for (const change of options.migration.changes) {
+      if (change.path === statePath(home) || plan.get(change.path) !== change.before) throw new Error('迁移候选已被其他操作修改，请重新扫描。');
+      plan.put(change.path, change.after);
+    }
     if (options.expectedState !== undefined && !isDeepStrictEqual(previous, options.expectedState)) throw new Error('Agent 接入状态已被其他操作修改，请重新打开页面后再试。');
     const state = previous ?? emptyState();
     if (options.authorizeAgentImport) {
@@ -345,6 +360,9 @@ export function reconcileIntegrations(targets: IntegrationTarget[], dataRoot: st
     for(const resource of state.resources)resource.owners=resource.owners.filter(id=>desired.some(r=>r.owners.includes(id)&&sameResource(r,resource)));
     state.setupComplete = true; state.dataRoot = dataRoot;
     plan.put(statePath(home), JSON.stringify(state, null, 2) + '\n');
+    // Runtime/process control is deliberately external; this synchronous seam prevents a future caller
+    // from committing a host registration change before it has completed its own quiesce protocol.
+    options.assertMutationQuiesced?.();
     commit([...plan.changes.values()]);
     return { installed: added.map(t => t.id), removed, retained };
   });

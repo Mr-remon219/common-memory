@@ -7,6 +7,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { configDirectory, configFilePath, envFilePath, loadConfig, type CommonMemoryConfig } from '../config/config.js';
 import { PRIVATE_NETWORK_KEYS } from '../memory-agent-runtime/network/route.js';
 import { applicationRoot, readInstallationState, removeIntegrations } from './integrations.js';
+import { hasCommonMemoryHookHandler, hasCommonMemoryMcpLaunch, hasCommonMemoryPiSource } from './integration-migration.js';
 import { scanIntegrationTargets } from './integration-targets.js';
 import { assertSafePath, installationTransaction, readInstallationFile } from './installation-files.js';
 import { parse as parseToml } from 'smol-toml';
@@ -67,26 +68,25 @@ export function withoutMemorySecrets(body: string | null, config: CommonMemoryCo
 
 /** Parse only live MCP/hook/package keys. Comments and unrelated trust paths are not registrations. */
 const object = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === 'object' && !Array.isArray(value));
-function commandReference(value: unknown): boolean {
-  if (typeof value === 'string') return /(?:common-memory-core|(?:^|[\/\s'"]common-memory(?:[./\s'"]|$)))/u.test(value);
-  return Array.isArray(value) ? value.some(commandReference) : object(value) && Object.values(value).some(commandReference);
-}
 function hasMcpRegistration(body: string): boolean {
   try {
     const parsed = parseToml(body), servers = object(parsed) && object(parsed.mcp_servers) ? parsed.mcp_servers : undefined;
-    return Boolean(servers && Object.entries(servers).some(([name, server]) => /^common_memory(?:_|$)/u.test(name) || commandReference(server)));
+    return Boolean(servers && Object.entries(servers).some(([name, server]) => /^common_memory(?:_|$)/u.test(name) || hasCommonMemoryMcpLaunch(server)));
   } catch { return false; }
 }
 function hasHookRegistration(body: string): boolean {
-  try { const value: unknown = JSON.parse(body.replace(/^\ufeff/u, '')); return object(value) && commandReference(value.hooks); }
-  catch { return false; }
+  try {
+    const value: unknown = JSON.parse(body.replace(/^\ufeff/u, ''));
+    if (!object(value) || !object(value.hooks)) return false;
+    return Object.values(value.hooks).some(entries => Array.isArray(entries) && entries.some(entry => object(entry) && Array.isArray(entry.hooks) && entry.hooks.some(hasCommonMemoryHookHandler)));
+  } catch { return false; }
 }
 function hasPiRegistration(body: string): boolean {
   try {
     const value: unknown = JSON.parse(body.replace(/^\ufeff/u, ''));
     if (!object(value)) return false;
     // Pi trust/project metadata is intentionally not examined.
-    return commandReference(value.extensions) || commandReference(value.packages);
+    return ['extensions', 'packages'].some(key => Array.isArray(value[key]) && value[key].some(hasCommonMemoryPiSource));
   } catch { return false; }
 }
 export function assertNoUnmanagedReferences(roots: string[], read = readInstallationFile, options: { directories?: string[]; home?: string } = {}): void {
@@ -107,8 +107,39 @@ export function assertNoUnmanagedReferences(roots: string[], read = readInstalla
 
 /** Known self-registered MCP/Pi instances are machine-verifiable; unknown legacy candidates are never killed. */
 export function assertNoLiveManagedInstances(rows: RuntimeInstance[] = listRuntimeInstances()): void {
-  const active = rows.filter(row => row.status === 'loaded' && (row.role === 'mcp' || row.role === 'pi'));
-  if (active.length) throw new Error(`仍有已确认加载的 Common Memory 实例：${active.map(row => `${row.role} pid ${row.pid}`).join('、')}。未终止任何进程。`);
+  const active=rows.filter(row=>(row.status==='loaded'||row.status==='unknown')&&(row.role==='mcp'||row.role==='pi')&&!(row.lifecycle==='channel'&&row.wireProtocol===1));
+  if (active.length) throw new Error(`仍有未证明为纯渠道的 Common Memory 实例：${active.map(row => `${row.role} pid ${row.pid}`).join('、')}。未终止任何进程。`);
+}
+
+/**
+ * Recovery path for a missing or malformed config.json. It deliberately cannot identify
+ * data/secret ownership, so it only removes state-proven registrations and this package.
+ */
+export async function uninstallWithUnreadableConfig(options: {
+  /** Parent lifecycle management disables admission and stops only its owned service before this hook resolves. */
+  beforeRemove?: () => Promise<void>;
+  installation: NpmInstallation;
+  removePackage?: (installation: NpmInstallation) => Promise<void>;
+}): Promise<void> {
+  // Do not replace machine-verifiable instance safety with a caller-supplied "stopped" boolean.
+  // The future service manager owns lifecycle control; legacy host processes remain un-signalled here.
+  await options.beforeRemove?.();
+  assertNoLiveManagedInstances();
+  const home = configDirectory();
+  if (options.installation.packageRoot !== realpathSync(applicationRoot)) throw new Error('npm 包归属不匹配。');
+  const state = readInstallationState(home);
+  if (!state) throw new Error('安装归属记录缺失；无法证明可删除的接入。');
+  const roots = state.targets.map(target => target.root);
+  // Preflight the projected state while its exact ownership remains available for a retry.
+  removeIntegrations(state.targets.map(target => target.id), home, read => assertNoUnmanagedReferences(roots, read));
+  assertNoUnmanagedReferences(roots);
+  const removePackage = options.removePackage ?? (async installation => {
+    const current = npmInstallation();
+    if (current.prefix !== installation.prefix || current.packageRoot !== installation.packageRoot || current.npm !== installation.npm || current.node !== installation.node) throw new Error('npm 安装位置已变化。');
+    execFileSync(installation.node, [installation.npm, 'uninstall', '--global', '--prefix', installation.prefix, '--ignore-scripts', '--no-audit', '--no-fund', 'common-memory-core'], { timeout: 120_000, stdio: ['ignore', 'pipe', 'pipe'] });
+  });
+  try { await removePackage(options.installation); }
+  catch { throw new Error('npm 卸载未完成；已移除的接入不会恢复，配置、凭据和 Memory 数据仍保留。请检查 npm 后重试。'); }
 }
 
 /** A requested data deletion needs its own confirmation AND stopped clients; npm failures stop cleanup. */
@@ -119,10 +150,12 @@ export async function uninstallCompletely(options: {
   deleteConfiguration?: boolean;
   clientsStopped: boolean;
   installation: NpmInstallation;
+  beforeRemove?:()=>Promise<void>;
   removePackage?: (installation: NpmInstallation) => Promise<void>;
 }): Promise<{ retained: string | null; configurationRetained: boolean }> {
   const deleteConfiguration = options.deleteConfiguration ?? true;
   if (!options.clientsStopped) throw new Error('请先停止所有客户端及 Common Memory 后台任务。');
+  await options.beforeRemove?.();
   assertNoLiveManagedInstances();
   const home = configDirectory(), config = options.config;
   const beforeConfig = readInstallationFile(configFilePath());

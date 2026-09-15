@@ -56,7 +56,7 @@ async function chooseScope(ctx:ExtensionCommandContext,contexts:{id:string;name:
 async function processing(ctx:ExtensionCommandContext,host:MemoryHost,service:PiMemoryService,valid:()=>void) {
   let selected:string|undefined;
   for(;;) {
-    valid();const status=service.status(host,{},true);
+    valid();const status=await service.status(host,{},true);
     if(!('queue' in status))return;
     const summary=[...status.queue.observations.map(r=>`${state(r.state)} ${r.count}`),...status.queue.jobStates.map(r=>`任务${state(r.state)} ${r.count}`)];
     const items:SettingItem[]=[{id:'summary',label:'状态汇总',currentValue:summary.join(' · ') || '暂无请求',description:'汇总覆盖全部当前可见任务；明细最多展示最近/活跃的 20 个。已处理不等于已记住；这里不展示原始对话。'},action('refresh','刷新状态','读取 Core 当前状态，不重复提交材料。')];
@@ -67,19 +67,17 @@ async function processing(ctx:ExtensionCommandContext,host:MemoryHost,service:Pi
     if(selected.startsWith('request:')) {
       const item=status.recent[Number(selected.slice(8))];if(!item)continue;
       const identity=item.importId?{importId:item.importId}:{requestId:item.requestId!};
-      await view(ctx,'请求状态',()=>JSON.stringify(service.status(host,identity,true),null,2));
+      const current=await service.status(host,identity,true);await view(ctx,'请求状态',()=>JSON.stringify(current,null,2));
     } else if(selected.startsWith('job:')) {
       const id=selected.slice(4),job=status.queue.jobs.find(j=>j.id===id);if(!job)continue;
-      await view(ctx,'任务状态',()=>{
-        const fresh=service.status(host,{},true);const current='queue' in fresh?fresh.queue.jobs.find(j=>j.id===id):undefined;
-        if(!current)throw new Error('CONTEXT_UNAVAILABLE');
-        return `${state(current.state)}\n\n${JSON.stringify(current,null,2)}\n\n失败任务在返回后可由用户确认重试。排队/退避中的任务由后台继续，不需要重复提交。`;
-      });
-      if(['dead','paused'].includes(job.state) && await ctx.ui.confirm('重试任务？','将重新处理原始材料，不更换身份，不修改原文；仍受当前来源与范围权限约束。')) {valid();service.retry(host,id);ctx.ui.notify('已请求重试；不代表记忆已更新。','info');}
+      const fresh=await service.status(host,{},true),current='queue' in fresh?fresh.queue.jobs.find(j=>j.id===id):undefined;if(!current)throw new Error('CONTEXT_UNAVAILABLE');
+      await view(ctx,'任务状态',()=>`${state(current.state)}\n\n${JSON.stringify(current,null,2)}\n\n失败任务可由用户确认重试；活动任务可由用户明确取消。`);
+      if(['dead','paused'].includes(job.state) && await ctx.ui.confirm('重试任务？','将重新处理原始材料，不更换身份，不修改原文；仍受当前来源与范围权限约束。')) {valid();await service.retry(host,id);ctx.ui.notify('已请求重试；不代表记忆已更新。','info');}
+      else if(['running','retry'].includes(job.state)&&await ctx.ui.confirm('取消任务？','这会持久停止该任务；服务重启不会自动恢复。之后只能由用户显式重试。')){valid();await service.cancel(host,id);ctx.ui.notify('任务已取消；原材料和任务身份仍保留。','info');}
     }
   }
 }
-export async function openMemoryPanel(ctx:ExtensionCommandContext,service:PiMemoryService,refresh:()=>void,flush:()=>void,valid:()=>void=()=>{}) {
+export async function openMemoryPanel(ctx:ExtensionCommandContext,service:PiMemoryService,refresh:()=>void,flush:()=>void|Promise<void>,valid:()=>void=()=>{}) {
   if(ctx.mode!=='tui') {if(ctx.hasUI)ctx.ui.notify('/memory 页面需要 Pi TUI 模式；可用 memory_read / memory_status。','warning');else throw new Error('/memory requires Pi TUI; use memory_read or memory_status');return;}
   const host={cwd:ctx.cwd,sessionId:ctx.sessionManager.getSessionId()};let selected:string|undefined;
   for(;;) {
@@ -119,13 +117,13 @@ export async function openMemoryPanel(ctx:ExtensionCommandContext,service:PiMemo
       }
       else if(selected==='permissions')await view(ctx,'授权与能力',()=>JSON.stringify(service.info(host,true),null,2));
       else if(selected==='refresh'){refresh();ctx.ui.notify('当前 Agent 记忆快照已刷新。','info');}
-      else if(selected==='flush'){flush();ctx.ui.notify('已请求继续处理；请查看处理状态，不代表已记住。','info');}
+      else if(selected==='flush'){await flush();ctx.ui.notify('已请求继续处理；请查看处理状态，不代表已记住。','info');}
       else if(selected==='adjust') {
         const scope=await chooseScope(ctx,service.info(host,true).adjustmentContexts);if(!scope)continue;
         const prompt=await ctx.ui.editor('调整记忆：描述删除、纠正或补充（提交后进入 Core 处理）');if(prompt===undefined || !prompt.trim())continue;
         const requestId=randomUUID();
         if(!await ctx.ui.confirm('提交记忆调整？',`范围：${scope}\n将把输入及获授权的记忆发送给配置的维护模型。提交后退出页面不会撤回请求。`))continue;
-        valid();const result=service.adjust(host,scope,prompt,requestId);ctx.ui.notify(`已入队 ${result.requestId}，尚未确认记忆更新。可在处理状态中查看。`,'info');
+        valid();const result=await service.adjust(host,scope,prompt,requestId);ctx.ui.notify(`已入队 ${result.requestId}，尚未确认记忆更新。可在处理状态中查看。`,'info');
       } else if(selected==='import') {
         if(!service.info(host,true).initEnabled)throw new Error('INIT_DISABLED');
         const scope=await chooseScope(ctx,service.contexts(host,true));if(!scope)continue;
@@ -134,7 +132,7 @@ export async function openMemoryPanel(ctx:ExtensionCommandContext,service:PiMemo
         const understanding=await ctx.ui.editor('粘贴已有 Agent 整理材料，保留条件、时间、不确定性和来源');if(understanding===undefined)continue;
         const gaps=await ctx.ui.editor('覆盖缺口/限定条件（可留空）');if(gaps===undefined)continue;
         if(!await ctx.ui.confirm('授权导入本次材料？',`范围：${scope}\n来源：${clean(sourceLabel)}\n这些材料将发送给维护模型，始终作为 Agent 报告而非认证用户原话。允许导入不等于认可每条事实。`))continue;
-        valid();const result=service.import(host,{importId:randomUUID(),contextId:scope,sourceLabel,basis:basis as typeof IMPORT_BASES[number],understanding,gaps},undefined,true);
+        valid();const result=await service.import(host,{importId:randomUUID(),contextId:scope,sourceLabel,basis:basis as typeof IMPORT_BASES[number],understanding,gaps},undefined,true);
         ctx.ui.notify(`导入已入队 ${result.importId}；请在处理状态核验。`,'info');
       }
     } catch(error) {ctx.ui.notify(nativeFailure(error).message,'error');return;}

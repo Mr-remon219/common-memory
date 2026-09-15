@@ -4,6 +4,7 @@ import { MEMORY_READ_GUIDANCE, MEMORY_READ_DESCRIPTION } from '../v2/read-guidan
 import { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import type { McpIngress } from './ingress.js';
+import type { McpChannelIngress } from './channel-ingress.js';
 import { IMPORT_BASES, IMPORT_LABEL_PATTERN } from '../v2/import.js';
 import { renderMemoryView } from '../v2/reader.js';
 import { acceptanceOutput, contextIdSchema, idSchema, MCP_MAX_MESSAGE_BYTES, nextForAcceptance, nextForOutcome, readOutput, statusInput, statusOutput, submissionIdentity, toolFailure } from './contract.js';
@@ -20,7 +21,7 @@ const INSTRUCTIONS: Record<'relay' | 'init' | 'read', string> = {
   relay: 'Use memory_submit_user_turn only for one complete, verbatim user expression, never an assistant summary or assistant/tool output. This requires local host opt-in.',
 };
 
-export function createMcpServer(ingress: McpIngress): McpServer {
+export function createMcpServer(ingress: McpIngress | McpChannelIngress): McpServer {
   const instructions = [
     'Common Memory: when connection permissions or context IDs are unknown, call memory_status({}). Use exact returned context IDs, not names or paths. Only registered tools/profiles are available; an init/relay connection does not imply read permission.',
     ...ingress.capabilities.map(c => INSTRUCTIONS[c]),
@@ -39,7 +40,7 @@ export function createMcpServer(ingress: McpIngress): McpServer {
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
   }, async (input, ctx) => {
     try {
-      const accepted = ingress.submit(input, ctx.mcpReq.signal);
+      const accepted = await ingress.submit(input, ctx.mcpReq.signal);
       const args = {submissionId:input.submissionId,...(input.conversationId === undefined ? {} : {conversationId:input.conversationId})};
       return result({...accepted,next:nextForAcceptance(accepted.state,args)});
     } catch (error) { return toolFailure(error); }
@@ -58,7 +59,7 @@ export function createMcpServer(ingress: McpIngress): McpServer {
     outputSchema: acceptanceOutput,
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
   }, async (input, ctx) => {
-    try { const accepted = ingress.init(input, ctx.mcpReq.signal); return result({...accepted,next:nextForAcceptance(accepted.state,{importId:input.importId})}); }
+    try { const accepted = await ingress.init(input, ctx.mcpReq.signal); return result({...accepted,next:nextForAcceptance(accepted.state,{importId:input.importId})}); }
     catch (error) { return toolFailure(error); }
   });
   if (ingress.has('read')) {
@@ -81,12 +82,12 @@ export function createMcpServer(ingress: McpIngress): McpServer {
     try {
       if (input.importId !== undefined) {
         if (input.submissionId || input.conversationId) return toolFailure(new Error('INVALID_SUBMISSION_ID'));
-        const outcome = ingress.initStatus(input.importId);
+        const outcome = await ingress.initStatus(input.importId);
         return result({import:outcome,next:nextForOutcome(outcome,input,readContexts())});
       }
       if (!input.submissionId && input.conversationId) return toolFailure(new Error('INVALID_SUBMISSION_ID'));
       if (input.submissionId) {
-        const outcome = ingress.status({submissionId:input.submissionId,conversationId:input.conversationId});
+        const outcome = await ingress.status({submissionId:input.submissionId,conversationId:input.conversationId});
         return result({submission:outcome,next:nextForOutcome(outcome,input,readContexts())});
       }
       return result({...ingress.info(),limits:{...inputLimits(ingress.config.disclosure),maxMessageBytes:MCP_MAX_MESSAGE_BYTES},next:{action:'discover',message:'Choose an enabled tool for the user’s purpose and an exact listed context. Permissions are fixed at launch/configuration; registration or a guessed ID does not grant access.'}});

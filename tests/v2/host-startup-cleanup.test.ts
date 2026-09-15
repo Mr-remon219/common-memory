@@ -10,7 +10,7 @@ import { createCommonMemoryPiExtension } from '../../src/pi-extension/index.js';
 import { runMcp } from '../../src/mcp/stdio.js';
 
 // Inject host startup failures after a real configured Writer has opened its files.
-vi.mock('../../src/pi-extension/extraction-runtime.js', () => ({ PiCaptureRuntime: class {
+vi.mock('../../src/pi-extension/extraction-runtime.js', () => ({piProcessInstance:'synthetic-process',PiCaptureRuntime: class {
   constructor() { throw new Error('SYNTHETIC_PI_STARTUP_FAILURE'); }
 } }));
 vi.mock('@modelcontextprotocol/server/stdio', async importOriginal => ({
@@ -21,7 +21,7 @@ let home: string;
 beforeEach(() => { home = mkdtempSync(join(tmpdir(), 'cm-host-cleanup-')); vi.stubEnv('COMMON_MEMORY_HOME', home); saveApiKeyToEnvFile('CM_CLEANUP_TEST_KEY', 'synthetic'); });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); rmSync(home, { recursive: true, force: true }); });
 
-it.each(['pi', 'mcp'])('closes real database connections when %s startup fails', async host => {
+it.each(['pi', 'mcp'])('opens no channel-side database when %s startup fails', async host => {
   const config = defaultConfig();
   config.remote = { provider: 'openai-compatible', model: 'synthetic', baseUrl: 'http://127.0.0.1:1/v1', apiKeyEnv: 'CM_CLEANUP_TEST_KEY' };
   saveConfig(config);
@@ -37,6 +37,5 @@ it.each(['pi', 'mcp'])('closes real database connections when %s startup fails',
     await setImmediate();
     expect(diagnostic).toHaveBeenCalled();
   }
-  expect(open.mock.results.length).toBeGreaterThan(0);
-  for (const result of open.mock.results) expect(() => result.value.prepare('SELECT 1')).toThrow(/not open|closed/i);
+  expect(open).not.toHaveBeenCalled();
 });

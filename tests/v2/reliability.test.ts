@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { RuntimeStore } from '../../src/v2/runtime.js';
 import { openDatabase } from '../../src/v2/sqlite.js';
-import { initializeRuntime } from '../../src/v2/upgrade.js';
+import { initializeRuntime, RUNTIME_PROTOCOL } from '../../src/v2/upgrade.js';
 import { MemoryModelError } from '../../src/core/contracts/errors.js';
 const roots:string[]=[];
 const root=()=>{const r=mkdtempSync(join(tmpdir(),'cm-reliability-'));roots.push(r);return r;};
@@ -23,7 +23,7 @@ it('migrates a legacy durable job once, takes a usable data backup and fences an
  const path=root(),job=legacy(path);mkdirSync(join(path,'memory'),{recursive:true});writeFileSync(join(path,'memory/preferences.md'),'# Preferences\n\n');
  const s=new RuntimeStore(path,{now:()=>1000});
  try {
-  expect(s.db.prepare('PRAGMA user_version').get()!.user_version).toBe(1);
+  expect(s.db.prepare('PRAGMA user_version').get()!.user_version).toBe(RUNTIME_PROTOCOL);
   expect(s.db.prepare('SELECT id,attempts,retries FROM jobs').get()).toMatchObject({id:job.id,attempts:3,retries:2});
   const backups=readdirSync(join(path,'runtime/upgrade-backups'));expect(backups).toHaveLength(1);
   const backup=join(path,'runtime/upgrade-backups',backups[0]!);expect(readFileSync(join(backup,'memory/preferences.md'),'utf8')).toBe('# Preferences\n\n');
@@ -40,9 +40,9 @@ it.each(['rpc','mcp_user_submission','codex_user_delivery'])('preserves pruned u
 it('does not let one exhausted task declare the entire model configuration unavailable',()=>{
  const s=new RuntimeStore(root());try{add(s);const a=s.claim()!;s.configureTask(a,'v');s.fail(a,new Error('AGENT_TURN_LIMIT'));expect(s.blockedConfiguration('v')).toBeNull();add(s,'small');expect(s.claim()!.observations[0]!.entryId).toBe('small');}finally{s.close();}
 });
-it('does not migrate over an active legacy lease',()=>{
- const path=root();legacy(path,true);expect(()=>new RuntimeStore(path,{now:()=>1})).toThrow('UPGRADE_WRITER_ACTIVE');
- const db=openDatabase(join(path,'runtime.sqlite'),{});try{expect(db.prepare('PRAGMA user_version').get()!.user_version).toBe(0);expect(db.prepare('SELECT text FROM observations').get()!.text).toBe('Synthetic preference');}finally{db.close();}
+it('takes over an active legacy lease without losing source identity or restoring its budget',()=>{
+ const path=root(),job=legacy(path,true),store=new RuntimeStore(path,{now:()=>1});
+ try{expect(store.db.prepare('PRAGMA user_version').get()!.user_version).toBe(RUNTIME_PROTOCOL);expect(store.db.prepare('SELECT text FROM observations').get()!.text).toBe('Synthetic preference');expect(store.db.prepare('SELECT id,state,attempts,retries FROM jobs').get()).toMatchObject({id:job.id,state:'retry',attempts:1,retries:0});expect(()=>store.assertLease(job)).toThrow();expect(store.claim()!.id).toBe(job.id);}finally{store.close();}
 });
 it('interrupted migration rolls back schema and preserves the original job for retry',()=>{
  const path=root(),job=legacy(path),db=openDatabase(join(path,'runtime.sqlite'),{});

@@ -14,6 +14,7 @@ import { prepareDocumentImport } from '../../src/v2/document-import.js';
 import { PiMemoryService } from '../../src/pi-extension/memory-service.js';
 import { McpIngress } from '../../src/mcp/ingress.js';
 import { readTask } from '../helpers/decision-runtime.js';
+import { DispatchPort } from '../helpers/service-dispatch.js';
 
 const roots=tempRoots('cm-input-limits-');const close:(()=>void)[]=[];
 afterEach(()=>{for(const fn of close.splice(0).reverse())fn();roots.cleanup();});
@@ -30,17 +31,17 @@ it('deprecated explicit candidate limits remain effective, visible, and never wi
   expect(inputLimits({maxCandidateBytes:80,maxExcerptBytes:30,maxTotalBytes:20}).maxSourceBytes).toBe(20);
   expect(inputLimits({})).toEqual({maxSourceBytes:null,maxInputBytes:null,deprecatedLimits:[]});
 });
-it.each(['maxExcerptBytes','maxCandidateBytes','maxTotalBytes'] as const)('all explicit user/import adapters enforce %s before enqueue without truncating',key=>{
+it.each(['maxExcerptBytes','maxCandidateBytes','maxTotalBytes'] as const)('all explicit user/import adapters enforce %s before enqueue without truncating',async key=>{
   const root=roots.root(),config=defaultConfig({COMMON_MEMORY_HOME:root});config.disclosure[key]=80;config.disclosure.allowedProvenance=['user_explicit','agent_observation','document_import'];
   const store=new RuntimeStore(config.dataRoot);close.push(()=>store.close());
   const relay=new McpIngress(store,config,{clientId:'fixture',workspaces:[],global:true,accept:true,capabilities:['relay','init']});
-  const native=new PiMemoryService({config:()=>config,activeStore:()=>({dataRoot:config.dataRoot,store}),wake:()=>{}});
+  const native=new PiMemoryService({config:()=>config,client:new DispatchPort(store,()=>config)});
   const text='中'.repeat(80)+' Unless condition applies.';
   const imported={importId:'original',contextId:'global',sourceLabel:'synthetic',basis:'unknown' as const,understanding:'A short statement.',gaps:text};
   expect(()=>relay.submit({submissionId:'turn',contextId:'global',text})).toThrow();
   expect(()=>relay.init(imported)).toThrow();
-  expect(()=>native.adjust({sessionId:'native',cwd:root},'global',text)).toThrow();
-  expect(()=>native.import({sessionId:'native',cwd:root},imported)).toThrow();
+  await expect(native.adjust({sessionId:'native',cwd:root},'global',text)).rejects.toThrow();
+  await expect(native.import({sessionId:'native',cwd:root},imported)).rejects.toThrow();
   expect(()=>queueAgentImport(store,'public',imported,{contexts:['global'],enabled:true,limits:config.disclosure})).toThrow();
   const file=join(root,'synthetic.md');writeFileSync(file,text);
   expect(()=>prepareDocumentImport(file,{limits:config.disclosure})).toThrow();
@@ -69,17 +70,17 @@ it('Unlimited source input leaves independent session resource bounds intact',()
   expect(store.pending()).toEqual([]);
 });
 
-it.each(['maxExcerptBytes','maxCandidateBytes','maxTotalBytes'] as const)('native and relay text share the exact %s source boundary',key=>{
+it.each(['maxExcerptBytes','maxCandidateBytes','maxTotalBytes'] as const)('native and relay text share the exact %s source boundary',async key=>{
   const root=roots.root(),config=defaultConfig({COMMON_MEMORY_HOME:root}),text='中🙂 Complete qualifier.';
   const store=new RuntimeStore(config.dataRoot);close.push(()=>store.close());
   const relay=new McpIngress(store,config,{clientId:'boundary',workspaces:[],global:true,accept:true,capabilities:['relay']});
-  const native=new PiMemoryService({config:()=>config,activeStore:()=>({dataRoot:config.dataRoot,store}),wake:()=>{}});
+  const native=new PiMemoryService({config:()=>config,client:new DispatchPort(store,()=>config)});
   const edit={sessionId:'tui-test',requestId:'original',scope:'global',text};
   const access={allowedScopes:['global'],writableScopes:['global'],allowedProvenance:['user_explicit'],limits:config.disclosure};
   config.disclosure[key]=serializedSourceBytes(text)-1;
-  expect(()=>validateMemoryEdit(edit,access)).toThrow();expect(()=>native.adjust({cwd:root,sessionId:'native'},'global',text)).toThrow();expect(()=>relay.submit({contextId:'global',submissionId:'original',text})).toThrow();
+  expect(()=>validateMemoryEdit(edit,access)).toThrow();await expect(native.adjust({cwd:root,sessionId:'native'},'global',text)).rejects.toThrow();expect(()=>relay.submit({contextId:'global',submissionId:'original',text})).toThrow();
   config.disclosure[key]=serializedSourceBytes(text);
-  expect(()=>validateMemoryEdit(edit,access)).not.toThrow();expect(native.adjust({cwd:root,sessionId:'native'},'global',text).accepted).toBe(true);expect(relay.submit({contextId:'global',submissionId:'original',text}).accepted).toBe(true);
+  expect(()=>validateMemoryEdit(edit,access)).not.toThrow();expect((await native.adjust({cwd:root,sessionId:'native'},'global',text)).accepted).toBe(true);expect(relay.submit({contextId:'global',submissionId:'original',text}).accepted).toBe(true);
 });
 it('oversized later context quarantines its own complete turn after the healthy immediate batch',async()=>{
   const writer=new Writer({dataRoot:roots.root(),allowedScopes:['global'],allowedProvenance:['user_explicit','conversation_context'],agent:{decide:async(task,reads)=>{readTask(task,reads);return {body:{version:'memory_maintenance_v2',request_id:task.request_id,decisions:[{kind:'ignore',applicability:'uncertain',confidence:1,evidence:[],reason:'synthetic'}]},usage:{},promptDigest:'9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08'};}},maxSourceBytes:80});close.push(()=>writer.close());

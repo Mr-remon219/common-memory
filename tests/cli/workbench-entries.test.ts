@@ -5,11 +5,12 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { defaultConfig, loadConfig, saveConfig } from '../../src/config/config.js';
-import { listProjects, memoryView, registerProject, retryJob, runtimeStatus, showMemory } from '../../src/cli/operations.js';
+import { listProjects, memoryView, registerProject,runtimeStatus, showMemory } from '../../src/cli/operations.js';
 import { prepareHostBundle, writeHostBundle } from '../../src/cli/work-config.js';
 import { RuntimeStore } from '../../src/v2/runtime.js';
 import { SessionIngress } from '../../src/v2/session.js';
-import { hostQueueStatus, setupHostAdapter } from '../../src/cli/host-session.js';
+import { consumeCodexInbox,hostQueueStatus,setupHostAdapter } from '../../src/cli/host-session.js';
+import { DispatchPort } from '../helpers/service-dispatch.js';
 
 let home: string;
 beforeEach(() => { home = mkdtempSync(join(tmpdir(), 'cm-workbench-')); vi.stubEnv('COMMON_MEMORY_HOME', home); });
@@ -86,7 +87,7 @@ it('workspace selection cannot disclose another project or widen global permissi
   expect(memoryView(config).documents).toEqual([]);
   expect(existsSync(join(config.dataRoot, 'runtime.sqlite'))).toBe(false);
 });
-it('status includes jobs and session incompleteness but never raw conversation bodies, retry uses the same queue', () => {
+it('status includes jobs and session incompleteness but never raw conversation bodies, retry uses the same queue', async () => {
   const config = fixture(); const store = new RuntimeStore(config.dataRoot);
   try {
     const ingress = new SessionIngress(store);
@@ -97,28 +98,22 @@ it('status includes jobs and session incompleteness but never raw conversation b
     store.db.prepare("UPDATE jobs SET state='dead',issue='TEST_FAILURE' WHERE id=?").run(job.id);
     store.db.prepare("UPDATE observations SET state='dead' WHERE jobId=?").run(job.id);
   } finally { store.close(); }
-  const status = runtimeStatus(config)!;
-  expect(status.sessions[0]).toMatchObject({ closing: true, complete: false, failed: 1 });
-  expect(JSON.stringify(status)).not.toContain('PRIVATE_SYNTHETIC_BODY');
-  const result = cli(['status']);
-  expect(result.status, result.stderr).toBe(0);
-  expect(result.stdout).toContain('TEST_FAILURE');
-  expect(result.stdout).not.toContain('PRIVATE_SYNTHETIC_BODY');
-  const jobId=status.jobs[0]!.id;retryJob(config, jobId);
-  const retried=runtimeStatus(config)!;
+  let core=new RuntimeStore(config.dataRoot);const port=new DispatchPort(core,()=>config,{kind:'cli'});const status=await port.call<NonNullable<Awaited<ReturnType<typeof runtimeStatus>>>>('queue.status');
+  expect(status.sessions[0]).toMatchObject({ closing: true, complete: false, failed: 1 });expect(JSON.stringify(status)).not.toContain('PRIVATE_SYNTHETIC_BODY');
+  const jobId=status.jobs[0]!.id;await port.call('queue.retry',{id:jobId});core.close();core=new RuntimeStore(config.dataRoot);const retried=await new DispatchPort(core,()=>config,{kind:'cli'}).call<NonNullable<Awaited<ReturnType<typeof runtimeStatus>>>>('queue.status');core.close();
   expect(retried.jobs).toHaveLength(1);expect(retried.jobs[0]).toMatchObject({id:jobId,state:'retry',attempts:1,issue:'TEST_FAILURE'});
   expect(retried.observations).toContainEqual({ state: 'claimed', count: 1 });
 });
-it('settled turns become immediately eligible without count, byte, idle, or flush readiness gates', () => {
+it('settled turns become immediately eligible without count, byte, idle, or flush readiness gates', async () => {
   const config=fixture(),store=new RuntimeStore(config.dataRoot);
   try {
     const ingress=new SessionIngress(store),key=ingress.open({client:'pi',sessionId:'eligible',processInstance:'test-process'});
     for(let i=0;i<9;i++){ingress.capture(key,{id:`u${i}`,turnId:`t${i}`,role:'user',text:`Synthetic ${i}`,scope:'global',source:'interactive',observedAt:new Date().toISOString()});ingress.settle(key,`t${i}`);}
   } finally {store.close();}
-  const status=runtimeStatus(config)!;
+  const core=new RuntimeStore(config.dataRoot),status=await new DispatchPort(core,()=>config,{kind:'cli'}).call<NonNullable<Awaited<ReturnType<typeof runtimeStatus>>>>('queue.status');core.close();
   expect(status.observations).toContainEqual({state:'pending',count:9});expect(status.sessions[0]).toMatchObject({batches:9,states:{pending:9}});
 });
-it('session-drain recovery keeps the same isolated host identity and exits incomplete when the cause remains',()=>{
+it('session-drain recovery keeps the same isolated host identity and exits incomplete when the cause remains',async()=>{
   const config=fixture(),store=new RuntimeStore(config.dataRoot),recoveryId='22222222-2222-4222-8222-222222222222';
   try {
     setupHostAdapter(store);store.db.prepare('INSERT INTO sessions(id) VALUES(?)').run('session-bad');
@@ -126,8 +121,7 @@ it('session-drain recovery keeps the same isolated host identity and exits incom
     store.db.prepare('INSERT INTO codex_failures(sessionId,inboxId,recoveryId,issue,failedAt) VALUES(?,?,?,?,?)').run('session-bad',inbox.lastInsertRowid,recoveryId,'CODEX_UNKNOWN_TRANSCRIPT',1);
   }finally{store.close();}
   writeFileSync(join(home,'.env'),'CM_TEST_UNUSED_KEY="synthetic"\n',{mode:0o600});
-  const result=cli(['session-drain','--recover',recoveryId]);expect(result.status,result.stderr).toBe(1);expect(result.stdout).not.toContain('PRIVATE_BAD_HOST_BODY');expect(result.stderr).not.toContain('PRIVATE_BAD_HOST_BODY');
-  const after=new RuntimeStore(config.dataRoot);try{expect(hostQueueStatus(after)).toMatchObject({complete:false,inbox:1,isolated:1,recoveries:[{id:recoveryId,issue:'CODEX_CURSOR_CONFLICT'}]});}finally{after.close();}
+  const recoveryStore=new RuntimeStore(config.dataRoot);await new DispatchPort(recoveryStore,()=>config,{kind:'cli'}).call('host.recover',{id:recoveryId});await consumeCodexInbox(config,undefined,{singlePass:true,store:recoveryStore});expect(JSON.stringify(hostQueueStatus(recoveryStore))).not.toContain('PRIVATE_BAD_HOST_BODY');expect(hostQueueStatus(recoveryStore)).toMatchObject({complete:false,inbox:1,isolated:1,recoveries:[{id:recoveryId,issue:'CODEX_CURSOR_CONFLICT'}]});recoveryStore.close();
 });
 it('project CLI continues supporting registration, listing, removal without implicit grants', () => {
   const config = fixture();

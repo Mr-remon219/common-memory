@@ -18,6 +18,6 @@ export function queueMemoryEdit(store: RuntimeStore, input: EditSubmission, acce
     try { observation = store.enqueue({sessionId:input.sessionId,entryId:input.requestId,text:input.text,scope:input.scope,source:'interactive',taskKind:'edit',observedAt:new Date().toISOString()}); }
     catch (error) { if (error instanceof Error && error.message === 'Conflicting observation identity') throw new Error('SUBMISSION_CONFLICT'); throw error; }
     store.requestFlush();
-    return {accepted:true as const,duplicate,state:observation.state,contextId:observation.scope};
+    return {taskId:`task_${observation.id}`,accepted:true as const,duplicate,state:observation.state,contextId:observation.scope};
   });
 }

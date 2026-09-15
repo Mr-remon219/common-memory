@@ -13,13 +13,13 @@ import { parseTranscript } from './codex/transcript-codex-host.js';
 export interface CodexEvent { hook_event_name:'SessionStart'|'UserPromptSubmit'|'Stop'|'SessionEnd'|'Interrupt'|'PostToolUse';cwd:string;session_id:string;transcript_path:string;source?:string;turn_id?:string;prompt?:string }
 export function setupHostAdapter(store:RuntimeStore):void {
   store.db.exec(`CREATE TABLE IF NOT EXISTS host_activations(base TEXT PRIMARY KEY,sessionId TEXT NOT NULL,client TEXT NOT NULL,instance TEXT NOT NULL,thread TEXT NOT NULL,cwd TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1);
-    CREATE TABLE IF NOT EXISTS host_snapshots(sessionId TEXT PRIMARY KEY,body TEXT NOT NULL,pending INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS host_snapshots(sessionId TEXT PRIMARY KEY,body TEXT NOT NULL,pending INTEGER NOT NULL DEFAULT 0,authorization TEXT NOT NULL DEFAULT '[]');
     CREATE TABLE IF NOT EXISTS codex_cursors(sessionId TEXT PRIMARY KEY,path TEXT NOT NULL,offset INTEGER NOT NULL,turnId TEXT);
     CREATE TABLE IF NOT EXISTS codex_inbox(id INTEGER PRIMARY KEY,sessionId TEXT NOT NULL,event TEXT NOT NULL,turnId TEXT,start INTEGER NOT NULL,body TEXT NOT NULL,scope TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS codex_candidates(sessionId TEXT NOT NULL,turnId TEXT NOT NULL,digest TEXT NOT NULL,text TEXT,PRIMARY KEY(sessionId,turnId,digest));
     CREATE TABLE IF NOT EXISTS codex_watches(sessionId TEXT NOT NULL,turnId TEXT NOT NULL,PRIMARY KEY(sessionId,turnId));
     CREATE TABLE IF NOT EXISTS codex_failures(sessionId TEXT PRIMARY KEY,inboxId INTEGER,recoveryId TEXT NOT NULL UNIQUE,issue TEXT NOT NULL,failedAt INTEGER NOT NULL,retryRequested INTEGER NOT NULL DEFAULT 0);`);
-  store.transaction(()=>{if(!store.db.prepare('PRAGMA table_info(codex_candidates)').all().some(r=>r.name==='scope'))store.db.exec('ALTER TABLE codex_candidates ADD COLUMN scope TEXT');});
+  store.transaction(()=>{if(!store.db.prepare('PRAGMA table_info(codex_candidates)').all().some(r=>r.name==='scope'))store.db.exec('ALTER TABLE codex_candidates ADD COLUMN scope TEXT');if(!store.db.prepare('PRAGMA table_info(host_snapshots)').all().some(r=>r.name==='authorization'))store.db.exec("ALTER TABLE host_snapshots ADD COLUMN authorization TEXT NOT NULL DEFAULT '[]'");});
 }
 
 const HOST_SESSION_FAILURES = new Set([
@@ -77,10 +77,12 @@ export function hostQueueStatus(store:RuntimeStore,afterRecoveryId=''):HostQueue
 }
 /** Explicitly retries the same retained inbox/watch identity. It never edits or discards host material. */
 export function recoverCodexInbox(config:CommonMemoryConfig,recoveryId:string):void {
-  if(!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(recoveryId))throw new Error('CODEX_RECOVERY_UNAVAILABLE');
   const store=new RuntimeStore(config.dataRoot);
-  try {setupHostAdapter(store);const result=store.db.prepare('UPDATE codex_failures SET retryRequested=1 WHERE recoveryId=?').run(recoveryId);if(result.changes!==1)throw new Error('CODEX_RECOVERY_UNAVAILABLE');}
-  finally{store.close();}
+  try {recoverCodexInboxInStore(store,recoveryId);}finally{store.close();}
+}
+export function recoverCodexInboxInStore(store:RuntimeStore,recoveryId:string):void {
+  if(!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(recoveryId))throw new Error('CODEX_RECOVERY_UNAVAILABLE');
+  setupHostAdapter(store);const result=store.db.prepare('UPDATE codex_failures SET retryRequested=1 WHERE recoveryId=?').run(recoveryId);if(result.changes!==1)throw new Error('CODEX_RECOVERY_UNAVAILABLE');
 }
 export const codexProcessInstance = hostProcessInstance;
 function transcript(path:string,offset:number|null,cap:number):{text:string;end:number} {
@@ -104,7 +106,11 @@ function transcript(path:string,offset:number|null,cap:number):{text:string;end:
 /** SQLite WAL + synchronous=FULL is the atomic, fsynced inbox. No remote work in a hook. */
 export function enqueueCodexEvent(config:CommonMemoryConfig,event:CodexEvent,instance=codexProcessInstance(),client:HostClient='codex'):{key:string;initial:boolean} {
   const store=new RuntimeStore(config.dataRoot,{sqliteTimeoutMs:150});
-  try {setupHostAdapter(store);return store.transaction(()=>{
+  try {return enqueueCodexEventInStore(store,config,event,instance,client);}finally{store.close();}
+}
+/** Service-side ingress. The request journal and complete host inbox admission share one transaction. */
+export function enqueueCodexEventInStore(store:RuntimeStore,config:CommonMemoryConfig,event:CodexEvent,instance=codexProcessInstance(),client:HostClient='codex'):{key:string;initial:boolean} {
+  setupHostAdapter(store);return store.transaction(()=>{
     const ingress=new SessionIngress(store,config.sessionCache);
     let identity:SessionIdentity={client,processInstance:instance,sessionId:event.session_id};
     const base=sessionKey(identity),activation=store.db.prepare('SELECT * FROM host_activations WHERE base=?').get(base);
@@ -137,11 +143,11 @@ export function enqueueCodexEvent(config:CommonMemoryConfig,event:CodexEvent,ins
     store.db.prepare('INSERT INTO codex_inbox(sessionId,event,turnId,start,body,scope) VALUES(?,?,?,?,?,?)').run(key,event.hook_event_name,event.turn_id??null,offset,snapshot.text,scope);
     if(event.hook_event_name==='SessionEnd'){store.db.prepare('UPDATE host_activations SET active=0 WHERE base=?').run(base);store.db.prepare('DELETE FROM host_snapshots WHERE sessionId=?').run(key);}
     return {key,initial};
-  });}finally{store.close();}
+  });
 }
 function fstatSize(path:string):number {const fd=openSync(path,constants.O_RDONLY|constants.O_NOFOLLOW);try{return fstatSync(fd).size;}finally{closeSync(fd);}}
-export async function consumeCodexInbox(config:CommonMemoryConfig, progressCallback?:()=>Promise<void>):Promise<HostQueueStatus> {
-  const store=new RuntimeStore(config.dataRoot);
+export async function consumeCodexInbox(config:CommonMemoryConfig, progressCallback?:()=>Promise<void>, options:{singlePass?:boolean;store?:RuntimeStore}={}):Promise<HostQueueStatus> {
+  const store=options.store??new RuntimeStore(config.dataRoot);
   try {
     setupHostAdapter(store);
     const ingress=new SessionIngress(store,config.sessionCache);
@@ -178,6 +184,7 @@ export async function consumeCodexInbox(config:CommonMemoryConfig, progressCallb
           return true;
         });}catch(error){if(!recordHostFailure(store,String(next.sessionId),Number(next.id),error,{start:Number(next.start)}))throw error;}
         if(consumed)await progressCallback?.();
+        if(options.singlePass)return hostQueueStatus(store);
         continue;
       }
       const watches=store.db.prepare(`SELECT w.*,c.path,c.offset,c.turnId AS activeTurn FROM codex_watches w JOIN codex_cursors c ON c.sessionId=w.sessionId
@@ -201,13 +208,14 @@ export async function consumeCodexInbox(config:CommonMemoryConfig, progressCallb
           store.db.prepare("INSERT INTO codex_inbox(sessionId,event,start,body,scope) VALUES(?,'Reconcile',?,?,?)").run(w.sessionId!,cursor.offset!,snapshot.text,scope);progress=true;
         });}catch(error){if(!recordHostFailure(store,String(w.sessionId),null,error,{turnId:String(w.turnId),offset:Number(w.offset)}))throw error;progress=true;}
       }
+      if(options.singlePass)return hostQueueStatus(store);
       if(!progress){
         await progressCallback?.();
         if(Date.now()>deadline)return hostQueueStatus(store);
         await setTimeout(100);
       }
     }
-  }finally{store.close();}
+  }finally{if(!options.store)store.close();}
 }
 
 export type HostClient = 'codex' | 'chatgpt-work';

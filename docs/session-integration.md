@@ -45,7 +45,7 @@ Pi（事件契约验证基线 0.84.4；安装与发现不按版本号限制）�
 reload/new/resume/fork 的 extension shutdown 只关闭本地资源。进程随机身份与附加
 记忆块通过 globalThis 保留跨 reload 状态；数据Root＋session 冻结附加块，每轮与
 当时的宿主 systemPrompt 组合。startup 读一次，后续生命周期不补读；原生 memory_read
-及 promptSnippet/promptGuidelines 按当前授权主动读取。Pi 直接写公共 ingress。configured Writer 先构造中立 Runtime port 与本地 SQLite，
+及 promptSnippet/promptGuidelines 按当前授权主动读取。Pi 通过私有 IPC 调用 Core ingress，不创建 Writer 或队列数据库。独立 Core 的 configured Writer 构造中立 Runtime port 与本地 SQLite，
 首次维护请求才初始化固定网络路由、CA 和 dispatcher；初始化失败保留持久工作，绝不改走直连。
 Pi 捕获/维护诊断只打印受控原因与修复入口；相同原因去重，每个报告器最多八种，不打印异常正文。
 
@@ -69,15 +69,11 @@ item_completed 与终态必须带匹配的非空 turn_id；证据/终态时间�
 也不作为自动记忆返回正文。无法匹配时保留 inbox，明确报告未确认交付。
 
 `src/cli/host-session.ts` 是 Codex/Work 共享 adapter（codex-session 保留兼容导出），将尾部 JSONL 正文和信封放进同一 runtime.sqlite 的 durable
-inbox，SQLite WAL＋synchronous=FULL 提供原子、fsync 持久性。Hook 使用 150ms SQLite
-busy timeout，生成器给三秒宿主期限；不在 hook 内运行模型。首次合格 startup/resume 读取有界快照；普通轮次不重复追加。compact/clear/reload 只重挂缓存。显式刷新由 PostToolUse 或下一 UserPromptSubmit 交付。进程身份取 Linux/WSL boot ID＋Codex 祖先进程 PID＋
+inbox，SQLite WAL＋synchronous=FULL 提供原子、fsync 持久性。此 adapter 由独立 Core 调用，Hook 只发送 IPC；生成器给三秒宿主期限，不在 Hook 内打开队列或运行模型。首次合格 startup/resume 读取有界快照；普通轮次不重复追加。compact/clear/reload 只重挂缓存。显式刷新由 PostToolUse 或下一 UserPromptSubmit 交付。进程身份取 Linux/WSL boot ID＋Codex 祖先进程 PID＋
 启动时间；PID 复用和不同工作目录不会错误共享 session。低于最低/非数字版本、未知结构、路径替换、未确认交付、
 尾部不完整或容量不足均显式失败，不前移消费位置。SessionEnd 快照不依赖退出后文件存在。
 
-`src/cli/session-drain.ts` 使用 detached＋独立 stdio＋unref 启动真正的 configured Writer。
-它先事务性将 inbox 正文转为 session 状态，同事务删除副本；Stop 核对会继续读取后续
-终态记录，不等待下一输入。单次核对最多 60 秒，失败保留 durable watch。消费者使用
-`src/v2/session-drain.ts` 等待正常租约、退避，直到已封工作处理或 paused/dead/quarantined。这里的宿主信封核对期限不是维护模型的整次期限；模型维护没有整次墙钟期限。
+`src/cli/session-drain.ts` 现在是 IPC 命令，不启动 detached Writer。OS 监管的 `src/service/daemon.ts` 持续分步消费 inbox，同事务转存 session 状态并删除副本；Stop 核对不等待下一输入，不完整尾部保留 watch。维护遵守正常租约、持久恢复预算和配置暂停，没有整次墙钟期限。监管与交接见[生命周期说明](service-lifecycle.md)。
 
 Codex-host 的解析、游标或交付认证失败按 activation 持久隔离：失败事务整体回滚，原 inbox、cursor、
 candidate 与正文都保留；消费者越过该 activation 继续处理其他健康会话。状态只展示固定错误码、
@@ -88,8 +84,7 @@ inbox/watch 数量和有界恢复 ID，不展示正文。恢复列表每页最�
 集合中的 SQLite、文件 I/O 和瞬时容量错误直接上抛，不会被误记成某个坏会话。
 
 普通 `common-memory flush` 处理已完成交互，不把尚未完成的交互伪装成 settled；buffered、host inbox/isolation/watch 都使命令返回 incomplete，状态覆盖 buffered、pending/claimed、running/retry、paused/dead、processed。
-消费者崩溃后可由下一次写端事件或 `common-memory session-drain` 恢复；不会清空数据。
-父宿主与 MCP 退出不会撤销独立消费者。kill、重启、磁盘失败不承诺正常结束保证。
+Core 崩溃后由 OS 监管器恢复，不依赖下一次写端事件；不会清空数据。父宿主与 MCP 退出不会取消已接受任务。明确取消、配置暂停、恢复预算耗尽与计划交接分别处理；断电和磁盘故障仍有平台及持久化边界。
 
 两端共用 `src/v2/read-guidance.ts`。缺少用户背景/偏好/兴趣/目标/工作方式/项目约束时
 主动读，例如个性化最优化课程推荐、按研究方向比较项目；普通梯度下降解释或已具备

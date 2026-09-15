@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
@@ -11,6 +11,8 @@ import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { defaultConfig } from '../../src/config/config.js';
 import { RuntimeStore } from '../../src/v2/runtime.js';
+import { startTestService } from '../helpers/service-daemon.js';
+import { provisionServiceGrant } from '../../src/service/control.js';
 
 const cleanup: (() => unknown | Promise<unknown>)[] = [];
 afterEach(async () => { for (const fn of cleanup.splice(0).reverse()) await fn(); });
@@ -28,7 +30,7 @@ function fixture(baseUrl = 'http://127.0.0.1:1/v1', threshold = 6) {
   return { home, config, env };
 }
 async function connect(env: Record<string, string>, clientId: string, accept = true, modern = false, extra: string[] = []) {
-  const client = new Client({ name: 'test', version: '1' }, modern ? { versionNegotiation: { mode: { pin: '2026-07-28' } } } : {});
+  cleanup.push(await startTestService(env.COMMON_MEMORY_HOME!));provisionServiceGrant({kind:'mcp',options:{clientId,workspaces:extra.flatMap((value,index)=>extra[index-1]==='--workspace'?[value]:[]),global:true,accept,capabilities:extra.includes('--capability')?[extra[extra.indexOf('--capability')+1] as 'relay'|'init'|'read']:['relay']}},env.COMMON_MEMORY_HOME!);const client = new Client({ name: 'test', version: '1' }, modern ? { versionNegotiation: { mode: { pin: '2026-07-28' } } } : {});
   const transport = new StdioClientTransport({ command: process.execPath, args: [...entry, '--client-id', clientId, '--global', ...(accept ? ['--accept-client-reported-user-turns'] : []), ...extra], env, stderr: 'pipe' });
   let stderr = ''; transport.stderr?.on('data', b => { stderr += b; });
   cleanup.push(() => client.close());
@@ -48,7 +50,7 @@ it.each([false, true])('serves real stdio, isolates identities and survives rest
   expect((await a.client.callTool({ name: 'memory_submit_user_turn', arguments: { ...submission, text: 'different' } })).isError).toBe(true);
   await a.client.close(); await b.client.close();
   const again = await connect(env, 'a');
-  expect((await again.client.callTool({ name: 'memory_submit_user_turn', arguments: submission })).structuredContent).toMatchObject({ duplicate: true });
+  expect((await again.client.callTool({ name: 'memory_submit_user_turn', arguments: submission })).structuredContent).toEqual(call.structuredContent);
   const store = new RuntimeStore(config.dataRoot);
   try { expect(store.db.prepare('SELECT COUNT(*) AS n FROM observations').get()!.n).toBe(1); } finally { store.close(); }
 });
@@ -96,7 +98,7 @@ it('read-only launch serves memory_read without a Writer, API key or runtime dat
   expect(resources.resources.map(r => r.uri)).toEqual(['common-memory://memory/global']);
   const resource = await client.readResource({uri:resources.resources[0]!.uri});
   expect(resource.contents[0]).toMatchObject({text:(read.content as {text:string}[])[0]!.text});
-  expect(existsSync(join(config.dataRoot, 'runtime.sqlite'))).toBe(false);
+  const runtime=new RuntimeStore(config.dataRoot);try{expect(runtime.status().observations).toEqual([]);}finally{runtime.close();}
 });
 it('init launch imports agent-reported understanding through the unchanged Writer and reports retention', async () => {
   const seen: unknown[] = [];
@@ -117,7 +119,7 @@ it('init launch imports agent-reported understanding through the unchanged Write
   const { client } = await connect(env, 'chatgpt', false, false, ['--capability', 'init']);
   expect((await client.listTools()).tools.map(t => t.name)).toEqual(['memory_init', 'memory_status']);
   const args = { importId: 'imp-1', contextId: 'global', sourceLabel: 'chatgpt-desktop', basis: 'saved_memories', understanding: 'The user studies ecology and keeps a rescued tortoise named Basalt.', gaps: 'No access to older chats.' };
-  expect((await client.callTool({ name: 'memory_init', arguments: args })).structuredContent).toMatchObject({ accepted: true, duplicate: false, state: 'pending' });
+  const accepted=await client.callTool({ name: 'memory_init', arguments: args });expect(accepted.structuredContent).toMatchObject({ accepted: true, duplicate: false, state: 'pending' });
   // Below the 6-turn threshold, only the requested flush makes this process promptly.
   await expect.poll(async () => (await client.callTool({ name: 'memory_status', arguments: { importId: 'imp-1' } })).structuredContent, { timeout: 8000 }).toMatchObject({ import: { state: 'processed', issue: null, retainedIn: ['profile'] } });
   expect(seen).toHaveLength(1);
@@ -126,7 +128,7 @@ it('init launch imports agent-reported understanding through the unchanged Write
   expect(profile).toContain('Imported from chatgpt-desktop (saved_memories)');
   expect(profile).toContain('tortoise named Basalt');
   // Retrying the same import after processing is a duplicate, not a second write.
-  expect((await client.callTool({ name: 'memory_init', arguments: args })).structuredContent).toMatchObject({ duplicate: true, state: 'processed' });
+  expect((await client.callTool({ name: 'memory_init', arguments: args })).structuredContent).toEqual(accepted.structuredContent);
   expect(seen).toHaveLength(1);
   // A read-only process on the same dataRoot sees the same canonical memory.
   const reader = await connect(env, 'codex', false, false, ['--capability', 'read']);
@@ -135,7 +137,7 @@ it('init launch imports agent-reported understanding through the unchanged Write
 });
 // Node's SIGTERM emulation forcibly kills Windows processes; EOF is the portable
 // graceful shutdown path. POSIX additionally exercises the real signal handler.
-it.each(['EOF', ...(process.platform === 'win32' ? [] : ['SIGTERM'])])('%s aborts in-flight model work and retains the durable submission', async mode => {
+it.each(['EOF', ...(process.platform === 'win32' ? [] : ['SIGTERM'])])('%s closes only the MCP channel while daemon work remains durable', async mode => {
   let received!: () => void;
   const requestStarted = new Promise<void>(r => { received = r; });
   const provider = createServer(async (req, _res) => { for await (const _chunk of req) { /* drain synthetic request */ } received(); });
@@ -143,7 +145,7 @@ it.each(['EOF', ...(process.platform === 'win32' ? [] : ['SIGTERM'])])('%s abort
   cleanup.push(() => { provider.closeAllConnections(); return new Promise<void>(r => provider.close(() => r())); });
   const { env, config } = fixture(`http://127.0.0.1:${(provider.address() as {port: number}).port}/v1`, 1);
   const { client, transport } = await connect(env, 'terminate');
-  await client.callTool({ name: 'memory_submit_user_turn', arguments: submission });
+  const accepted=await client.callTool({ name: 'memory_submit_user_turn', arguments: submission });
   await requestStarted;
   const closed = new Promise<void>(r => { client.onclose = r; });
   if (mode === 'EOF') await client.close();
@@ -151,8 +153,8 @@ it.each(['EOF', ...(process.platform === 'win32' ? [] : ['SIGTERM'])])('%s abort
   await closed;
   const store = new RuntimeStore(config.dataRoot);
   try {
-    expect(store.status().jobs).toContainEqual(expect.objectContaining({ state: 'paused' }));
-    expect(store.db.prepare('SELECT text,state FROM observations').get()).toMatchObject({ text: submission.text, state: 'paused' });
+    expect(accepted.structuredContent).toMatchObject({accepted:true});expect(store.status().jobs).toContainEqual(expect.objectContaining({ state: 'running' }));
+    expect(store.db.prepare('SELECT text,state FROM observations').get()).toMatchObject({ text: submission.text, state: 'claimed' });
   } finally { store.close(); }
 });
 it('exits on stdin EOF without protocol output pollution', async () => {

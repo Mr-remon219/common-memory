@@ -38,10 +38,11 @@ common-memory status [--after-recovery <id>]  Queue status / next recovery page
 Existing automation and protocol commands remain supported; see docs/usage.md.`);
     return;
   }
+  if(command==='service'){await (await import('../service/manager.js')).serviceCommand(args);return;}
   if(command==='uninstall' && !args.length){await (await import('./uninstall-tui.js')).runUninstallTui();return;}
   if(command==='work-config'){(await import('./work-config.js')).runWorkConfig(args);return;}
   if(command==='work-hook'){await (await import('./codex-hook.js')).runCodexHook(args,'chatgpt-work');return;}
-  if(command==='session-refresh'){(await import('./codex-hook.js')).runSessionRefresh(args);return;}
+  if(command==='session-refresh'){await (await import('./codex-hook.js')).runSessionRefresh(args);return;}
   if(command==="session-drain") {await (await import("./session-drain.js")).runSessionDrain(args);return;}
   if(command==="codex-hook") {await (await import('./codex-hook.js')).runCodexHook(args);return;}
   if(command==="codex-config") {
@@ -75,10 +76,11 @@ Existing automation and protocol commands remain supported; see docs/usage.md.`)
     await runTui();return;
   }
   if(command==="config" && !args.length) {await (await import('./model-configuration.js')).configureModel();return;}
-  if(command==="status" && (!args.length || args.length===2 && args[0]==='--after-recovery')) {printStatus();const config=loadConfig();if(config){const status=runtimeStatus(config,args[1]);if(status)console.log(JSON.stringify(status,null,2));}return;}
+  if(command==="status" && (!args.length || args.length===2 && args[0]==='--after-recovery')) {printStatus();const config=loadConfig();if(config){const status=await runtimeStatus(config,args[1]);if(status)console.log(JSON.stringify(status,null,2));}return;}
   const config=loadConfig();if(!config)throw new Error("Run common-memory first");
   if(command==="flush" && !args.length) {process.exitCode=await runFlush(config);return;}
-  if(command==="retry" && args.length===1){retryJob(config,args[0]!);return;}
+  if(command==="retry" && args.length===1){await retryJob(config,args[0]!);return;}
+  if(command==="cancel" && args.length===1){await (await import('./operations.js')).cancelJob(config,args[0]!);return;}
   if(command==="project") {
     const [action,...rest]=args;
     if(action==="list" && !rest.length){console.log(JSON.stringify(listProjects(config),null,2));return;}

@@ -17,7 +17,7 @@ export const statusInput = z.object({
   importId: idSchema.optional().describe('The original importId; mutually exclusive with submissionId and conversationId.'),
 }).strict();
 const nextSchema = z.object({
-  action: z.enum(['poll', 'read', 'review', 'correct', 'discover']),
+  action: z.enum(['poll', 'read', 'review', 'correct', 'discover', 'wait']),
   message: z.string(),
   tool: z.enum(['memory_status', 'memory_read']).optional(),
   arguments: z.object({submissionId:idSchema.optional(),conversationId:idSchema.optional(),importId:idSchema.optional(),contextId:contextIdSchema.optional()}).strict().optional(),
@@ -25,7 +25,7 @@ const nextSchema = z.object({
 }).strict();
 export type NextStep = z.infer<typeof nextSchema>;
 export const acceptanceOutput = z.object({
-  accepted: z.literal(true), duplicate: z.boolean(), state: z.string(), contextId: contextIdSchema, next: nextSchema,
+  taskId:z.string().optional(), accepted: z.literal(true), duplicate: z.boolean(), state: z.string(), contextId: contextIdSchema, next: nextSchema,
 }).strict();
 export const readOutput = z.object({
   guidance:z.string().optional(),
@@ -36,7 +36,7 @@ export const readOutput = z.object({
 const outcomeSchema = z.object({
   editResult:z.enum(['modified','already_satisfied','clarification_required','refused']).optional(),
   state:z.string(),issue:z.string().nullable(),retainedIn:z.array(z.string()),jobId:z.string().nullable(),jobState:z.string().nullable(),
-  attempts:z.number().int().nonnegative(),retryAt:z.number().nullable(),
+  attempts:z.number().int().nonnegative(),automaticRecoveries:z.number().int().nonnegative().optional(),retryAt:z.number().nullable(),
   diagnostic:z.object({stage:z.enum(DIAGNOSTIC_STAGES),reason:z.enum(DIAGNOSTIC_REASONS),retryable:z.boolean(),httpStatus:z.number().int().optional(),proxyStatus:z.number().int().optional()}).strict().nullable(),
 }).strict();
 // Object-root schema preserves the existing wire envelopes on legacy and current MCP.

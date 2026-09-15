@@ -3,7 +3,7 @@
 ## 产品边界
 
 持久化实际用户投递 → 稳定消息身份绑定 → session 十轮封批 / legacy 混合触发 → 统一 Ingest Bundle → Core 只读工具 → 独立 Pi Memory Agent Runtime 决策 → 有限 Markdown Section 更新 → 可恢复提交。
-Write 及必要当前状态检查。Markdown 是长期内容权威；runtime SQLite 是不可随意重建的队列、租约和来源元数据。删除 Fact/Proposal/Review、Recall/FTS/ranking/context pack、治理/Undo 及兼容层，不迁移、不删除工作区外用户数据。不引入 Temporary Store、向量库或常驻服务。
+Write 及必要当前状态检查。Markdown 是长期内容权威；runtime SQLite 是不可随意重建的队列、租约和来源元数据。删除 Fact/Proposal/Review、Recall/FTS/ranking/context pack、治理/Undo 及兼容层，不迁移、不删除工作区外用户数据。不引入 Temporary Store 或向量库。当前源码增加 OS 监管的私有 Core 服务以解耦渠道生命周期，见[生命周期说明](service-lifecycle.md)。
 
 **Init v0.1 增补（2026-09-07，见 `init-v0.1-design.md`）**：本节最初写的“仅 Write”已放宽为两条受授权约束的接口。(1) Init：`memory_init` 把其他 Agent 的自述理解作为 `agent_import` 观察进入同一队列，由不变的 Writer 决策；投影新增 `source_kind`/`import` 字段，输出协议不变；agent_import 不能单独作为 forget 证据。(1b) Markdown 导入（收尾增补，见 `init-v0.1-design.md` §9）：`common-memory import <file.md>` 经输入预处理（文件校验、结构化分块、信封）成为 `document_import` 观察，走同一队列、同一 Writer、同一导入守卫；来源→provenance 映射（`src/v2/import.ts`）统一决定入队、分批与按 `disclosure.allowedProvenance` 的逐批授权。(2) 只读披露：`src/v2/reader.ts` 按启动上下文 ∩ `disclosure.allowedScopes` 返回当前 Markdown 原文（不建目录、不开 SQLite、不取锁），供 MCP `memory_read`（`--capability read` 进程）、Pi `before_agent_start` 注入与 CLI `show` 共用。仍不引入检索、索引、排序或 Recall 写权限。
 
@@ -18,13 +18,13 @@ Write 及必要当前状态检查。Markdown 是长期内容权威；runtime SQL
 - Mem0 更新、合并、删除：[论文](https://arxiv.org/abs/2504.19413)。
 - 更新与不写应独立验收：[LongMemEval](https://arxiv.org/abs/2410.10813)。
 
-Legacy relay/import 保留混合调度；Pi/Codex 会话以十次 settled 交互与退出尾批封批，详见 [会话接入](session-integration.md)。不宣称参数已优化。宿主事件顺序以锁文件安装的 Pi 源码核验。
+Legacy relay/import 保留混合调度；Pi/Codex 会话逐次完整 settled 交互立即封批，详见 [会话接入](session-integration.md)。不宣称参数已优化。宿主事件顺序以锁文件安装的 Pi 源码核验。
 
 ## Capture / 调度
 
 input 只登记来源与冻结 cwd→project。message_end 持久化待绑定，再用稳定 Entry ID 绑定；不依赖助手成功。未投递输入不得成为 evidence。模板变换、扩展来源、无法证明唯一关系和不支持的多模态输入保守隔离，不重标 global。宿主缺少完整投递链 ID 时宁可隔离，不猜来源。
 
-Legacy 默认 6 条 / 16 KiB / 120 秒空闲 / 10 分钟最老积压；生命周期和本地 flush 请求处理。Pi/Codex 十轮会话批次不混入其他 session 或 import；真正退出封尾并唤醒独立消费者，等待正常租约与退避。dataRoot 单任务、领取后不合并新观察、正常 FIFO；隔离/dead-letter 可见且不堵后续正常队列。60 秒 deadline、120 秒续租 lease、指数退避最多 5 次，可本地 retry。
+Legacy 默认 6 条 / 16 KiB / 120 秒空闲 / 10 分钟最老积压；生命周期和本地 flush 请求处理。Pi/Codex 逐交互批次不混入其他 session 或 import；未确认尾部保持 incomplete，独立 Core 持续消费，等待正常租约与退避。dataRoot 单任务、领取后不合并新观察、正常 FIFO；隔离/dead-letter 可见且不堵后续正常队列。120 秒默认续租 lease、初次外最多五次共享持久自动恢复预算，可显式 retry；保留单次网络无进展检测，没有整项维护总期限。
 
 ## Model / Markdown
 
@@ -32,7 +32,7 @@ profile.md、preferences.md、projects/<宿主 id>.md。固定 H1、唯一 H2、
 
 每条输入（含微小输入）同事务生成持久结构 Bundle/ranges，引用原 observation/session 正文 owner，不复制原文。Core 只给 Runtime task 摘要、handle 与分页工具，不预装完整来源/文档。会话 assistant/tool 与前轮上下文须独立授权 conversation_context；系统、thinking、compaction 不进入请求。默认输入/输出 Unlimited，显式旧 disclosure caps 仍执行；来源不截断或部分消费。所有当前材料和拟编辑文档都必须完整读取，ignore 也不得跳过当前材料。
 
-[Runtime 设计、研究、迁移与限制](memory-agent-runtime.md) 是本次源码升级的详细契约：中立 `MemoryAgentRuntime` port、Pi Agent Core/pi-ai 0.85.1、一次性 decision tool、coverage、catalog/unknown context、工作笔记、64 轮与整次 60 秒边界。Runtime 无 DB/文件写 authority，Core 不依赖 Pi 或 Coding Agent 业务。
+[Runtime 设计、研究、迁移与限制](memory-agent-runtime.md) 是本次源码升级的详细契约：中立 `MemoryAgentRuntime` port、Pi Agent Core/pi-ai 0.85.1、一次性 decision tool、coverage、catalog/unknown context、工作笔记、默认 64 轮边界与单次网络无进展检测。Runtime 无 DB/文件写 authority，Core 不依赖 Pi 或 Coding Agent 业务。
 
 memory_maintenance_v2：retain(remember/update/correct, stable/until_changed)、forget、maintain、ignore。引用必须宿主提供；context_only 不是新增 evidence。无效响应失败，不降级 no-op；ignore 原子消费。Project 来源批次可按 applicability 与既有授权写 Global；Project maintain 不得跨项目。
 

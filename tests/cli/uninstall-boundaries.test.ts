@@ -22,7 +22,7 @@ it('ignores comments and unrelated trust paths but blocks parsed live MCP regist
 
 
 it('blocks a registered live MCP/Pi instance automatically but does not pretend unknown candidates are confirmed', () => {
-  expect(() => assertNoLiveManagedInstances([{pid:1,role:'mcp',version:'0.4.1',started:'1',executable:'node',cli:'cli',status:'loaded'}])).toThrow('已确认加载');
+  expect(() => assertNoLiveManagedInstances([{pid:1,role:'mcp',version:'0.4.1',started:'1',executable:'node',cli:'cli',status:'loaded'}])).toThrow('未证明为纯渠道');
   expect(() => assertNoLiveManagedInstances([{pid:2,role:'unknown',version:'unknown',started:'1',executable:'node',cli:'cli',status:'unregistered'}])).not.toThrow();
 });
 

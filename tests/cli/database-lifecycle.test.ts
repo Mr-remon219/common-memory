@@ -13,7 +13,7 @@ let home: string;
 beforeEach(() => { home = mkdtempSync(join(tmpdir(), 'cm-db-lifecycle-')); vi.stubEnv('COMMON_MEMORY_HOME', home); });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); rmSync(home, { recursive: true, force: true }); });
 
-it.each(['enqueue', 'consume', 'refresh'] as const)('closes the connection when %s cannot initialize host tables', async operation => {
+it.each(['enqueue', 'consume'] as const)('closes the connection when %s cannot initialize host tables', async operation => {
   const config = defaultConfig(); config.remote.model = 'synthetic'; saveConfig(config);
   const initial = new RuntimeStore(config.dataRoot);
   // A real schema incompatibility, after the base runtime has successfully opened.
@@ -22,8 +22,7 @@ it.each(['enqueue', 'consume', 'refresh'] as const)('closes the connection when 
   const event: CodexEvent = { hook_event_name: 'SessionStart', cwd: home, session_id: 'synthetic', transcript_path: join(home, 'unused.jsonl') };
   await expect(async () => {
     if (operation === 'enqueue') enqueueCodexEvent(config, event, 'synthetic');
-    else if (operation === 'consume') await consumeCodexInbox(config);
-    else refreshSession(home, 'codex', 'synthetic', 'synthetic');
+    else await consumeCodexInbox(config);
   }).rejects.toThrow(/view/i);
   expect(open).toHaveBeenCalledOnce();
   const db = open.mock.results[0]!.value as RuntimeStore['db'];
@@ -32,6 +31,8 @@ it.each(['enqueue', 'consume', 'refresh'] as const)('closes the connection when 
   try { reopened.db.exec('BEGIN EXCLUSIVE; DROP VIEW codex_candidates; COMMIT'); }
   finally { reopened.close(); }
 });
+
+it('refresh is an IPC channel and never opens the runtime database',async()=>{const config=defaultConfig();config.remote.model='synthetic';saveConfig(config);const open=vi.spyOn(sqlite,'openDatabase');await expect(refreshSession(home,'codex','synthetic','synthetic')).rejects.toThrow('SERVICE_NOT_INSTALLED');expect(open).not.toHaveBeenCalled();});
 
 it('closes a runtime whose schema migration fails', () => {
   const config = defaultConfig();

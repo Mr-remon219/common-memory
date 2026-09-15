@@ -11,9 +11,9 @@ Common Memory 将背景、偏好和项目上下文保存在本机 Markdown 中�
 
 - **支持接入**：Pi、Codex CLI、ChatGPT Desktop 的本地 Work，以及其他本地 stdio MCP 宿主。
 - **不支持**：ChatGPT 普通 Chat、网页版或网页版 Plugins；没有 HTTP MCP 服务。
-- **不必常开管理界面**：完成接入后，日常直接使用助手。`common-memory` 是配置和管理入口，不是每次聊天前都要手动启动的服务。
+- **不必常开管理界面**：配置和接入完成后，由 OS 监管独立 Core；关闭 Pi、MCP 或管理界面不会取消已接受任务。运行、升级与卸载边界见[独立 Core 生命周期](docs/service-lifecycle.md)。
 
-**当前版本：v0.4.2** · npm 包名：`common-memory-core` · 命令：`common-memory`。
+**当前版本：v0.4.3** · npm 包名：`common-memory-core` · 命令：`common-memory`。
 这是早期版本；测试通过不代表所有真实客户端交互或模型的记忆判断都已验证。
 
 ## 1. 安装
@@ -29,7 +29,7 @@ Common Memory 将背景、偏好和项目上下文保存在本机 Markdown 中�
 使用 npm 安装，或按[源码构建说明](docs/releasing.md#从-github-使用源码路径)运行。
 
 ```sh
-npm install -g common-memory-core@0.4.2
+npm install -g common-memory-core@0.4.3
 common-memory
 ```
 
@@ -206,7 +206,7 @@ common-memory import notes.md --author user
 2. 在原来安装 Common Memory 的环境中执行：
 
    ```sh
-   npm install -g common-memory-core@0.4.2
+   npm install -g common-memory-core@0.4.3
    common-memory --version
    ```
 

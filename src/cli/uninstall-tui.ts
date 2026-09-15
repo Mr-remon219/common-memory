@@ -2,21 +2,30 @@ import * as clack from './prompt-runtime.js';
 import { configDirectory, loadConfig } from '../config/config.js';
 import { readInstallationState, removeIntegrations } from './integrations.js';
 import { recoverPendingInstallation } from './installation-files.js';
-import { npmInstallation, uninstallCompletely } from './uninstall.js';
+import { npmInstallation, uninstallCompletely, uninstallWithUnreadableConfig } from './uninstall.js';
 import { attempt, confirm, menu, note, requireInteractive, unwrap } from './tui-prompts.js';
+import { stopService } from '../service/manager.js';
 
 /** Shared by the unified configuration column and the legacy uninstall shortcut. */
 export async function runCompleteUninstall(): Promise<boolean> {
   requireInteractive();
   recoverPendingInstallation(configDirectory());
-  const config = loadConfig();
-  if (!config) throw new Error('未找到有效配置，无法确认 Memory 数据归属。');
+  let config;
+  try { config = loadConfig(); }
+  catch { config = null; }
   const installation = npmInstallation();
+  if (!config) {
+    note(`Application   ${installation.packageRoot}\nIntegrations  仅安装记录可证明归属的接入\nConfiguration / credentials / Memory Data  保留（配置不可读，绝不猜测删除）`, 'Recovery uninstall');
+    if (!await confirm('配置不可读。确认只移除 Application 和明确归属的接入？')) return false;
+    await uninstallWithUnreadableConfig({installation,beforeRemove:()=>stopService(configDirectory(),true)});
+    clack.log.success('Application and owned integrations removed; all configuration and Memory data retained');
+    return true;
+  }
   note(`Application   ${installation.packageRoot}\nIntegrations  全部由此安装器管理的接入\nMemory Data   ${config.dataRoot}\n\n卸载会自动阻止已确认仍加载的 MCP/Pi 实例；不会终止任何进程。无法证明身份的旧宿主仍需退出后才能安全继续。`, 'Remove Common Memory completely');
   if (!await confirm('已停止上述程序，继续卸载 Application 和 Integrations？')) return false;
   const deleteConfiguration = await confirm('同时删除本机配置和 Common Memory 私有凭据？默认保留；保留后可重新安装并继续使用此配置。');
   const deleteMemory = await confirm('同时永久删除 Memory Data？默认保留；删除包含记忆及所有未完成请求。');
-  const result = await uninstallCompletely({ config, deleteMemory, deleteConfiguration, clientsStopped: true, installation });
+  const result = await uninstallCompletely({config,deleteMemory,deleteConfiguration,clientsStopped:true,installation,beforeRemove:()=>stopService(configDirectory(),true)});
   clack.log.success('Application and integrations removed');
   note([result.retained ? `Memory Data 已保留：${result.retained}` : '已按确认删除 Memory Data。', result.configurationRetained ? 'Configuration / private credentials 已保留。' : 'Configuration / private credentials 已按确认删除。'].join('\n'), 'Uninstall boundaries');
   return true;

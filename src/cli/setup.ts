@@ -5,6 +5,7 @@ import { configureModel } from './model-configuration.js';
 import { chooseIntegrations } from './tui-integrations.js';
 import { installationTransaction, readInstallationFile, recoverPendingInstallation } from './installation-files.js';
 import { log, requireInteractive, UserCancelled } from './tui-prompts.js';
+import { installService } from '../service/manager.js';
 
 const pendingPath = () => join(configDirectory(), '.installation/setup-pending');
 export function setupPending(): boolean { return readInstallationFile(pendingPath()) !== null; }
@@ -24,6 +25,7 @@ export async function runSetupFlow(): Promise<void> {
     if (!resume) config = await configureModel(config, { setup: true });
     resume = false;
     try {
+      await installService(config!);
       const count = await integrationInstallation(config!);
       installationTransaction(configDirectory(), commit => commit([{ path: pendingPath(), before: readInstallationFile(pendingPath()), after: null }]));
       clack.log.success('Model configured');

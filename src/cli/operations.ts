@@ -1,12 +1,12 @@
-import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import type { CommonMemoryConfig } from '../config/config.js';
 import { ProjectRegistry } from '../v2/registry.js';
 import { withRepositoryLock } from '../v2/lock.js';
-import { RuntimeStore } from '../v2/runtime.js';
-import { SessionIngress } from '../v2/session.js';
+import { ServiceClient } from '../service/client.js';
+import type { RuntimeStore } from '../v2/runtime.js';
+import type { hostQueueStatus } from './host-session.js';
 import { readAuthorizedMemory, renderMemoryView } from '../v2/reader.js';
-import { hostQueueStatus, recoverCodexInbox } from './host-session.js';
 
 /** CLI and TUI use identical scope selection. Reading never opens the queue. */
 export function memoryView(config: CommonMemoryConfig, workspace?: string) {
@@ -24,28 +24,15 @@ export function showMemory(config: CommonMemoryConfig, workspace?: string, log: 
   log(renderMemoryView(memoryView(config, workspace)));
 }
 
-/** Like the existing status command, opens existing RuntimeStore only; never initializes absent storage. */
-export function runtimeStatus(config: CommonMemoryConfig, afterRecoveryId?: string) {
-  if (!existsSync(join(config.dataRoot, 'runtime.sqlite'))) return null;
-  const store = new RuntimeStore(config.dataRoot);
-  try {
-    const ingress = new SessionIngress(store, config.sessionCache);
-    const host = hostQueueStatus(store, afterRecoveryId);
-    const sessions = store.db.prepare('SELECT id FROM sessions ORDER BY rowid DESC').all()
-      .map(row => {
-        const id=String(row.id),hostSession=host.sessions.find(session=>session.sessionId===id);
-        return { id, ...ingress.status(id), host:hostSession?{inbox:hostSession.inbox,isolated:hostSession.isolated,watches:hostSession.watches}:{inbox:0,isolated:0,watches:0} };
-      });
-    return { ...store.status(), host, sessions };
-  } finally { store.close(); }
+/** Runtime status is service-owned; canonical-only commands remain local. */
+export type RuntimeStatus=ReturnType<RuntimeStore['status']>&{host:ReturnType<typeof hostQueueStatus>;sessions:unknown[]};
+export async function runtimeStatus(_config:CommonMemoryConfig,afterRecoveryId?:string):Promise<RuntimeStatus|null>{
+  try{return await new ServiceClient({kind:'cli'}).call<RuntimeStatus>('queue.status',{...(afterRecoveryId?{afterRecoveryId}:{})},{wake:false});}catch(error){if(error instanceof Error&&['SERVICE_NOT_INSTALLED','SERVICE_UNAVAILABLE'].includes(error.message))return null;throw error;}
 }
-
-export function retryJob(config: CommonMemoryConfig, id: string): void {
-  const store = new RuntimeStore(config.dataRoot);
-  try { store.retry(id); store.requestFlush(); } finally { store.close(); }
-}
-
-export function recoverHostInbox(config: CommonMemoryConfig, id: string): void { recoverCodexInbox(config,id); }
+async function explicitMutation(operation:string,payload:unknown,prefix:string):Promise<void>{const client=new ServiceClient({kind:'cli'}),options={requestId:`${prefix}-${randomUUID()}`};try{await client.call(operation,payload,options);}catch(error){if(!(error instanceof Error)||error.message!=='DELIVERY_UNCERTAIN')throw error;await client.call(operation,payload,options);}}
+export async function retryJob(_config:CommonMemoryConfig,id:string):Promise<void>{await explicitMutation('queue.retry',{id},'queue-retry');}
+export async function recoverHostInbox(_config:CommonMemoryConfig,id:string):Promise<void>{await explicitMutation('host.recover',{id},'host-recover');}
+export async function cancelJob(_config:CommonMemoryConfig,id:string):Promise<void>{await explicitMutation('task.cancel',{id},'queue-cancel');}
 
 export function listProjects(config: CommonMemoryConfig) { return new ProjectRegistry(config.dataRoot).list(); }
 export function registerProject(config: CommonMemoryConfig, root: string, name: string) {

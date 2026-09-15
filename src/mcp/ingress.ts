@@ -25,7 +25,6 @@ export class McpIngress {
   constructor(readonly store: RuntimeStore | null, readonly config: CommonMemoryConfig, options: McpOptions) {
     if (!validId(options.clientId)) throw new Error('INVALID_CLIENT_ID');
     if (!options.capabilities.length || options.capabilities.some(c => !MCP_CAPABILITIES.includes(c))) throw new Error('INVALID_CAPABILITY');
-    if (!store && options.capabilities.some(c => c !== 'read')) throw new Error('STORE_REQUIRED');
     this.#options = { ...options, workspaces: [...options.workspaces], capabilities: [...new Set(options.capabilities)] };
     this.#registry = new ProjectRegistry(config.dataRoot);
     if (options.workspaceProjectIds && (options.workspaceProjectIds.length !== options.workspaces.length || options.workspaceProjectIds.some(id => !validId(id)))) throw new Error('INVALID_WORKSPACE_BINDING');
@@ -80,7 +79,7 @@ export class McpIngress {
     if (!this.has('init')) throw new Error('STATUS_UNAVAILABLE');
     return this.#store().observationOutcome(this.#initSession(importId), importId, this.contexts());
   }
-  submit(input: Submission, signal?: AbortSignal): { accepted: true; duplicate: boolean; state: string; contextId: string } {
+  submit(input: Submission, signal?: AbortSignal): { taskId:string; accepted: true; duplicate: boolean; state: string; contextId: string } {
     const sessionId = this.#session(input);
     if (!this.info().submissionEnabled) throw new Error('SUBMISSION_DISABLED');
     if (!this.contexts().includes(input.contextId)) throw new Error('CONTEXT_UNAVAILABLE');
@@ -90,7 +89,7 @@ export class McpIngress {
     return this.#enqueue(sessionId, input.submissionId, input.contextId, input.text, 'mcp_user_submission', true);
   }
   /** Agent-reported understanding: durably queued as one agent_import observation and flushed promptly. */
-  init(input: InitSubmission, signal?: AbortSignal): { accepted: true; duplicate: boolean; state: string; contextId: string } {
+  init(input: InitSubmission, signal?: AbortSignal): { taskId:string; accepted: true; duplicate: boolean; state: string; contextId: string } {
     const sessionId = this.#initSession(input.importId);
     // Preserve profile failure before accessing a read-only launch's absent queue.
     if (!this.info().initEnabled) throw new Error('INIT_DISABLED');
@@ -113,7 +112,7 @@ export class McpIngress {
         throw error;
       }
       if (flush) store.requestFlush();
-      return { accepted: true as const, duplicate, state: observation.state, contextId: observation.scope };
+      return { taskId:`task_${observation.id}`, accepted: true as const, duplicate, state: observation.state, contextId: observation.scope };
     });
   }
 }

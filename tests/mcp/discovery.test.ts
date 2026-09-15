@@ -91,9 +91,9 @@ it('bounds retry guidance and stops polling on dead/quarantined work without cla
   const retry = await client.callTool({name:next.tool,arguments:next.arguments});
   expect(retry.structuredContent).toMatchObject({import:{jobState:'retry'},next:{action:'poll',retryAfterMs:expect.any(Number)}});
   store!.db.prepare("UPDATE jobs SET state='dead' WHERE id=?").run(job.id);
-  expect((await client.callTool({name:next.tool,arguments:next.arguments})).structuredContent).toMatchObject({next:{action:'review'}});
+  expect((await client.callTool({name:next.tool,arguments:next.arguments})).structuredContent).toMatchObject({next:{action:'correct'}});
   store!.db.prepare("UPDATE observations SET state='quarantined'").run();
-  expect((await client.callTool({name:next.tool,arguments:next.arguments})).structuredContent).toMatchObject({next:{action:'review'}});
+  expect((await client.callTool({name:next.tool,arguments:next.arguments})).structuredContent).toMatchObject({next:{action:'correct',message:expect.stringContaining('quarantined')}});
   store!.db.prepare("UPDATE observations SET state='processed'").run();
   expect((await client.callTool({name:next.tool,arguments:next.arguments})).structuredContent).toMatchObject({next:{action:'review',message:expect.stringContaining('read-enabled')}});
 });

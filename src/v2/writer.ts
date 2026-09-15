@@ -61,8 +61,8 @@ export class Writer {
     this.store.configureTask(job, settings.configurationVersion);
     const controller = new AbortController();
     // First terminal cause wins, even if the model rejects with its own generic cancellation later.
-    const terminate = (reason: 'TIMEOUT' | 'CANCELLED' | 'LEASE_RENEWAL_FAILED') => { if (!controller.signal.aborted) controller.abort(new Error(reason)); };
-    const cancelled = () => terminate('CANCELLED');
+    const terminate = (reason: 'TIMEOUT' | 'CANCELLED' | 'LEASE_RENEWAL_FAILED' | 'SERVICE_HANDOFF') => { if (!controller.signal.aborted) controller.abort(new Error(reason)); };
+    const cancelled = () => terminate(options.signal?.reason instanceof Error && options.signal.reason.message==='SERVICE_HANDOFF' ? 'SERVICE_HANDOFF' : 'CANCELLED');
     options.signal?.addEventListener('abort', cancelled, {once:true});
     if (options.signal?.aborted) cancelled();
     // No total-task timer. The transport detects stalled individual operations;
@@ -194,6 +194,10 @@ export class Writer {
       }
       if (recovered) return {outcome:recovered};
       const cause: unknown = signal.aborted ? signal.reason : error;
+      if (cause instanceof Error && cause.message==='SERVICE_HANDOFF') {
+        try {this.store.handoff(job);} catch { /* A committed receipt or explicit cancel already owns it. */ }
+        return {outcome:'handoff'};
+      }
       const diagnostic = failureDiagnostic(cause, stage);
       // The abort reason remains authoritative; only controlled progress scalars supply missing HTTP context.
       const context = remoteContext as FailureDiagnostic | null;

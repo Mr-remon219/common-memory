@@ -14,11 +14,11 @@ export function scopedQueueStatus(store: RuntimeStore, scopes: readonly string[]
   const jobs = store.db.prepare(`SELECT j.*,EXISTS(SELECT 1 FROM receipts WHERE receipts.id=j.id) AS receiptVerified FROM jobs j WHERE ${eligible} ORDER BY CASE WHEN j.state='done' THEN 1 ELSE 0 END,j.rowid DESC LIMIT 20`).all(...scopes).map(r => {
     let diagnostic = null;
     try { diagnostic = sanitizeDiagnostic(JSON.parse(String(r.diagnostic))); } catch { /* No untrusted diagnostic text. */ }
-    return {...editResultField(r.editResult),...jobProgress(r),id:String(r.id),state:String(r.state),attempts:Number(r.attempts),diagnostic,retryAt:r.state==='retry'?Number(r.available):null};
+    return {...editResultField(r.editResult),...jobProgress(r),id:String(r.id),state:String(r.state),issue:r.issue == null ? null : String(r.issue),attempts:Number(r.attempts),diagnostic,retryAt:r.state==='retry'?Number(r.available):null};
   });
   return {observations,jobStates,jobs};
 }
-export type QueueJob = JobProgress & {editResult?: import('./contract.js').EditResult;id:string;state:string;attempts:number;diagnostic:ReturnType<typeof sanitizeDiagnostic>;retryAt:number|null};
+export type QueueJob = JobProgress & {editResult?: import('./contract.js').EditResult;id:string;state:string;issue:string|null;attempts:number;diagnostic:ReturnType<typeof sanitizeDiagnostic>;retryAt:number|null};
 export function retryAuthorizedJob(store: RuntimeStore, id: string, scopes: readonly string[], provenance: readonly string[]) {
   store.transaction(() => {
     const job = store.db.prepare('SELECT state FROM jobs WHERE id=?').get(id);

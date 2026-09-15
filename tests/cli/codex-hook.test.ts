@@ -7,7 +7,8 @@ import { join,resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach,expect,it } from 'vitest';
 import { defaultConfig } from '../../src/config/config.js';
-import { codexHook,MAX_HOOK_INPUT_BYTES } from '../../src/cli/codex-hook.js';
+import { parseHookEvent,MAX_HOOK_INPUT_BYTES,type HookOutput } from '../../src/cli/codex-hook.js';
+import { dispatchOperation } from '../../src/service/operations.js';
 import { consumeCodexInbox, recoverCodexInbox } from '../../src/cli/codex-session.js';
 import { RuntimeStore } from '../../src/v2/runtime.js';
 import { SessionIngress,sessionKey } from '../../src/v2/session.js';
@@ -16,11 +17,12 @@ function fixture(){
  const home=mkdtempSync(join(tmpdir(),"cm-hook ' $ ` "));roots.push(home);const config=defaultConfig({COMMON_MEMORY_HOME:home});config.remote.model='fake';writeFileSync(join(home,'config.json'),JSON.stringify(config));
  const path=join(home,'transcript.jsonl');writeFileSync(path,JSON.stringify({type:'session_meta',payload:{cli_version:'0.153.4',id:'s'}})+'\n');
  const input=(event='SessionStart',source='startup',session='s',prompt='PRIVATE_CANDIDATE')=>JSON.stringify({hook_event_name:event,cwd:home,prompt,source,transcript_path:path,session_id:session,turn_id:'t'});
- const read=(event='SessionStart',source='startup',session='s',instance='test-process',prompt='PRIVATE_CANDIDATE')=>codexHook(input(event,source,session,prompt),home,instance);
+ const dispatch=(raw:string,instance='test-process')=>{const event=parseHookEvent(raw),store=new RuntimeStore(config.dataRoot);try{return store.transaction(()=>dispatchOperation(store,{protocol:1,id:'unit',grantId:'unit',channel:{kind:'hook',client:'codex',instance},authentication:'unit',operation:'hook.event',payload:{event}},{kind:'hook',client:'codex',instance},config,home).result as HookOutput);}finally{store.close();}};
+ const read=(event='SessionStart',source='startup',session='s',instance='test-process',prompt='PRIVATE_CANDIDATE')=>dispatch(input(event,source,session,prompt),instance);
  const append=(payload:object,type='event_msg')=>appendFileSync(path,JSON.stringify({timestamp:'2026-09-09T00:00:00.000Z',type,payload})+'\n');
- return {home,config,path,input,read,append};
+ return {home,config,path,input,read,dispatch,append};
 }
-const context=(r:ReturnType<typeof codexHook>)=>r.hookSpecificOutput?.additionalContext;
+const context=(r:HookOutput)=>r.hookSpecificOutput?.additionalContext;
 it('reads once for each process/session startup, never on compact, reload or subsequent prompt',async()=>{
  const f=fixture();expect(context(f.read())).toContain('no stored content');expect(f.read('UserPromptSubmit')).toEqual({});
  mkdirSync(join(f.config.dataRoot,'memory'),{recursive:true});writeFileSync(join(f.config.dataRoot,'memory/profile.md'),'# Profile\n\n## Note\nNew background\n');
@@ -47,7 +49,7 @@ it('unknown transcript preserves inbox body and recovery position; unsupported v
  const h=fixture();h.read();appendFileSync(h.path,'{"unfinished":');expect(()=>h.read('SessionEnd')).toThrow('CODEX_PARTIAL_TRANSCRIPT');
 });
 it('bounds hook input and context, does not disclose candidate prompt, and rejects malformed fields',()=>{
- const f=fixture();for(const input of ['', 'null','[]','{}',' '.repeat(MAX_HOOK_INPUT_BYTES+1)])expect(()=>codexHook(input,f.home,'test')).toThrow('INVALID_CODEX_HOOK_INPUT');
+ const f=fixture();for(const input of ['', 'null','[]','{}',' '.repeat(MAX_HOOK_INPUT_BYTES+1)])expect(()=>parseHookEvent(input)).toThrow('INVALID_CODEX_HOOK_INPUT');
  mkdirSync(join(f.config.dataRoot,'memory'),{recursive:true});writeFileSync(join(f.config.dataRoot,'memory/profile.md'),'# Profile\n\n## Large\n'+'汉'.repeat(23000));const r=f.read();expect(r.systemMessage).toContain('64 KiB');expect(JSON.stringify(r)).not.toContain('PRIVATE_CANDIDATE');expect(context(r)).not.toContain('汉');
 });
 it.skipIf(process.platform==='win32')('generated hooks cover lifecycle with three-second synchronous commands and safe POSIX quoting',()=>{
@@ -65,7 +67,7 @@ it('isolates a bad activation behind its retained row, drains a healthy session,
  const f=fixture(),aKey=sessionKey({client:'codex',processInstance:'test-process',sessionId:'s'}),bKey=sessionKey({client:'codex',processInstance:'test-process',sessionId:'b'}),aText='Unconfirmed A';
  f.read();f.append({type:'task_started',turn_id:'t'});f.append({type:'user_message',message:aText});f.append({type:'task_complete',turn_id:'t'});f.read('SessionEnd');
  const bPath=join(f.home,'healthy.jsonl');writeFileSync(bPath,JSON.stringify({type:'session_meta',payload:{cli_version:'0.153.4',id:'b'}})+'\n');
- const bHook=(event:string,prompt='')=>codexHook(JSON.stringify({hook_event_name:event,cwd:f.home,prompt,source:'startup',transcript_path:bPath,session_id:'b',turn_id:'tb'}),f.home,'test-process');
+ const bHook=(event:string,prompt='')=>f.dispatch(JSON.stringify({hook_event_name:event,cwd:f.home,prompt,source:'startup',transcript_path:bPath,session_id:'b',turn_id:'tb'}));
  bHook('SessionStart');bHook('UserPromptSubmit','Healthy B');
  for(const payload of [{type:'task_started',turn_id:'tb'},{type:'user_message',message:'Healthy B'},{type:'task_complete',turn_id:'tb'}])appendFileSync(bPath,JSON.stringify({timestamp:'2026-09-09T00:00:00.000Z',type:'event_msg',payload})+'\n');
  bHook('SessionEnd');
@@ -90,7 +92,7 @@ it('isolates a bad activation behind its retained row, drains a healthy session,
 
 it('freezes source scope at input, not the cwd of a later Stop or SessionEnd',async()=>{
  const f=fixture(),projectRoot=join(f.home,'project');mkdirSync(projectRoot);const project=new ProjectRegistry(f.config.dataRoot).register(projectRoot,'Synthetic project');f.read();
- codexHook(JSON.stringify({...JSON.parse(f.input('UserPromptSubmit')),cwd:projectRoot,prompt:'Project expression'}),f.home,'test-process');
+ f.dispatch(JSON.stringify({...JSON.parse(f.input('UserPromptSubmit')),cwd:projectRoot,prompt:'Project expression'}));
  f.append({type:'task_started',turn_id:'t'});f.append({type:'user_message',message:'Project expression'});f.append({type:'task_complete',turn_id:'t'});f.read('SessionEnd');await consumeCodexInbox(f.config);
  const store=new RuntimeStore(f.config.dataRoot);try{expect(store.pending()[0]!.scope).toBe(`project:${project.id}`);}finally{store.close();}
 });
@@ -137,7 +139,7 @@ it('0.154.0 item/legacy duplicate fixture seals each settled turn exactly once, 
  f.append({items:[{role:'user',content:'not evidence'}]},'retained_context');
  for(let n=1;n<=10;n++){
   const turn=`t${n}`,text=`Synthetic preference ${n}`;
-  codexHook(JSON.stringify({...JSON.parse(f.input('UserPromptSubmit')),turn_id:turn,prompt:text}),f.home,'test-process');
+  f.dispatch(JSON.stringify({...JSON.parse(f.input('UserPromptSubmit')),turn_id:turn,prompt:text}));
   f.append({type:'task_started',turn_id:turn});f.append({type:'item_completed',turn_id:turn,item:{type:'UserMessage',id:`u${n}`,content:[{type:'text',text}]}});f.append({type:'user_message',message:text});f.append({type:'task_complete',turn_id:turn});
  }
  f.read('SessionEnd');await consumeCodexInbox(f.config);const store=new RuntimeStore(f.config.dataRoot);

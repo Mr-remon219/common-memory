@@ -1,18 +1,41 @@
 import * as clack from './prompt-runtime.js';
 import { configDirectory, loadConfig, type CommonMemoryConfig } from '../config/config.js';
+import { homedir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { integrationHealth, readInstallationState, reconcileIntegrations } from './integrations.js';
+import { buildIntegrationMigrationPlan, discoverIntegrationCandidates, type IntegrationMigrationCandidate } from './integration-migration.js';
 import { scanIntegrationTargets, type IntegrationId, type IntegrationTarget } from './integration-targets.js';
 import { probeReadIntegration } from './integration-probe.js';
 import { recoverPendingInstallation } from './installation-files.js';
 import { checkConfigUnchanged, hasApiKey } from './tui-settings.js';
 import { currentRuntimeVersion, runtimeInstanceLines } from './runtime-instances.js';
-import { confirm, log, note, terminalText, unwrap, UserCancelled } from './tui-prompts.js';
+import { confirm, expandPath, log, note, terminalText, text, unwrap, UserCancelled } from './tui-prompts.js';
 
 const clients: { id: IntegrationId; name: string; unavailable: string }[] = [
   { id: 'pi', name: 'Pi', unavailable: '未发现当前环境中的 Pi，暂不可接入' },
   { id: 'codex', name: 'Codex', unavailable: '未发现当前环境中的 Codex，暂不可接入' },
   { id: 'chatgpt', name: 'ChatGPT', unavailable: '未发现可接入的本地 Work / Desktop，暂不可接入' },
 ];
+
+function migrationLines(candidates: IntegrationMigrationCandidate[], selected: IntegrationId[] = []): string[] {
+  return candidates.map(candidate => {
+    const action = candidate.status === 'actionable' ? (selected.includes(candidate.id) ? '替换' : '移除') : candidate.status === 'managed' ? '已登记' : '阻断';
+    const after = candidate.status === 'actionable' ? (selected.includes(candidate.id) ? '当前受管 Common Memory 结构' : candidate.after) : candidate.after;
+    return `${action} · ${candidate.path} · ${candidate.before} → ${after} · ${candidate.summary}`;
+  });
+}
+function migrationRoots(targets: IntegrationTarget[], prior: ReturnType<typeof readInstallationState>, customRoot?: string): { id: IntegrationId; root: string }[] {
+  const home = homedir(), roots = [
+    { id: 'pi' as const, root: resolve(process.env.PI_CODING_AGENT_DIR || join(home, '.pi/agent')) },
+    { id: 'codex' as const, root: resolve(process.env.CODEX_HOME || join(home, '.codex')) },
+    ...targets.map(target => ({ id: target.id, root: target.root })),
+    ...(prior?.targets.map(target => ({ id: target.id, root: target.root })) ?? []),
+    // A user-supplied root may be either a Pi root or a Codex/Work root. Inspect only each
+    // host's fixed live-registration keys; never infer a host type from arbitrary content.
+    ...(customRoot ? [{ id: 'pi' as const, root: customRoot }, { id: 'codex' as const, root: customRoot }] : []),
+  ];
+  return roots.filter((root, index) => roots.findIndex(other => other.id === root.id && other.root === root.root) === index);
+}
 
 export function integrationReadiness(config: CommonMemoryConfig): string {
   return [
@@ -35,6 +58,15 @@ export async function chooseIntegrations(config: CommonMemoryConfig, options: { 
     recoverPendingInstallation(configDirectory());
     log('Scanning integrations…');
     const targets = scanIntegrationTargets(), prior = readInstallationState();
+    // This is intentionally optional: it expands only the registration roots inspected, never the data/config scope.
+    const custom = text('额外扫描自定义 Agent 配置根（可选，留空跳过）', '', true);
+    const customRoot = await custom.then(value => value ? expandPath(value) : undefined);
+    const candidates = discoverIntegrationCandidates(migrationRoots(targets, prior, customRoot), prior ? { managed: prior.resources } : {});
+    const blocked = candidates.filter(candidate => candidate.status === 'blocked');
+    if (blocked.length) {
+      note(migrationLines(blocked).join('\n'), 'Legacy integration scan');
+      throw new Error('发现无法安全迁移的 Common Memory 接入；未修改任何客户端。');
+    }
     // Existing ownership remains removable even if its client has disappeared or its version changed.
     const available = clients.map(client => targets.find(t => t.id === client.id) ?? prior?.targets.find(t => t.id === client.id)).filter(t => t !== undefined);
     note('↑↓ Navigate · Space Toggle · Enter Continue · Esc Back\n勾选代表应用后的接入状态；取消已勾选的 Agent 会移除接入，记忆保留。\nChatGPT 仅限 Desktop 本地 Work；普通 Chat / 网页版 Plugins 不读取这些本地配置。\n下一步可选择 memory_init 导入；默认只读 MCP 与会话 Hooks，不提供直接写入工具。', 'Agent Integration');
@@ -68,8 +100,14 @@ export async function chooseIntegrations(config: CommonMemoryConfig, options: { 
         const binding = prior?.targets.find(p => p.id === t.id);
         return { ...base, ...(binding?.readWorkspace ? { readWorkspace: binding.readWorkspace, readWorkspaceProjectId: binding.readWorkspaceProjectId! } : {}), ...(importIds.includes(t.id) ? { init: true } : {}) };
       });
+      const actionable = candidates.filter(candidate => candidate.status === 'actionable');
+      const migration = actionable.length ? buildIntegrationMigrationPlan(candidates) : undefined;
+      if (migration) {
+        note(migrationLines(candidates.filter(candidate => candidate.status !== 'managed'), selected).join('\n'), 'Legacy integration migration');
+        if (!await confirm('确认按上述差异迁移旧 Common Memory 接入？确认前不会写入任何客户端配置。')) throw new UserCancelled();
+      }
       checkConfigUnchanged(config);
-      const changes = reconcileIntegrations(selectedTargets, config.dataRoot, { expectedState: prior,
+      const changes = reconcileIntegrations(selectedTargets, config.dataRoot, { expectedState: prior, ...(migration ? { migration } : {}),
         ...(authorize ? { authorizeAgentImport: { expectedConfig: config } } : {}),
       });
       const name = (id: IntegrationId) => clients.find(client => client.id === id)!.name;
@@ -117,10 +155,13 @@ export function repairManagedIntegrations(config: CommonMemoryConfig, options: {
   return reconcileIntegrations(state?.targets ?? [], config.dataRoot, { ...options, expectedState: state });
 }
 
-/** Upgrade/repair is deliberately a disk transaction, not a claim that a running host has reloaded. */
+import { installService } from '../service/manager.js';
+
+/** Core handoff plus a disk transaction; host code still requires its own reload. */
 export async function repairIntegrationsScreen(): Promise<void> {
   const config = loadConfig();
   if (!config) throw new Error('请先完成模型设置。');
+  await installService(config);
   const state = readInstallationState();
   if (!state?.targets.length) {
     note([...runtimeInstanceLines(), '没有由此安装器登记的资源可重应用；不会接管现有客户端配置。'].join('\n'), 'Upgrade / Repair Integrations');
@@ -137,6 +178,6 @@ export async function repairIntegrationsScreen(): Promise<void> {
     `磁盘受管资源已按 Common Memory ${currentRuntimeVersion()} 重应用（installed ${changes.installed.length}, retained ${changes.retained.length}）。`,
     ...probes,
     ...runtimeInstanceLines(),
-    '磁盘已更新不等于旧宿主/MCP/Pi 已重载；已登记实例会显示其实际加载版本，未登记旧实例只显示 unknown。此操作不会终止任何进程。',
+    '磁盘已更新不等于旧宿主/MCP/Pi 已重载；已登记实例会显示其实际加载版本，未登记旧实例只显示 unknown。Core 已独立交接；此操作不会终止 Agent 宿主。',
   ].join('\n'), 'Upgrade / Repair Integrations');
 }

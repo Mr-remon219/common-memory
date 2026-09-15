@@ -150,7 +150,7 @@ it('read exposes only launch contexts intersected with allowed scopes, without a
   // Project-only launch never sees global documents.
   const projectOnly = new McpIngress(null, config, { clientId: 'codex', workspaces: [join(root, 'b')], global: false, accept: false, capabilities: ['read'] });
   expect(projectOnly.read().documents.map(d => d.target)).toEqual([`project:${b.id}`]);
-  expect(() => new McpIngress(null, config, { clientId: 'codex', workspaces: [], global: true, accept: false, capabilities: ['init'] })).toThrow('STORE_REQUIRED');
+  expect(() => new McpIngress(null, config, { clientId: 'codex', workspaces: [], global: true, accept: false, capabilities: ['init'] }).init(imported)).toThrow('INIT_DISABLED');
 });
 it('empty memory reads as empty and reading never creates memory directories', () => {
   const root = mkdtempSync(join(tmpdir(), 'cm-read-')); cleanup.push(() => rmSync(root, { recursive: true, force: true }));

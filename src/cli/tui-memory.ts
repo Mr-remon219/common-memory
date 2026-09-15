@@ -1,12 +1,13 @@
 import { editResultMessage } from '../v2/service-guidance.js';
 import * as clack from './prompt-runtime.js';
 import { configDirectory, loadConfig, type CommonMemoryConfig } from '../config/config.js';
-import { listProjects, memoryView, recoverHostInbox, registerProject, removeProject, retryJob, runtimeStatus } from './operations.js';
+import { cancelJob, listProjects, memoryView, recoverHostInbox, registerProject, removeProject, retryJob, runtimeStatus } from './operations.js';
 import { modifyMemory } from './modify-memory.js';
 import { runFlush } from './flush-command.js';
 import { checkConfigUnchanged, runPermissionsWizard } from './tui-settings.js';
 import { attempt, confirm, expandPath, log, menu, note, text, viewText } from './tui-prompts.js';
 import { launchSessionDrain } from './session-drain.js';
+import { installService } from '../service/manager.js';
 
 function configured(): CommonMemoryConfig {
   const config = loadConfig();
@@ -31,7 +32,7 @@ async function browseProjects(): Promise<void> {
     ]);
     if (id === 'back') return;
     await attempt(async () => {
-      if (id === 'permissions') { await runPermissionsWizard(config); return; }
+      if (id === 'permissions') { await runPermissionsWizard(config);await installService(configured());return; }
       if (id === 'register') {
         const root = expandPath(await text('项目根目录（已存在的目录）'));
         const name = await text('项目名称');
@@ -112,7 +113,7 @@ async function browseMemory(): Promise<void> {
 async function processingScreen(): Promise<void> {
   let afterRecoveryId: string | undefined;
   for (;;) {
-    const config = configured(), status = runtimeStatus(config, afterRecoveryId);
+    const config = configured(), status = await runtimeStatus(config, afterRecoveryId);
     if (!status) { note('暂无处理请求。', 'Processing Status'); return; }
     const unfinished = status.jobs.filter(job => job.state !== 'done').slice(-20);
     const states: Record<string, string> = { buffered:'等待当前交互结束',pending: '等待处理', claimed: '处理中', processed: '已处理', running: '处理中', retry: '等待重试', paused:'已暂停（材料保留）', dead: '处理失败', quarantined: '已隔离' };
@@ -129,7 +130,7 @@ async function processingScreen(): Promise<void> {
       { value: 'refresh', label: '刷新状态 / 返回恢复首页' },
       ...(status.host.nextRecoveryId ? [{ value: `more-host:${status.host.nextRecoveryId}`, label: '更多宿主恢复项' }] : []),
       { value: 'continue', label: '继续处理', hint: 'Ctrl+C 停止等待，已提交的请求仍保留' },
-      ...unfinished.flatMap((job, index) => ['dead','paused'].includes(job.state) ? [{ value: `retry:${job.id}`, label: `重试失败任务 ${index + 1}`, hint: job.issue ?? '处理失败' }] : []),
+      ...unfinished.flatMap((job, index) => ['dead','paused'].includes(job.state) ? [{ value: `retry:${job.id}`, label: `重试失败任务 ${index + 1}`, hint: job.issue ?? '处理失败' }] : ['running','retry'].includes(job.state)?[{value:`cancel:${job.id}`,label:`取消活动任务 ${index+1}`,hint:'持久取消，不随服务重启恢复'}]:[]),
       ...status.host.recoveries.map((failure,index)=>({value:`recover-host:${failure.id}`,label:`${failure.retryRequested?'再次唤醒':'恢复'}宿主会话 ${index+1}`,hint:failure.issue})),
       { value: 'back', label: '返回 Adjust Memory' },
     ]);
@@ -139,12 +140,13 @@ async function processingScreen(): Promise<void> {
       if (action === 'refresh') { afterRecoveryId = undefined; return; }
       if (action.startsWith('more-host:')) { afterRecoveryId = action.slice('more-host:'.length); return; }
       if (action.startsWith('recover-host:')) {
-        recoverHostInbox(config,action.slice('recover-host:'.length));
+        await recoverHostInbox(config,action.slice('recover-host:'.length));
         launchSessionDrain(configDirectory());
         log('已按原宿主收件箱身份请求恢复；原材料和游标保持不变。');
         return;
       }
-      if (action.startsWith('retry:')) retryJob(config, action.slice(6));
+      if(action.startsWith('cancel:')){await cancelJob(config,action.slice(7));log('任务已持久取消；原材料与身份保留。');return;}
+      if (action.startsWith('retry:')) await retryJob(config, action.slice(6));
       log('正在处理已提交的请求… Ctrl+C 停止等待。');
       const code = await runFlush(config, () => {});
       if (code === 0) clack.log.success('队列已处理。请查看记忆确认结果，也可能没有变化。');
@@ -155,7 +157,7 @@ async function processingScreen(): Promise<void> {
 
 async function modifyScreen(): Promise<void> {
   // Existing requests stay manageable from this entry across launches.
-  while (runtimeStatus(configured())) {
+  while (await runtimeStatus(configured())) {
     const action = await menu('Adjust Memory', [
       { value: 'describe', label: '描述新的调整需求' },
       { value: 'processing', label: 'Processing Status', hint: '查看、继续处理或重试已有请求' },

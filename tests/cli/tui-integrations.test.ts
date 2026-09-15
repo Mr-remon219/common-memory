@@ -1,6 +1,6 @@
 import { stubInstalledBuild } from '../helpers/installation-build.js';
 import * as clack from '@clack/prompts';
-import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -11,7 +11,7 @@ import { chooseIntegrations, integrationsScreen } from '../../src/cli/tui-integr
 import { probeReadIntegration } from '../../src/cli/integration-probe.js';
 import { UserCancelled } from '../../src/cli/tui-prompts.js';
 
-vi.mock('@clack/prompts', () => ({ multiselect: vi.fn(), confirm: vi.fn(), isCancel: (v: unknown) => typeof v === 'symbol', note: vi.fn(), log: { info: vi.fn(), success: vi.fn(), error: vi.fn() } }));
+vi.mock('@clack/prompts', () => ({ multiselect: vi.fn(), text: vi.fn(), confirm: vi.fn(), isCancel: (v: unknown) => typeof v === 'symbol', note: vi.fn(), log: { info: vi.fn(), success: vi.fn(), error: vi.fn() } }));
 vi.mock('../../src/cli/integration-targets.js', () => ({ scanIntegrationTargets: vi.fn() }));
 vi.mock('../../src/cli/integration-probe.js', () => ({ probeReadIntegration: vi.fn() }));
 let home: string;
@@ -22,6 +22,7 @@ beforeEach(() => {
   const config = defaultConfig(); config.remote.model = 'synthetic-model'; saveConfig(config);
   vi.mocked(scanIntegrationTargets).mockReturnValue([]);
   vi.mocked(clack.multiselect).mockResolvedValue([]);
+  vi.mocked(clack.text).mockResolvedValue('');
   vi.mocked(probeReadIntegration).mockResolvedValue({ ok: true, code: 'READ_TOOLS_READY' });
 });
 afterEach(() => { vi.unstubAllEnvs(); rmSync(home, { recursive: true, force: true }); });
@@ -167,4 +168,24 @@ it('unchanged selection uses newly discovered capture capability to upgrade mana
  vi.mocked(scanIntegrationTargets).mockReturnValue([{...desktop,hooks:true,hint:'Work capture'}]);vi.mocked(clack.multiselect).mockResolvedValueOnce(['chatgpt']);
  await integrationsScreen();expect(readInstallationState()!.targets[0]!.hooks).toBe(true);expect(existsSync(join(desktop.root,'hooks.json'))).toBe(true);
  expect(clack.log.info).toHaveBeenCalledWith(expect.stringContaining('/hooks'));
+});
+
+it('scans an explicitly supplied custom root, displays a structural legacy difference, and removes only the confirmed registration', async () => {
+  const legacy = join(home, 'legacy'); mkdirSync(legacy);
+  const config = join(legacy, 'config.toml'); writeFileSync(config, '[mcp_servers.common_memory]\ncommand="/old/common-memory-core/dist/cli/main.js"\n');
+  vi.mocked(clack.text).mockResolvedValueOnce(legacy);
+  vi.mocked(clack.multiselect).mockResolvedValueOnce([]);
+  vi.mocked(clack.confirm).mockResolvedValueOnce(true);
+  await integrationsScreen();
+  expect(existsSync(config)).toBe(false);
+  expect(clack.note).toHaveBeenCalledWith(expect.stringContaining('mcp_servers.common_memory'), 'Legacy integration migration');
+});
+
+it('reports a custom-root ambiguous registration and performs no write before rejecting the flow', async () => {
+  const legacy = join(home, 'legacy'); mkdirSync(legacy);
+  const config = join(legacy, 'config.toml'); const body = '[mcp_servers.common_memory]\ncommand="user-owned"\n'; writeFileSync(config, body);
+  vi.mocked(clack.text).mockResolvedValueOnce(legacy);
+  await expect(integrationsScreen()).rejects.toThrow('无法安全迁移');
+  expect(readFileSync(config, 'utf8')).toBe(body);
+  expect(clack.confirm).not.toHaveBeenCalled();
 });

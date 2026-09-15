@@ -5,24 +5,41 @@ import { randomUUID } from 'node:crypto';
 import { withRepositoryLock } from './lock.js';
 import { safeDirectory, syncDirectory } from './canonical.js';
 
-export const RUNTIME_PROTOCOL = 1;
+export const RUNTIME_PROTOCOL = 2;
 const version = (db: DatabaseSync) => Number(db.prepare('PRAGMA user_version').get()!.user_version);
 const dataVersion = (db: DatabaseSync) => Number(db.prepare('PRAGMA data_version').get()!.data_version);
 
 /**
- * Old binaries do not register this connection capability. Their claim/renew writes
- * fail before a new canonical commit. Never migrate while an old live lease exists.
+ * Old binaries register an older capability (or none). Takeover invalidates live
+ * leases under the canonical lock before replacing their mutation fences.
  * This is compatibility fencing, not a security boundary against the local owner.
  */
-export function initializeRuntime(db: DatabaseSync, root: string, now: number, initialize: () => void): void {
+export function initializeRuntime(db: DatabaseSync, root: string, _now: number, initialize: () => void): void {
   db.function('common_memory_runtime_protocol', {deterministic:true}, () => RUNTIME_PROTOCOL);
   if (version(db) > RUNTIME_PROTOCOL) throw new Error('UNSUPPORTED_RUNTIME_VERSION');
   const existing = Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='jobs'").get());
   const migrate = (expectedDataVersion?: number) => {
     db.exec('BEGIN IMMEDIATE');
     try {
-      if (expectedDataVersion !== undefined && (dataVersion(db)!==expectedDataVersion || db.prepare("SELECT 1 FROM jobs WHERE state='running' AND expires>? LIMIT 1").get(now))) throw new Error('UPGRADE_WRITER_ACTIVE');
+      if (expectedDataVersion !== undefined && dataVersion(db)!==expectedDataVersion) throw new Error('UPGRADE_WRITER_ACTIVE');
       if (version(db) > RUNTIME_PROTOCOL) throw new Error('UNSUPPORTED_RUNTIME_VERSION');
+      const previous=version(db),takeover=existing&&previous<RUNTIME_PROTOCOL;
+      if(takeover) {
+        // Only our exact, versioned trigger definitions are replaceable. A prefix
+        // is not ownership proof, and a conflicting schema must fail closed.
+        const tables=db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
+        for(const row of tables)for(const operation of ['INSERT','UPDATE','DELETE']){
+          const name=`runtime_protocol_${row.name==='jobs'?'':String(row.name)+'_'}${operation.toLowerCase()}`,prior=db.prepare("SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?").get(name);
+          if(!prior)continue;
+          const table=String(row.name).replaceAll('"','""'),quoted=name.replaceAll('"','""');
+          const expected=`CREATE TRIGGER "${quoted}" BEFORE ${operation} ON "${table}" BEGIN SELECT CASE WHEN common_memory_runtime_protocol()!=${previous} THEN RAISE(ABORT,'INCOMPATIBLE_WRITER') END; END`;
+          if(prior.sql!==expected)throw new Error('INCOMPATIBLE_RUNTIME_TRIGGER');
+          db.exec(`DROP TRIGGER "${quoted}"`);
+        }
+        // Under repository lock -> DB transaction: old SELECT lease checks fail,
+        // even before their incompatible mutation trigger would reject a write.
+        db.prepare("UPDATE jobs SET state='retry',token=lower(hex(randomblob(16))),generation=generation+1,expires=0,available=0 WHERE state='running'").run();
+      }
       initialize();
       // Fence every durable mutation, not only leases. An old ingress otherwise
       // inserts rows without the normalized digests needed by forget tombstones.
@@ -40,9 +57,8 @@ export function initializeRuntime(db: DatabaseSync, root: string, now: number, i
   withRepositoryLock(root, () => {
     // Lock ordering matches canonical commits. Expired owners are fenced by their
     // token/generation and cannot renew after the protocol trigger is installed.
-    if (db.prepare("SELECT 1 FROM jobs WHERE state='running' AND expires>? LIMIT 1").get(now)) throw new Error('UPGRADE_WRITER_ACTIVE');
-    const before = dataVersion(db);
-    const backup = join(root,'runtime','upgrade-backups',`protocol-0-${randomUUID()}`);
+    const fromProtocol=version(db),before = dataVersion(db);
+    const backup = join(root,'runtime','upgrade-backups',`protocol-${fromProtocol}-${randomUUID()}`);
     safeDirectory(backup);
     const database = join(backup,'runtime.sqlite');
     // VACUUM INTO takes a consistent SQLite snapshot including committed WAL pages.
@@ -53,7 +69,7 @@ export function initializeRuntime(db: DatabaseSync, root: string, now: number, i
       copy(join(root,name),join(backup,name),name==='runtime');
     }
     const manifest = join(backup,'backup.json');
-    writeFileSync(manifest,JSON.stringify({version:1,fromProtocol:0,toProtocol:RUNTIME_PROTOCOL,createdAt:new Date().toISOString(),dataOnly:true})+'\n',{mode:0o600,flag:'wx'});
+    writeFileSync(manifest,JSON.stringify({version:1,fromProtocol,toProtocol:RUNTIME_PROTOCOL,createdAt:new Date().toISOString(),dataOnly:true})+'\n',{mode:0o600,flag:'wx'});
     sync(manifest);
     for(const directory of [backup,join(root,'runtime','upgrade-backups'),join(root,'runtime'),root])syncDirectory(directory);
     // The equality check and schema/fence publication share one writer transaction.
@@ -69,7 +85,7 @@ function copy(source: string, target: string, runtime=false): void {
   if (info.isDirectory()) {
     mkdirSync(target,{mode:0o700});
     for (const name of readdirSync(source)) {
-      if (runtime && (name==='upgrade-backups' || name.startsWith('repository-lock.sqlite'))) continue;
+      if (runtime && (name==='upgrade-backups' || name.startsWith('repository-lock.sqlite') || name.startsWith('service-owner.sqlite'))) continue;
       copy(join(source,name),join(target,name));
     }
     syncDirectory(target);

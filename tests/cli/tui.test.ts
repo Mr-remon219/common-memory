@@ -18,6 +18,7 @@ import { listProjects, registerProject } from '../../src/cli/operations.js';
 import { terminalText, UserCancelled, viewText } from '../../src/cli/tui-prompts.js';
 import { runAdvancedWizard, runCredentialsWizard, runNetworkWizard, runPermissionsWizard, runSetupWizard, saveSettings } from '../../src/cli/tui-settings.js';
 import { RuntimeStore } from '../../src/v2/runtime.js';
+import { startTestService } from '../helpers/service-daemon.js';
 
 vi.mock('@clack/prompts', () => ({
   select: vi.fn(), multiselect: vi.fn(), text: vi.fn(), password: vi.fn(), confirm: vi.fn(),
@@ -31,7 +32,7 @@ vi.mock('../../src/cli/uninstall-tui.js', () => ({ runCompleteUninstall: vi.fn()
 vi.mock('../../src/cli/flush-command.js', () => ({ runFlush: vi.fn() }));
 vi.mock('../../src/cli/session-drain.js', () => ({ launchSessionDrain: vi.fn() }));
 
-let home: string;
+let home:string;const services:(()=>Promise<void>)[]=[];
 const originalIn = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
 const originalOut = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
 beforeEach(() => {
@@ -42,8 +43,8 @@ beforeEach(() => {
   Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
   Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
 });
-afterEach(() => {
-  vi.restoreAllMocks();
+afterEach(async () => {
+  for(const stop of services.splice(0).reverse())await stop();vi.restoreAllMocks();
   vi.unstubAllEnvs();
   for (const [stream, descriptor] of [[process.stdin, originalIn], [process.stdout, originalOut]] as const) {
     if (descriptor) Object.defineProperty(stream, 'isTTY', descriptor);
@@ -311,7 +312,7 @@ it('shows and retries a persisted failed request without submitting its text aga
     } finally { retry.close(); }
     return 0;
   });
-  const done = choices('memory', 'modify', 'processing', 'refresh', `retry:${jobId}`, 'back', 'back', 'back', 'exit');
+  services.push(await startTestService(home));const done = choices('memory', 'modify', 'processing', 'refresh', `retry:${jobId}`, 'back', 'back', 'back', 'exit');
   await runTui(); done();
   const status = new RuntimeStore(config.dataRoot);
   try { expect(status.observationOutcome('previous-launch', 'submitted')!.state).toBe('processed'); }
@@ -329,7 +330,7 @@ it('labels identical edit results with each stable task id in processing status'
       const job=store.claim({force:true})!;ids.push(job.id);store.finish(job,{jobId:job.id,observationIds:job.observations.map(row=>row.id),editResult:'already_satisfied'});
     }
   }finally{store.close();}
-  const done=choices('memory','modify','processing','back','back','back','exit');await runTui();done();
+  services.push(await startTestService(home));const done=choices('memory','modify','processing','back','back','back','exit');await runTui();done();
   for(const id of ids)expect(notes()).toContain(`编辑任务 ${id} ·`);
   expect(notes().match(/当前记忆已满足请求/g)).toHaveLength(2);
 });
@@ -341,9 +342,9 @@ it('shows bounded host isolation and explicitly retries the retained inbox witho
     const inbox=store.db.prepare("INSERT INTO codex_inbox(sessionId,event,start,body,scope) VALUES(?,'SessionEnd',0,?,'global')").run(key,'PRIVATE_HOST_BODY');
     store.db.prepare('INSERT INTO codex_failures(sessionId,inboxId,recoveryId,issue,failedAt) VALUES(?,?,?,?,?)').run(key,inbox.lastInsertRowid,recoveryId,'CODEX_UNKNOWN_TRANSCRIPT',1);
   } finally {store.close();}
-  const done=choices('memory','modify','processing',`recover-host:${recoveryId}`,'back','back','back','exit');
+  services.push(await startTestService(home));const done=choices('memory','modify','processing',`recover-host:${recoveryId}`,'back','back','back','exit');
   await runTui();done();
-  const status=new RuntimeStore(config.dataRoot);try{expect(status.db.prepare('SELECT retryRequested FROM codex_failures').get()!.retryRequested).toBe(1);}finally{status.close();}
+  const status=new RuntimeStore(config.dataRoot);try{expect(status.db.prepare('SELECT recoveryId FROM codex_failures').get()!.recoveryId).toBe(recoveryId);}finally{status.close();}
   expect(notes()).toContain('宿主收件箱 1 · 会话隔离 1');expect(notes()).toContain('CODEX_UNKNOWN_TRANSCRIPT');expect(notes()).not.toContain('PRIVATE_HOST_BODY');
   expect(launchSessionDrain).toHaveBeenCalledWith(home);expect(runFlush).not.toHaveBeenCalled();
 });
@@ -353,7 +354,7 @@ it('keeps an incomplete persisted request visible and does not report continuati
   try { store.enqueue({ sessionId: 'previous-launch', entryId: 'submitted', text: 'Previous pending request', source: 'interactive', scope: 'global', observedAt: new Date().toISOString() }); }
   finally { store.close(); }
   vi.mocked(runFlush).mockImplementation(async (_current, report) => { report?.('{"internalDiagnostic":"writer-details"}'); return 1; });
-  const done = choices('memory', 'modify', 'processing', 'continue', Symbol('processing cancel'), 'back', 'back', 'exit');
+  services.push(await startTestService(home));const done = choices('memory', 'modify', 'processing', 'continue', Symbol('processing cancel'), 'back', 'back', 'exit');
   await runTui(); done();
   expect(runFlush).toHaveBeenCalledWith(config, expect.any(Function)); expect(notes()).toContain('等待处理: 1'); expect(notes()).toContain('仍有未完成请求');
   expect(clack.log.success).not.toHaveBeenCalled(); expect(modifyMemory).not.toHaveBeenCalled();

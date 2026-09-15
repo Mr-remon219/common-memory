@@ -1,23 +1,19 @@
 import type { CommonMemoryConfig } from '../config/config.js';
-import { createConfiguredWriter } from '../config/runtime.js';
-import type { Writer } from '../v2/writer.js';
-import { hostQueueStatus } from './host-session.js';
-/** An idle scheduler can still be waiting for backoff or another lease. Never claim that as completion. */
-export async function flushWriter(writer: Writer, log: (line: string) => void = console.log, signal?: AbortSignal): Promise<number> {
-  let failed = false;
-  writer.store.requestFlush();
-  for (;;) {
-    const result = await writer.run({force:true,...(signal ? {signal} : {})});
-    log(JSON.stringify(result));
-    if (['failed','cancelled','quarantined'].includes(result.outcome)) failed = true;
-    if (!['committed','noop','ignored','quarantined'].includes(result.outcome)) break;
-  }
-  return failed || signal?.aborted || writer.store.hasIncompleteWork() || writer.store.hasBufferedSessionWork() || !hostQueueStatus(writer.store).complete ? 1 : 0;
-}
-export async function runFlush(config: CommonMemoryConfig, log: (line: string) => void = console.log): Promise<number> {
-  const writer = createConfiguredWriter(config), controller = new AbortController();
-  const cancel = () => controller.abort();
-  process.on('SIGINT', cancel); process.on('SIGTERM', cancel);
-  try { return await flushWriter(writer, log, controller.signal); }
-  finally { process.off('SIGINT', cancel); process.off('SIGTERM', cancel); await writer.close(); }
+import { ServiceClient } from '../service/client.js';
+import { setTimeout as delay } from 'node:timers/promises';
+
+interface QueueStatus {observations:{state:string;count:number}[];jobStates:{state:string;count:number}[];host:{complete:boolean}}
+/** Request service processing and wait locally. Ctrl+C stops only this wait, never accepted work. */
+export async function runFlush(_config:CommonMemoryConfig,log:(line:string)=>void=console.log):Promise<number>{
+  const client=new ServiceClient({kind:'cli'}),controller=new AbortController(),cancel=()=>controller.abort();process.on('SIGINT',cancel);process.on('SIGTERM',cancel);
+  try{
+    await client.call('queue.flush',{}, {requestId:`flush-${Date.now()}`});
+    while(!controller.signal.aborted){
+      const status=await client.call<QueueStatus>('queue.status',{}, {wake:false,signal:controller.signal});
+      const active=status.observations.some(row=>['pending','claimed'].includes(row.state))||status.jobStates.some(row=>['running','retry'].includes(row.state));
+      if(!active){const failure=status.observations.find(row=>['buffered','paused','dead','quarantined'].includes(row.state));const failed=Boolean(failure)||!status.host.complete;log(JSON.stringify({outcome:failure?.state??(failed?'incomplete':'idle')}));return failed?1:0;}
+      await delay(250,undefined,{signal:controller.signal});
+    }
+    return 1;
+  }catch(error){if(controller.signal.aborted)return 1;throw error;}finally{process.off('SIGINT',cancel);process.off('SIGTERM',cancel);}
 }

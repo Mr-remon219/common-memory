@@ -4,7 +4,7 @@ import { renderMemoryView } from '../v2/reader.js';
 
 const uriFor = (context: string) => `common-memory://memory/${encodeURIComponent(context)}`;
 /** Alternate presentation of the existing Core read grant, not a new retrieval authority. */
-export function registerMemoryResources(server: McpServer, ingress: McpIngress): void {
+export function registerMemoryResources(server: McpServer, ingress: Pick<McpIngress,'info'|'contexts'|'read'>): void {
   const contexts = () => ingress.info().readEnabled ? ingress.contexts() : [];
   server.registerResource('authorized-memory', new ResourceTemplate('common-memory://memory/{contextId}', {
     list: () => ({resources:contexts().map(context => ({

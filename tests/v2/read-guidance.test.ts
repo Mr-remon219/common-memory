@@ -12,7 +12,7 @@ const roots=tempRoots('cm-read-guidance-');afterEach(()=>roots.cleanup());
 it('on-demand MCP and Pi reads replace the same scope snapshot, including deletion, without polling or opening SQLite',()=>{
   const root=roots.root(),config=defaultConfig({COMMON_MEMORY_HOME:root});
   const mcp=new McpIngress(null,config,{clientId:'read-test',workspaces:[],global:true,accept:false,capabilities:['read']});
-  const pi=new PiMemoryService({config:()=>config,activeStore:()=>undefined,wake:()=>{throw new Error('Reading must not wake a writer');}}),host={sessionId:'read-test',cwd:root};
+  const pi=new PiMemoryService({config:()=>config}),host={sessionId:'read-test',cwd:root};
   mkdirSync(join(config.dataRoot,'memory'),{recursive:true});const path=join(config.dataRoot,'memory/preferences.md');
   writeFileSync(path,'# Preferences\n\n## Style\nVersion A.\n');const snapshot=pi.read(host,'global');
   writeFileSync(path,'# Preferences\n\n## Style\nVersion B.\n');const latest=mcp.read('global');

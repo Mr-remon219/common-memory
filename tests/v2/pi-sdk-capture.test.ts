@@ -7,10 +7,13 @@ import {expect,it,vi} from 'vitest';
 import {createAgentSession,DefaultResourceLoader,ModelRuntime,SessionManager,SettingsManager} from '@earendil-works/pi-coding-agent';
 import {defaultConfig,saveApiKeyToEnvFile} from '../../src/config/config.js';
 import {createCommonMemoryPiExtension} from '../../src/pi-extension/index.js';
+import {PiCaptureRuntime} from '../../src/pi-extension/extraction-runtime.js';
+import {PiMemoryService} from '../../src/pi-extension/memory-service.js';
+import {DispatchPort} from '../helpers/service-dispatch.js';
 import {RuntimeStore} from '../../src/v2/runtime.js';
 vi.mock('../../src/cli/session-drain.js',()=>({launchSessionDrain:vi.fn()}));
 
-it('Pi 0.84.4 SDK delivers, persists, and immediately seals each authenticated turn despite unavailable maintenance transport',async()=>{
+it('Pi 0.84.4 SDK delivers, persists, and immediately seals each authenticated turn through service dispatch',async()=>{
  const home=mkdtempSync(join(tmpdir(),'pi-sdk-capture-'));
  vi.stubEnv('COMMON_MEMORY_HOME',home);saveApiKeyToEnvFile('OPENAI_API_KEY','synthetic');vi.stubEnv('HTTPS_PROXY','http://proxy.invalid');vi.stubEnv('https_proxy',undefined);vi.stubEnv('NO_PROXY','synthetic.invalid/8');vi.stubEnv('no_proxy',undefined);
  const config=defaultConfig({COMMON_MEMORY_HOME:home});config.remote.model='synthetic';config.remote.proxy={mode:'env'};
@@ -25,23 +28,23 @@ it('Pi 0.84.4 SDK delivers, persists, and immediately seals each authenticated t
   calls++;const stream=new AssistantMessageEventStream();const message={role:'assistant',content:[{type:'text',text:'Synthetic response'}],api:'openai-completions',provider:'synthetic-local',model:'synthetic',usage:{input:1,output:1,cacheRead:0,cacheWrite:0,totalTokens:2,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}},stopReason:'stop',timestamp:Date.now()};
   stream.push({type:'start',partial:message});stream.push({type:'done',reason:'stop',message});return stream;
  }});
- const loader=new DefaultResourceLoader({cwd:home,agentDir:home,settingsManager,noExtensions:true,noSkills:true,noPromptTemplates:true,noThemes:true,noContextFiles:true,extensionFactories:[createCommonMemoryPiExtension({configFactory:()=>config})]});
+ const serviceStore=new RuntimeStore(config.dataRoot),port=new DispatchPort(serviceStore,()=>config),capture=new PiCaptureRuntime(port),memory=new PiMemoryService({config:()=>config,client:port});
+ const loader=new DefaultResourceLoader({cwd:home,agentDir:home,settingsManager,noExtensions:true,noSkills:true,noPromptTemplates:true,noThemes:true,noContextFiles:true,extensionFactories:[createCommonMemoryPiExtension({configFactory:()=>config,runtimeFactory:()=>capture,serviceFactory:()=>memory})]});
  await loader.reload();expect(loader.getExtensions().errors).toEqual([]);
- const {session}=await createAgentSession({cwd:home,agentDir:home,modelRuntime:runtime,model:runtime.getModel('synthetic-local','synthetic')!,resourceLoader:loader,settingsManager,sessionManager:SessionManager.inMemory(home),noTools:'all'});
+ const sessionManager=SessionManager.inMemory(home),{session}=await createAgentSession({cwd:home,agentDir:home,modelRuntime:runtime,model:runtime.getModel('synthetic-local','synthetic')!,resourceLoader:loader,settingsManager,sessionManager,noTools:'all'});
  try {
   await session.bindExtensions({mode:'print'});
   for(let n=1;n<=10;n++)await session.prompt(`Synthetic ordinary preference ${n}`);
-  expect(calls).toBe(10);
+  expect(calls).toBe(10);await capture.flush(sessionManager.getSessionId(),home);const settleDeadline=Date.now()+1000;while(Number(serviceStore.db.prepare("SELECT count(*) AS n FROM session_turns WHERE state='settled'").get()!.n)<10&&Date.now()<settleDeadline)await new Promise(resolve=>setTimeout(resolve,5));
   const store=new RuntimeStore(config.dataRoot);
   try {
    expect(store.db.prepare('SELECT count(*) AS n FROM observations').get()!.n).toBe(10);
    expect(store.db.prepare('SELECT count(*) AS n FROM session_batches').get()!.n).toBe(10);
    expect(store.db.prepare("SELECT count(*) AS n FROM session_turns WHERE state='settled'").get()!.n).toBe(10);
   } finally {store.close();}
-  await session.prompt('Synthetic quit tail');
  } finally {
-  await session.extensionRunner.emit({type:'session_shutdown',reason:'quit'});session.dispose();
-  const store=new RuntimeStore(config.dataRoot);try{expect(store.db.prepare('SELECT count(*) AS n FROM session_batches').get()!.n).toBe(11);}finally{store.close();}
-  vi.unstubAllEnvs();rmSync(home,{recursive:true,force:true});
+  await session.extensionRunner.emit({type:'session_shutdown',reason:'quit'});await capture.shutdown();session.dispose();
+  const store=new RuntimeStore(config.dataRoot);try{expect({batches:store.db.prepare('SELECT count(*) AS n FROM session_batches').get()!.n,observations:store.db.prepare('SELECT count(*) AS n FROM observations').get()!.n,turns:store.db.prepare("SELECT count(*) AS n FROM session_turns WHERE state='settled'").get()!.n}).toEqual({batches:10,observations:10,turns:10});}finally{store.close();}
+  serviceStore.close();vi.unstubAllEnvs();rmSync(home,{recursive:true,force:true});
  }
 });

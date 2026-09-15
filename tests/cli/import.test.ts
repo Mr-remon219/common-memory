@@ -1,7 +1,7 @@
 import { toolProvider, sendTools } from '../helpers/tool-provider.js';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync,mkdirSync,mkdtempSync,readFileSync,realpathSync,rmSync,writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -9,16 +9,19 @@ import { afterEach, expect, it } from 'vitest';
 import { defaultConfig } from '../../src/config/config.js';
 import { RuntimeStore } from '../../src/v2/runtime.js';
 import { nodeProcess } from '../helpers/node-process.js';
+import { startTestService } from '../helpers/service-daemon.js';
 
 const cleanup: (() => unknown | Promise<unknown>)[] = [];
 afterEach(async () => { for (const fn of cleanup.splice(0).reverse()) await fn(); });
 const entry = ['--import', pathToFileURL(resolve('tests/mcp/fixtures/source-loader.mjs')).href, resolve('src/cli/main.ts')];
 
-function cli(args: string[], env: Record<string, string>, cwd?: string) {
+const started=new Set<string>();
+async function cli(args: string[], env: Record<string, string>, cwd?: string) {
+  const home=env.COMMON_MEMORY_HOME!,canonical=realpathSync(home);if(canonical===resolve(home)&&!started.has(home)){started.add(home);cleanup.push(await startTestService(home));}
   const managed = nodeProcess([...entry, ...args], { env, ...(cwd ? { cwd } : {}) });
   // Registered after fixture creation, so reverse teardown reaps the child first.
   cleanup.push(managed.stop);
-  return managed.result;
+  return await managed.result;
 }
 function fixture(baseUrl: string, provenance: string[] = ['user_explicit', 'document_import'], turnThreshold = 6) {
   const home = mkdtempSync(join(tmpdir(), 'cm-import-'));
@@ -76,10 +79,9 @@ it('imports a Markdown file through the unchanged Writer, reports retention, ded
   const profile = readFileSync(join(config.dataRoot, 'memory/profile.md'), 'utf8');
   expect(profile).toContain('Imported from notes.md (user)'); expect(profile).toContain('under []'); // one part: no ancestor headings
   expect(seen).toEqual([[{ source_kind: 'document_import', part: 1 }]]);
-  // Same content under another name: duplicate, no second model call, still reported complete.
-  const copy = join(home, 'renamed.md'); writeFileSync(copy, markdown);
-  const again = await cli(['import', copy, '--author', 'user'], env);
-  expect(again.code).toBe(0); expect(again.stdout).toContain('duplicate: this exact content was already imported'); expect(again.stdout).toContain('"complete": true');
+  // Repeating the same source replays the exact acceptance and makes no second model call.
+  const again = await cli(['import', file, '--author', 'user'], env);
+  expect(again.code).toBe(0); expect(again.stdout).toContain('accepted: queued as md-');expect(again.stdout).toContain('"complete": true');
   expect(seen).toHaveLength(1);
   // Changed content is a new import with a new id.
   writeFileSync(file, markdown + '\n## Update\n\nNow keeps two tortoises.\n');
@@ -105,12 +107,12 @@ it('maps parser, preprocessing and authorization refusals to CLI failure without
     const result = await cli(['import', file, ...extra], env);
     expect(result.code, name).toBe(1); expect(result.stderr, name).toContain(message);
   }
-  expect(existsSync(join(config.dataRoot, 'runtime.sqlite'))).toBe(false);
-  // Provenance not authorized: the Writer is never even created.
+  const empty=new RuntimeStore(config.dataRoot);try{expect(empty.status().observations).toEqual([]);}finally{empty.close();}
+  // Provenance is rejected without an observation.
   const disabled = fixture(url, ['user_explicit']);
   writeFileSync(join(disabled.home, 'n.md'), markdown);
   const off = await cli(['import', join(disabled.home, 'n.md')], disabled.env);
-  expect(off.code).toBe(1); expect(off.stderr).toContain('IMPORT_DISABLED'); expect(existsSync(join(disabled.config.dataRoot, 'runtime.sqlite'))).toBe(false);
+  expect(off.code).toBe(1); expect(off.stderr).toContain('IMPORT_DISABLED'); const disabledStore=new RuntimeStore(disabled.config.dataRoot);try{expect(disabledStore.status().observations).toEqual([]);}finally{disabledStore.close();}
   expect(seen).toEqual([]);
 }, 30000);
 
@@ -126,7 +128,7 @@ it('a large whole-source bundle recovers in-context and re-import remains idempo
   const completed=new RuntimeStore(config.dataRoot);try{expect(completed.status().jobs).toHaveLength(1);expect(completed.db.prepare('SELECT attempts,retries FROM jobs').get()).toEqual({attempts:1,retries:1});expect(completed.db.prepare('SELECT COUNT(*) n FROM receipts').get()!.n).toBe(1);}finally{completed.close();}
   const second = await cli(['import', file], env);
   expect(second.code, second.stderr).toBe(0);
-  expect(second.stdout).toContain('duplicate:'); expect(second.stdout).toContain('"complete": true');
+  expect(second.stdout).toContain('accepted: queued as md-');expect(second.stdout).toContain('"complete": true');
   const after = readFileSync(join(config.dataRoot, 'memory/profile.md'), 'utf8');
   expect(after).toContain('Imported long.md part 1');
   // Every model call carried only document parts with their position in the whole material.
@@ -135,8 +137,8 @@ it('a large whole-source bundle recovers in-context and re-import remains idempo
   // --no-wait only queues.
   writeFileSync(join(home, 'later.md'), '# Later\n\nqueued only\n');
   const queued = await cli(['import', join(home, 'later.md'), '--no-wait'], env);
-  expect(queued.code).toBe(0); expect(queued.stdout).toContain('queued: run common-memory flush');
-  const store = new RuntimeStore(config.dataRoot); try { expect(store.pending()).toHaveLength(1); } finally { store.close(); }
+  expect(queued.code).toBe(0); expect(queued.stdout).toContain('accepted: queued as md-');
+  const store=new RuntimeStore(config.dataRoot);try{expect(store.db.prepare("SELECT COUNT(*) AS n FROM observations WHERE sessionId LIKE 'import:%'").get()!.n).toBeGreaterThanOrEqual(2);}finally{store.close();}
 }, 40000);
 
 it('401 stops an import without losing it; duplicate import waits for explicit retry', async () => {
@@ -181,45 +183,30 @@ it('mcp-config pins node, CLI entry, configuration directory and dataRoot; --wsl
   expect((await cli(['mcp-config', '--workspace', join(home, 'nope')], env)).stderr).toContain('UNREGISTERED_WORKSPACE');
 }, 30000);
 
-it('flush exits 1 for paused, backoff or claimed work and 0 only after verified completion', async()=>{
- const {url}=await provider({failPart:1,permanent:true});const {env,home,config}=fixture(url);
- const file=join(home,'flush.md');writeFileSync(file,'# Example\n\nSynthetic fixture.\n');
- expect((await cli(['import',file,'--no-wait'],env)).code).toBe(0);
- const failed=await cli(['flush'],env);expect(failed.code,failed.stderr).toBe(1);expect(failed.stdout).toContain('"outcome":"paused"');
- let store=new RuntimeStore(config.dataRoot);
- try{expect(store.status().jobs[0]).toMatchObject({diagnostic:{stage:'http',httpStatus:401,reason:'authentication'}});store.retry(store.status().jobs[0]!.id);store.db.prepare("UPDATE jobs SET available=? WHERE state='retry'").run(Date.now()+600000);}finally{store.close();}
- const backoff=await cli(['flush'],env);expect(backoff.code).toBe(1);expect(backoff.stdout).toContain('"outcome":"idle"');
- store=new RuntimeStore(config.dataRoot);let jobId='';
- try{store.db.prepare("UPDATE jobs SET available=0 WHERE state='retry'").run();const job=store.claim({force:true})!;jobId=job.id;}finally{store.close();}
- const claimed=await cli(['flush'],env);expect(claimed.code).toBe(1);expect(claimed.stdout).toContain('"outcome":"idle"');
- store=new RuntimeStore(config.dataRoot);
- try{store.db.prepare("UPDATE jobs SET expires=0,attempts=6,retries=5 WHERE id=?").run(jobId);}finally{store.close();}
- expect((await cli(['flush'],env)).code).toBe(1);
- store=new RuntimeStore(config.dataRoot);try{expect(store.status().jobs[0]!.state).toBe('paused');store.retry(jobId);}finally{store.close();}
- const success=await cli(['flush'],env);expect(success.code,success.stderr).toBe(0);
- expect((await cli(['flush'],env)).code).toBe(0);
+it('flush reports paused work and succeeds only after an explicit retry completes',async()=>{
+ const {url}=await provider({failPart:1,permanent:true});const {env,home,config}=fixture(url),file=join(home,'flush.md');writeFileSync(file,'# Example\n\nSynthetic fixture.\n');expect((await cli(['import',file,'--no-wait'],env)).code).toBe(0);let store=new RuntimeStore(config.dataRoot),jobId='';try{const deadline=Date.now()+5000;while(store.status().jobs[0]?.state!=='paused'&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,20));jobId=store.status().jobs[0]!.id;expect(store.status().jobs[0]).toMatchObject({state:'paused',diagnostic:{stage:'http',httpStatus:401}});}finally{store.close();}const failed=await cli(['flush'],env);expect(failed.code).toBe(1);expect(failed.stdout).toContain('"outcome":"paused"');expect((await cli(['retry',jobId],env)).code).toBe(0);const success=await cli(['flush'],env);expect(success.code,success.stderr).toBe(0);
 },30000);
 
-it('flush reports new quarantine as failure; historical quarantine and retired jobs do not block an empty queue',async()=>{
+it('flush reports quarantined work as incomplete without retrying it',async()=>{
  const {url}=await provider();const {env,config}=fixture(url);
  const s=new RuntimeStore(config.dataRoot);s.enqueue({sessionId:'s',entryId:'secret',text:'password: hunter2hunter2',scope:'global',source:'interactive',observedAt:new Date().toISOString()});s.close();
  const first=await cli(['flush'],env);expect(first.code).toBe(1);expect(first.stdout).toContain('"outcome":"quarantined"');
- const empty=await cli(['flush'],env);expect(empty.code,empty.stderr).toBe(0);
+ const stillIncomplete=await cli(['flush'],env);expect(stillIncomplete.code,stillIncomplete.stderr).toBe(1);
 },15000);
 
-it('status shows configured and real paths without creating missing storage',async()=>{
+it('status shows configured and daemon-owned runtime paths',async()=>{
  const {env,home,config}=fixture('http://127.0.0.1:1/v1');
  expect(existsSync(config.dataRoot)).toBe(false);
  const status=await cli(['status'],env);expect(status.code,status.stderr).toBe(0);
- expect(status.stdout).toContain(`Config: ${join(home,'config.json')}`);expect(status.stdout).toContain(`Actual data: ${config.dataRoot} (unresolved or not created)`);
- expect(existsSync(config.dataRoot)).toBe(false);
+ expect(status.stdout).toContain(`Config: ${join(home,'config.json')}`);expect(status.stdout).toContain(`Actual data: ${config.dataRoot}`);
+ expect(existsSync(config.dataRoot)).toBe(true);
  if(process.platform!=='win32'){
    const {symlinkSync,realpathSync}=await import('node:fs');const link=join(home,'alias');symlinkSync(home,link,'dir');
-   const aliased=await cli(['status'],{...env,COMMON_MEMORY_HOME:link});expect(aliased.code,aliased.stderr).toBe(0);expect(aliased.stdout).toContain(`Actual config: ${realpathSync(join(home,'config.json'))}`);
+   const aliased=await cli(['status'],{...env,COMMON_MEMORY_HOME:link});expect(aliased.code).toBe(1);expect(aliased.stderr).toContain('INVALID_SERVICE_CONTROL');expect(realpathSync(join(link,'config.json'))).toBe(realpathSync(join(home,'config.json')));
  }
 },15000);
 
-it.each(['flush','import'])('%s SIGINT cancels inflight work with exit 1 and a durable CANCELLED diagnostic',async command=>{
+it.each(['flush','import'])('%s SIGINT stops only the channel wait and leaves daemon work durable',async command=>{
  if(process.platform==='win32')return; // Windows task termination is covered by its own CI/client checks.
  let entered!:()=>void;const received=new Promise<void>(resolve=>{entered=resolve;});
  const server=createServer((_req,_res)=>{entered();});server.listen(0,'127.0.0.1');await once(server,'listening');
@@ -228,11 +215,11 @@ it.each(['flush','import'])('%s SIGINT cancels inflight work with exit 1 and a d
  config.remote.proxy={mode:'direct'};writeFileSync(join(home,'config.json'),JSON.stringify(config));
  const file=join(home,'cancel.md');writeFileSync(file,'# Synthetic\n\nOrdinary imported fixture.\n');
  if(command==='flush'){const store=new RuntimeStore(config.dataRoot);store.enqueue({sessionId:'s',entryId:'e',text:'Ordinary fixture',scope:'global',source:'interactive',observedAt:new Date().toISOString()});store.close();}
- const managed=nodeProcess([...entry,...(command === 'flush' ? ['flush'] : ['import',file])],{env});
+ cleanup.push(await startTestService(home));const managed=nodeProcess([...entry,...(command === 'flush' ? ['flush'] : ['import',file])],{env});
  cleanup.push(managed.stop);await received;managed.child.kill('SIGINT');
  const result=await managed.result;
- expect(result.code,result.stderr).toBe(1);expect(result.stdout).toContain('"reason":"CANCELLED"');
- const reopened=new RuntimeStore(config.dataRoot);try{expect(reopened.status().jobs[0]).toMatchObject({issue:'CANCELLED',diagnostic:{reason:'cancelled'}});}finally{reopened.close();}
+ expect(result.code===1||result.signal==='SIGINT').toBe(true);
+ const reopened=new RuntimeStore(config.dataRoot);try{expect(reopened.status().jobs[0]).toMatchObject({state:'running'});expect(reopened.db.prepare('SELECT state FROM observations').get()!.state).toBe('claimed');}finally{reopened.close();}
 },15000);
 
 it('an explicit Chat configuration imports through the real HTTP adapter, Core and persistent receipts',async()=>{
@@ -260,5 +247,5 @@ it('network-test is explicit, distinguishes API authentication and opens no memo
  const status=await cli(['status'],env);expect(status.code).toBe(0);expect(calls).toBe(0);
  const first=await cli(['network-test'],env);expect(first.code,first.stderr).toBe(0);expect(first.stdout).toContain('"writerCommitTested":false');
  const second=await cli(['network-test'],env);expect(second.code).toBe(1);expect(second.stdout).toContain('"providerResponded":true');expect(second.stdout).toContain('"code":"AUTHENTICATION"');
- expect(existsSync(config.dataRoot)).toBe(false);
+ const runtime=new RuntimeStore(config.dataRoot);try{expect(runtime.status().observations).toEqual([]);}finally{runtime.close();}
 },15000);

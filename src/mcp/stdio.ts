@@ -1,7 +1,7 @@
 import { serveStdio, StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import { loadConfig } from '../config/config.js';
-import { createConfiguredWriter } from '../config/runtime.js';
-import { MCP_CAPABILITIES, McpIngress, type McpCapability, type McpOptions } from './ingress.js';
+import { MCP_CAPABILITIES, type McpCapability, type McpOptions } from './ingress.js';
+import { McpChannelIngress } from './channel-ingress.js';
 import { createMcpServer } from './server.js';
 import { MCP_MAX_MESSAGE_BYTES } from './contract.js';
 import { currentRuntimeVersion, registerRuntimeInstance } from '../cli/runtime-instances.js';
@@ -25,65 +25,28 @@ export function parseMcpOptions(args: string[]): McpOptions {
     } else throw new Error('Unknown MCP option');
   }
   if (!options.clientId) throw new Error('MCP requires --client-id');
-  // Without --capability the process keeps its original relay behaviour.
   if (!options.capabilities.length) options.capabilities.push('relay');
   return options;
 }
 
-/** One process owns one Writer, even if SDK discovery invokes the factory twice. Read-only launches own none. */
+/** Stdio is only a channel. EOF closes this connection and never cancels accepted Core work. */
 export async function runMcp(args: string[]): Promise<void> {
-  const options = parseMcpOptions(args);
-  const config = loadConfig();
-  if (!config) throw new Error('Run common-memory config first');
-  // This receipt is filesystem-only: read profiles still never open Runtime SQLite.
-  const unregister = registerRuntimeInstance({ role: 'mcp', version: currentRuntimeVersion(), pid: process.pid, executable: process.execPath, cli: process.argv[1] ?? 'unknown' });
-  const readOnly = options.capabilities.every(c => c === 'read');
-  const writer = readOnly ? null : createConfiguredWriter(config);
-  let ingress: McpIngress;
-  try { ingress = new McpIngress(writer?.store ?? null, config, options); }
-  catch (error) { unregister(); await writer?.close(); throw error; }
-  const abort = new AbortController();
-  let running: Promise<void> | undefined;
-  let closing: Promise<void> | undefined;
-  let finish!: () => void;
-  const finished = new Promise<void>(resolve => { finish = resolve; });
-  const report = () => { process.stderr.write('[common-memory] MCP maintenance unavailable; inspect common-memory status.\n'); };
-  const check = () => {
-    if (closing || running || !writer) return;
-    running = writer.run({ signal: abort.signal }).then(value => { if (value.outcome === 'failed') report(); }, report)
-      .finally(() => { running = undefined; });
+  const options=parseMcpOptions(args),config=loadConfig();if(!config)throw new Error('Run common-memory config first');
+  const unregister=registerRuntimeInstance({role:'mcp',version:currentRuntimeVersion(),pid:process.pid,executable:process.execPath,cli:process.argv[1]??'unknown',lifecycle:'channel',wireProtocol:1});
+  const ingress=new McpChannelIngress(config,options);
+  let closing:Promise<void>|undefined,finish!:()=>void;
+  const finished=new Promise<void>(resolve=>{finish=resolve;});
+  const report=()=>{process.stderr.write('[common-memory] MCP channel unavailable; inspect common-memory status.\n');};
+  const transport=new StdioServerTransport(process.stdin,process.stdout,{maxBufferSize:MCP_MAX_MESSAGE_BYTES});
+  const handle=serveStdio(()=>createMcpServer(ingress),{transport,onerror:report});
+  const shutdown=()=>{
+    if(closing)return;
+    closing=handle.close().catch(report).finally(()=>{
+      unregister();process.stdin.off('end',shutdown);process.stdin.off('error',shutdown);process.stdout.off('error',shutdown);process.off('SIGINT',shutdown);process.off('SIGTERM',shutdown);finish();
+    });
   };
-  let transport: StdioServerTransport;
-  let handle: ReturnType<typeof serveStdio>;
-  try {
-    transport = new StdioServerTransport(process.stdin, process.stdout, { maxBufferSize: MCP_MAX_MESSAGE_BYTES });
-    handle = serveStdio(() => createMcpServer(ingress), { transport, onerror: report });
-  } catch (error) { unregister(); await writer?.close(); throw error; }
-  const timer = setInterval(check, 1000); timer.unref();
-  const shutdown = () => {
-    if (closing) return;
-    // Publish closing before the async cleanup can trigger transport.onclose again.
-    closing = Promise.resolve().then(async () => {
-      clearInterval(timer);
-      abort.abort();
-      try { writer?.store.requestFlush(); } catch { report(); }
-      try { await handle.close(); await running; }
-      finally {
-        try { await writer?.close(); } finally {
-          unregister();
-          process.stdin.off('end', shutdown); process.stdin.off('error', shutdown);
-          process.stdout.off('error', shutdown);
-          process.off('SIGINT', shutdown); process.off('SIGTERM', shutdown);
-        }
-      }
-    }).catch(report).finally(finish);
-  };
-  const sdkClose = transport.onclose;
-  transport.onclose = () => { sdkClose?.(); shutdown(); };
-  process.stdin.once('end', shutdown); process.stdin.once('error', shutdown);
-  process.stdout.once('error', shutdown);
-  process.once('SIGINT', shutdown); process.once('SIGTERM', shutdown);
-  if (process.stdin.readableEnded || process.stdin.destroyed) shutdown();
-  else check();
+  const sdkClose=transport.onclose;transport.onclose=()=>{sdkClose?.();shutdown();};
+  process.stdin.once('end',shutdown);process.stdin.once('error',shutdown);process.stdout.once('error',shutdown);process.once('SIGINT',shutdown);process.once('SIGTERM',shutdown);
+  if(process.stdin.readableEnded||process.stdin.destroyed)shutdown();
   await finished;
 }

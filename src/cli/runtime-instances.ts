@@ -13,6 +13,8 @@ export interface RuntimeInstance {
   started: string;
   executable: string;
   cli: string;
+  lifecycle?: 'embedded'|'channel';
+  wireProtocol?: number;
   status: 'loaded' | 'unregistered' | 'stale' | 'unknown';
 }
 interface RegisteredInstance extends Omit<RuntimeInstance, 'status'> {}
@@ -39,7 +41,7 @@ export function processStartIdentity(pid: number, procRoot = '/proc', platform =
 export function registerRuntimeInstance(input: Omit<RegisteredInstance, 'started'> & { started?: string; home?: string; procRoot?: string; platform?: NodeJS.Platform }): () => void {
   const home = input.home ?? configDirectory();
   const started = input.started ?? processStartIdentity(input.pid, input.procRoot, input.platform) ?? 'unknown';
-  const row: RegisteredInstance = { pid: input.pid, role: input.role, version: input.version, started, executable: input.executable, cli: input.cli };
+  const row: RegisteredInstance = { pid: input.pid, role: input.role, version: input.version, started, executable: input.executable, cli: input.cli,...(input.lifecycle?{lifecycle:input.lifecycle}:{}),...(input.wireProtocol!==undefined?{wireProtocol:input.wireProtocol}:{}) };
   const directory = instancesDirectory(home), path = join(directory, `${row.pid}-${randomUUID()}.json`);
   const body=JSON.stringify(row)+'\n';
   try { writeInstallationFile(path,body); }
@@ -54,7 +56,7 @@ function readRegistered(home: string): RegisteredInstance[] {
         const value: unknown = JSON.parse(readInstallationFile(join(directory, name)) ?? 'null');
         if (!value || typeof value !== 'object') return [];
         const row = value as Record<string, unknown>;
-        if (!Number.isSafeInteger(row.pid) || row.pid as number <= 0 || !['cli', 'mcp', 'pi', 'drain'].includes(String(row.role)) || typeof row.version !== 'string' || typeof row.started !== 'string' || typeof row.executable !== 'string' || typeof row.cli !== 'string') return [];
+        if (!Number.isSafeInteger(row.pid) || row.pid as number <= 0 || !['cli', 'mcp', 'pi', 'drain'].includes(String(row.role)) || typeof row.version !== 'string' || typeof row.started !== 'string' || typeof row.executable !== 'string' || typeof row.cli !== 'string' || (row.lifecycle!==undefined&&!['embedded','channel'].includes(String(row.lifecycle))) || (row.wireProtocol!==undefined&&(!Number.isSafeInteger(row.wireProtocol)||Number(row.wireProtocol)<1))) return [];
         return [row as unknown as RegisteredInstance];
       } catch { return []; }
     });
@@ -99,7 +101,7 @@ export function listRuntimeInstances(options: { home?: string; procRoot?: string
 export function runtimeInstanceLines(options: Parameters<typeof listRuntimeInstances>[0] = {}): string[] {
   const rows = listRuntimeInstances(options);
   if (!rows.length) return ['Loaded instances: none observed (not proof that a non-Linux or unregistered host is stopped)'];
-  return rows.map(row => `Loaded instance: pid ${row.pid} · ${row.role} · ${row.version} · ${row.status} · ${row.cli}`);
+  return rows.map(row => `Loaded instance: pid ${row.pid} · ${row.role} · ${row.version} · ${row.status} · ${row.lifecycle??'legacy/unknown'}${row.wireProtocol?`/v${row.wireProtocol}`:''} · ${row.cli}`);
 }
 const loadedPackageVersion = packageVersion();
 export const currentRuntimeVersion = () => loadedPackageVersion;

@@ -17,6 +17,7 @@ import { UserCancelled } from '../../src/cli/tui-prompts.js';
 vi.mock('@clack/prompts', () => ({ select: vi.fn(), multiselect: vi.fn(), text: vi.fn(), password: vi.fn(), confirm: vi.fn(), isCancel: (v: unknown) => typeof v === 'symbol', intro: vi.fn(), outro: vi.fn(), note: vi.fn(), log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock('../../src/cli/model-discovery.js', () => ({ discoverModels: vi.fn() }));
 vi.mock('../../src/cli/integration-targets.js', () => ({ scanIntegrationTargets: vi.fn() }));
+vi.mock('../../src/service/manager.js',()=>({installService:vi.fn(async()=>({}))}));
 let home: string;
 const originalIn = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY'), originalOut = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
 beforeEach(() => {
