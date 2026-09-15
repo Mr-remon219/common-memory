@@ -35,7 +35,7 @@ beforeEach(async () => {
   });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   config = defaultConfig({ COMMON_MEMORY_HOME: home });
-  config.remote = { provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, model: 'synthetic', api: 'chat_completions', apiKeyEnv: 'CM_MODIFY_KEY', proxy: { mode: 'direct' } };config.scheduler.leaseMs=100;saveConfig(config);stopService=await startTestService(home);
+  config.remote = { provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, model: 'synthetic', api: 'chat_completions', apiKeyEnv: 'CM_MODIFY_KEY', proxy: { mode: 'direct' } };saveConfig(config);stopService=await startTestService(home);
 });
 afterEach(async () => {
   await stopService();server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
