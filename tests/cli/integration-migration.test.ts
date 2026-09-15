@@ -1,3 +1,4 @@
+import { stubInstalledBuild } from '../helpers/installation-build.js';
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -5,7 +6,6 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { buildIntegrationMigrationPlan, discoverIntegrationCandidates } from '../../src/cli/integration-migration.js';
 import { reconcileIntegrations } from '../../src/cli/integrations.js';
 import { defaultConfig, saveConfig } from '../../src/config/config.js';
-import { stubInstalledBuild } from '../helpers/installation-build.js';
 
 let root: string, home: string, codex: string, pi: string;
 beforeEach(() => {

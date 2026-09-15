@@ -1,10 +1,10 @@
+import { stubInstalledBuild } from '../helpers/installation-build.js';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { applicationRoot, installIntegrations, readInstallationState } from '../../src/cli/integrations.js';
 import { uninstallWithUnreadableConfig } from '../../src/cli/uninstall.js';
-import { stubInstalledBuild } from '../helpers/installation-build.js';
 
 let root: string, home: string, data: string;
 beforeEach(() => {

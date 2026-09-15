@@ -1,3 +1,4 @@
+import { stubInstalledBuild } from '../helpers/installation-build.js';
 import { afterEach, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -7,7 +8,6 @@ import { parse } from 'smol-toml';
 import { installIntegrations } from '../../src/cli/integrations.js';
 import { saveServiceControl, serviceName } from '../../src/service/control.js';
 import { launcherPath } from '../../src/service/manager.js';
-import { stubInstalledBuild } from '../helpers/installation-build.js';
 let root='';afterEach(()=>{vi.unstubAllEnvs();if(root)rmSync(root,{recursive:true,force:true});});
 it('managed MCP/Hook entries stay stable and the Pi loader follows the activated Core target',async()=>{
  root=mkdtempSync(join(tmpdir(),'cm-stable-entry-'));const home=join(root,'home'),dataRoot=join(home,'data');vi.stubEnv('COMMON_MEMORY_HOME',home);stubInstalledBuild();

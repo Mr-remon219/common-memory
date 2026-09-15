@@ -248,4 +248,4 @@ it('network-test is explicit, distinguishes API authentication and opens no memo
  const first=await cli(['network-test'],env);expect(first.code,first.stderr).toBe(0);expect(first.stdout).toContain('"writerCommitTested":false');
  const second=await cli(['network-test'],env);expect(second.code).toBe(1);expect(second.stdout).toContain('"providerResponded":true');expect(second.stdout).toContain('"code":"AUTHENTICATION"');
  const runtime=new RuntimeStore(config.dataRoot);try{expect(runtime.status().observations).toEqual([]);}finally{runtime.close();}
-},15000);
+},75000); // Three source-loaded CLI processes plus the real synthetic tool exchange on shared CI runners.
